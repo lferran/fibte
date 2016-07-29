@@ -1,5 +1,4 @@
 import argparse
-
 from fibbingnode import CFG
 
 import fibbingnode.misc.mininetlib as _lib
