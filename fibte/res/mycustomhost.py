@@ -8,5 +8,5 @@ class MyCustomHost(_node.Host):
         super(MyCustomHost, self).__init__(*args, **kwargs)
 
         if 'fibte' in kwargs.keys() and kwargs.get('fibte') == True:
-            log.setLevel(logging.DEBUG)
-            log.info()
+            log.info("Starting Fibbing LB")
+
