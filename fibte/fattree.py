@@ -3,10 +3,7 @@ from fibbingnode.misc.mininetlib.iptopo import IPTopo
 from mininet.nodelib import LinuxBridge
 from mininet.util import custom
 from mininet.link import TCIntf
-from fibte.res.mycustomhost import MyCustomHost
-
-C1_cfg = '/tmp/c1.cfg'
-C1 = 'c1'
+import fibte.res.config as cfg
 
 class FatTree(IPTopo):
     def __init__(self, k=4, sflow=False, extraSwitch=False, bw = 10, *args, **kwargs):
@@ -49,7 +46,7 @@ class FatTree(IPTopo):
         self.connectCoreAggregation(aggregationRouters, coreRouters)
 
         # Add Fibbing Controller to one of the core routers
-        fibbingController = self.addController(C1, cfg_path=C1_cfg)
+        fibbingController = self.addController(cfg.C1, cfg_path=cfg.C1_cfg)
         self.addLink(fibbingController, coreRouters[0], cost=10000)
 
         # Add Fibbing Load Balancer host to core router 0

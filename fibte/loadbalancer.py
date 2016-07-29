@@ -1,5 +1,8 @@
+#!/usr/bin/python
+
 from fibbingnode.algorithms.southbound_interface import SouthboundManager
-from fibte.fibte import CFG
+from fibbingnode import CFG
+import fibte.res.config as cfg
 
 import threading
 
@@ -24,7 +27,7 @@ class LBController(object):
     def __init__(self):
         # Connects to the southbound controller. Must be called before
         # creating the instance of SouthboundManager
-        CFG.read(dconf.C1_Cfg)
+        CFG.read(cfg.C1_cfg)
 
         # Start the Southbound manager in a different thread
         self.sbmanager = MyGraphProvider()
@@ -37,10 +40,10 @@ class LBController(object):
         # Receive network graph
         self.networw_graph = self.sbmanager.igp_graph
 
-
     def run(self):
         pass
 
 if __name__ == '__main__':
     lb = LBController()
     lb.run()
+    import ipdb; ipdb.set_trace()
