@@ -3,6 +3,7 @@ from fibbingnode.misc.mininetlib.iptopo import IPTopo
 from mininet.nodelib import LinuxBridge
 from mininet.util import custom
 from mininet.link import TCIntf
+from fibte.res.mycustomhost import MyCustomHost
 
 C1_cfg = '/tmp/c1.cfg'
 C1 = 'c1'
