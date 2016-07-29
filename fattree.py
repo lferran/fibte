@@ -1,11 +1,13 @@
-from mininetrouter.misc.mininetlib.iptopo import IPTopo
-#from mininetrouter.misc.mininetlib.node import RyuSwitch, DefaultSwitch
+from fibbingnode.misc.mininetlib.iptopo import IPTopo
+
 from mininet.nodelib import LinuxBridge
 from mininet.util import custom
 from mininet.link import TCIntf
 
-class FatTree(IPTopo):
+C1_cfg = '/tmp/c1.cfg'
+C1 = 'c1'
 
+class FatTree(IPTopo):
     def __init__(self, k=4, sflow=False, extraSwitch=False, bw = 10, *args, **kwargs):
         # k must be multiple of 2
         self.k = k
@@ -30,7 +32,6 @@ class FatTree(IPTopo):
         super(FatTree,self).__init__(*args,**kwargs)
 
     def dpidToStr(self):
-
         strDpid = format(self.dpid,'x')
         if len(strDpid) < 16:
             return "0"*(16-len(strDpid)) + strDpid
@@ -45,6 +46,14 @@ class FatTree(IPTopo):
         coreRouters = self.addCoreRouters()
         # Connect them together
         self.connectCoreAggregation(aggregationRouters, coreRouters)
+
+        # Add Fibbing Controller to one of the core routers
+        fibbingController = self.addController(C1, cfg_path=C1_cfg)
+        self.addLink(fibbingController, coreRouters[0], cost=10000)
+
+        # Add Fibbing Load Balancer host to core router 0
+        fibingLB = self.addHost('c2', fibte=True)
+        self.addLink(fibingLB, coreRouters[0])
 
     def connectCoreAggregation(self, aggregationRouters, coreRouters):
         # Connect every aggregation router with k/2 core routers
@@ -69,7 +78,6 @@ class FatTree(IPTopo):
         self.dpid +=1
         self.addLink(h, sw)#,bw=self.bw)
         return {"host": h, "ovs": sw}
-
 
     def addHostsGrup(self, podNum, startIndex, extraSwitch=True):
         """
@@ -96,7 +104,6 @@ class FatTree(IPTopo):
             #we add sw in switches list. Switches list is used as a return value,
             #  and will be used later to know what needs to be connected with the edge router
             switches.append(sw)
-
         # Case in which all the hosts are directly connected to the edge router
         else:
             for i in range(self.k/2):
@@ -120,7 +127,6 @@ class FatTree(IPTopo):
         :param extraSwitch:
         :return:
         """
-
         edgeRouters = []
         aggregationRouters = []
 
@@ -151,7 +157,6 @@ class FatTree(IPTopo):
         # Only aggregation Routers are needed to connect with the core layer
         return aggregationRouters
 
-
     def addCoreRouters(self):
         """
         :return:
@@ -163,19 +168,22 @@ class FatTree(IPTopo):
             coreRouters.append(self.addRouter("r_c%d" % i))
         return coreRouters
 
-class FatTreeOOB(FatTree):
 
+class FatTreeOOB(FatTree):
+    """
+    Build Fat Tree topology with an Out-Of-Band management/monitoring network:
+
+    Each router has an interface connected to a monitoring switch sw-mon.
+    """
     def build(self, *args, **kwargs):
         super(FatTreeOOB, self).build(*args,**kwargs)
         self.buildOOBNetwork()
 
     def buildOOBNetwork(self):
+        sw = self.addSwitch("sw-mon", cls=LinuxBridge, dpid=self.dpidToStr())
 
-        sw = self.addSwitch("sw-mon", cls=LinuxBridge, dpid = self.dpidToStr())
-
+        # Connect each router to the monitoring switch
         routers = self.routers()
         for router in routers:
-            self.addLink(router,sw,intf = TCIntf,intfName1="%s-mon" % router, cost = -1)
+            self.addLink(router, sw, intf=TCIntf, intfName1="%s-mon"%router, cost=-1)
 
-
-        #set the out of band montiroing network

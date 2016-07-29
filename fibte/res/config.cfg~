@@ -1,0 +1,21 @@
+[DEFAULT]
+
+#where temporal files are located
+
+tmp_files=/tmp/
+
+#name of the topology database
+
+db_topo=db.topo
+
+#controller server unix domain socket name
+
+controller_UDS_name=controllerServer
+
+#device information
+
+net_dev_path=/proc/net/dev
+
+#interface index information
+
+interface_index_path=/sys/class/net/{0}/ifindex
