@@ -14,13 +14,10 @@ from mininet.clean import cleanup, sh
 from mininet.util import custom
 from mininet.link import TCIntf
 from fibte.res.mycustomhost import MyCustomHost
-
+import fibte.res.config as cfg
 import signal
-import logging
 
-
-DB_path = '/tmp/db.topo'
-
+from fibte import flowServer_path
 
 def signal_term_handler(signal, frame):
     import sys
@@ -40,13 +37,19 @@ def launch_network(k = 4, bw=10):
     intf = custom(TCIntf, bw=bw)#, max_queue_size=1000)
 
     # Network
-    net = IPNet(topo=topo, debug=_lib.DEBUG_FLAG, intf=intf, host=MyCustomHost)
+    net = IPNet(topo = topo, debug = _lib.DEBUG_FLAG, intf = intf, host = MyCustomHost)
 
     # Save the TopoDB object
-    TopologyDB(net=net).save(DB_path)
-
+    TopologyDB(net=net).save(cfg.DB_path)
+    
     # Start the network
     net.start()
+
+    print('*** Starting Flow Servers in virtualized hosts')
+    #import ipdb; ipdb.set_trace()
+    for h in net.hosts:
+        # start flowServer
+        h.cmd(flowServer_path + " {0} &".format(h.name))
 
     # Start the Fibbing CLI
     FibbingCLI(net)
@@ -54,13 +57,13 @@ def launch_network(k = 4, bw=10):
     net.stop()
 
 def launch_controller():
-    CFG.read(C1_cfg)
-    db = TopologyDB(db=DB_path)
+    CFG.read(cfg.C1_cfg)
+    db = TopologyDB(db=cfg.DB_path)
     manager = SouthboundManager(optimizer=OSPFSimple())
-    manager.simple_path_requirement(db.subnet(R3, D1), [db.routerid(r)
-                                                        for r in (R1, R2, R3)])
-    manager.simple_path_requirement(db.subnet(R3, D2), [db.routerid(r)
-                                                        for r in (R1, R4, R3)])
+    #manager.simple_path_requirement(db.subnet(R3, D1), [db.routerid(r)
+    #                                                    for r in (R1, R2, R3)])
+    #manager.simple_path_requirement(db.subnet(R3, D2), [db.routerid(r)
+    #                                                    for r in (R1, R4, R3)])
     try:
         manager.run()
     except KeyboardInterrupt:
