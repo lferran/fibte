@@ -17,9 +17,10 @@ import json
 
 from fibte.misc.unixSockets import UnixClient
 
-import inspect
+#import inspect
 
 from fibte import CFG, LINK_BANDWIDTH
+
 tmp_files = CFG.get("DEFAULT","tmp_files")
 db_topo = CFG.get("DEFAULT","db_topo")
 controllerServer = CFG.get("DEFAULT","controller_UDS_name")
@@ -28,17 +29,6 @@ MIN_PORT = 1
 MAX_PORT = 2**16 -1
 RangePorts = xrange(MIN_PORT,MAX_PORT)
 
-# def read_pid(n):
-#     """
-#     Extract a pid from a file
-#     :param n: path to a file
-#     :return: pid as a string
-#     """
-#     try:
-#         with open(n, 'r') as f:
-#             return str(f.read()).strip(' \n\t')
-#     except:
-#         return None
 
 def read_pid(n):
     """
@@ -53,14 +43,16 @@ def del_file(f):
     os.remove(f)
 
 class TrafficGenerator(Base):
-
-    def __init__(self,remoteHosts=False,iperf = False,*args,**kwargs):
+    def __init__(self, pMice = 0.9, pElephant = 0.1, remoteHosts=False, *args, **kwargs):
         super(TrafficGenerator, self).__init__(*args,**kwargs)
 
-        self.remoteHosts = remoteHosts
+        # Set traffic mice/elephant flow percent
+        self.pMice = pMice
+        self.pElephant = pElephant
 
         self.topology = TopologyGraph(getIfindexes = False, openFlowInformation = False, db = os.path.join(tmp_files,db_topo))
-        self.linkBandwitdh = LINK_BANDWIDTH
+
+        self.linkBandwidth = LINK_BANDWIDTH
 
         # Used to communicate with flowServers at the hosts.
         # {0} is because it will be filled with whichever server we want to talk to!
@@ -69,64 +61,44 @@ class TrafficGenerator(Base):
         # Used to communicate with LoadBalancer Controller
         self.ControllerClient = UnixClient(os.path.join(tmp_files, controllerServer))
 
-    #@profile
-    def randomFlow(self,srcHost,dstHost,size,startTime,duration, hosts_capacities,tos=0,proto="UDP"):
+    @staticmethod
+    def get_poisson_times(average, totalTime):
+        """
+        Returns a list of Poisson arrival process times ranging
+        from zero to totalTime with a certain average
 
-        #we use host_capacities to know which ports are available
-        sport = random.choice(RangePorts)
-        while sport in hosts_capacities[srcHost]['usedPorts']:
-            sport = random.choice(RangePorts)
+        :param average: indicates how often new flows are started at the host.
+        :param totalTime: total time of the simulation
+        :return: list of flow start times drawn from a poisson arrival process
+        """
+        absolute_times = []
+        time_index = 0
+        while (time_index < totalTime):
+            # Generate starting time for next flow from Poisson distribution
+            next_flow_time = random.expovariate(average) + time_index
 
-        dport = random.choice(RangePorts)
-        while dport in hosts_capacities[dstHost]['usedPorts']:
-            dport = random.choice(RangePorts)
+            # Stop generating more flow times if we reached the end of the simulation
+            if next_flow_time >= totalTime:
+                break
 
-        srcIp = self.topology.getHostIp(srcHost)
-        dstIp = self.topology.getHostIp(dstHost)
-        return Flow(src=srcIp,dst=dstIp,sport=sport,dport=dport,size=size,start_time=startTime,duration=duration,tos=tos,proto=proto)
+            else:
+                # Append it to the absolute times
+                absolute_times.append(next_flow_time)
 
-    def _getSize(self, size_range):
+                # Update time_index
+                time_index = next_flow_time
 
-        size = random.randint(*size_range)
-        return size
-
-    #THIS TWO FUNCTIONS ARE THE ONES THAT CHOOSE THE SIZE OF THE ELEPHANT AND MICE
-    ###################################################################
-    def getSizeMice(self, capacity_range=[0.002,0.01]):
-
-        return self._getSize(self.miceSizeRange(capacity_range))
-
-
-    def getSizeElephant(self,capacity_range = [1,1]):
-
-        return self._getSize(self.elephantSizeRange(capacity_range))
-    ######################################################################
-
-    def _getTime(self,time_range):
-        return random.randint(*time_range)
-
-    def getTimeMice(self,time_range = [2,5]):
-        return self._getTime(time_range)
-
-    def getTimeElephant(self,time_range = [5000,5000]):
-        return self._getTime(time_range)
-
-    def elephantSizeRange(self,capacity_range = [0.2,0.8]):
-        #range between 20% and 80% of the link capacity
-        return [self.linkBandwitdh*capacity_range[0],self.linkBandwitdh*capacity_range[1]]
-
-
-    def miceSizeRange(self,capacity_range = [0.002,0.01]):
-        #range between 0.2% and 1% link capacity
-
-        return [self.linkBandwitdh*capacity_range[0],self.linkBandwitdh*capacity_range[1]]
-
+        return absolute_times
 
     @staticmethod
-    def weighted_choice(weight_m,weight_e):
-
-        choices = [("e",weight_e),('m',weight_m)]
-
+    def weighted_choice(weight_m, weight_e):
+        """
+        Makes a choice between
+        :param weight_m:
+        :param weight_e:
+        :return:
+        """
+        choices = [("e", weight_e), ('m', weight_m)]
         total = sum(w for c, w in choices)
         r = random.uniform(0, total)
         upto = 0
@@ -136,8 +108,207 @@ class TrafficGenerator(Base):
             upto += w
         assert False, "Shouldn't get here"
 
+    def get_flow_type(self):
+        return  self.weighted_choice(self.pMice, self.pElephant)
+
+    def get_flow_duration(self, flow_type):
+        """
+        Makes a choice on the flow duration, depending on the flow_type
+        :param flow_type: 'm' (mice) or 'e' (elephant)
+
+        :return: integer representing the flow duration in seconds
+        """
+
+        # Flow duration ranges
+        min_len_elephant = 20
+        max_len_elephant = 500
+        min_len_mice = 2
+        max_len_mice = 10
+
+        # flow is elephant
+        if flow_type == 'e':
+            # Draw flow duration
+            return random.randint(min_len_elephant, max_len_elephant)
+
+        # flow is mice
+        elif flow_type == 'm':
+            # Draw flow duration
+            return random.randint(min_len_mice, max_len_mice)
+
+        else:
+            raise ValueError("Unknown flow type: {0}".format(flow_type))
+
+    def get_flow_size(self, flow_type):
+        """
+        :param flow_type:
+        :return:
+        """
+        # Size ranges in % of link bandwidth
+        mice_size_step = 0.001
+        mice_size_range = [0.002, 0.01+mice_size_step]
+        elephant_size_step = 0.05
+        elephant_size_range = [0.1, 0.6+elephant_size_step]
+
+        # Size ranges in bits per second
+        mice_size_range_bps = map(lambda x: int(x*self.linkBandwidth), mice_size_range)
+        elephant_size_range_bps = map(lambda x: int(x*self.linkBandwidth), elephant_size_range)
+
+        if flow_type == 'e':
+            return random.choice(range(elephant_size_range_bps[0], elephant_size_range_bps[1], int(self.linkBandwidth*elephant_size_step)))
+        elif flow_type == 'm':
+            return random.choice(range(mice_size_range_bps[0], mice_size_range_bps[1], int(self.linkBandwidth * mice_size_step)))
+        else:
+            raise ValueError("Unknown flow type: {0}".format(flow_type))
+
+    def get_flow_destination(self, receivers):
+        """
+        This method abstracts the choice of a receiver. It chooses a
+        receiver uniformly at random from the list of receivers.
+
+        I will be potentially subclassed by other instances of
+        TrafficGenerator that generate other kinds of traffic patterns.
+
+        :param receivers: list of possible receivers
+        :return: chosen receiver
+        """
+        return random.choice(receivers)
+
+    def choose_correct_ports(self, flowlist_tmp):
+        """
+        Given a temporal flow list, the ports of the flows have to be randomly
+        choosen in such a way that no two active outgoing flows from the sender
+        use the same source port.
+
+        :param flowlist_tmp: temporal flowlist
+        :return: final flowlist
+        """
+        # Final flowlist
+        flowlist = []
+
+        allPorts = set(RangePorts)
+
+        for index, flow_tmp in enumerate(flowlist_tmp):
+
+            # Current flow start time
+            start_time  = flow_tmp['startTime']
+
+            # Filter out the flows that are not active anymore
+            active_flows = [v_flow for v_flow in flowlist_tmp[:index] if v_flow['startTime'] + v_flow['duration'] + 1 >= start_time]
+
+            # Collect used port numbers
+            usedPorts = set([a_flow['sport'] for a_flow in active_flows])
+
+            # Calculate available ports
+            availablePorts = allPorts - usedPorts
+
+            # Choose random source port from the available
+            sport = random.choice(list(availablePorts))
+
+            # Choose also random destination port: no restrictions here
+            dport = random.choice(RangePorts)
+
+            # Get hosts ip addresses
+            srcIp = self.topology.getHostIp(flow_tmp['srcHost'])
+            dstIp = self.topology.getHostIp(flow_tmp['dstHost'])
+
+            # Create the flow object
+            flow = Flow(src=srcIp, dst=dstIp, sport=sport, dport=dport, size=flow_tmp['size'],
+                        start_time=flow_tmp['startTime'], duration=flow_tmp['duration'],
+                        tos=flow_tmp['tos'], proto=flow_tmp['proto'])
+
+            # Append it to the list
+            flowlist.append(flow)
+
+        # Return flowlist
+        return flowlist
+
+    def plan_flows(self, sender, receivers, flowRate, totalTime):
+        """
+        Given a sender and a list of possible receivers, together with the
+        total simulation time, this function generates random flows from
+        sender to the receiver.
+
+        The number of flows that sender generates and their starting time
+        is given by a Poisson arrival process with a certain average.
+
+        For each flow:
+          - A receiver is chosen uniformly at random among the receivers list
+
+          - Weather the flow is mice or elephant is chosen with certain proba
+            bility depending on the object initialization.
+
+          - Durtaion is chosen uniformly at random within certain pre-defined ranges
+
+          - Size is chosen from a normal distribution relative to the total link capacity
+
+        :param sender: sending host
+        :param receivers: list of possible receiver hosts
+        :param totalTime: total simulation time
+
+        :return: flowlist of ordered flows for a certain host
+        """
+
+        # List of flows planned for the sender
+        flowlist = []
+
+        # Generate flow starting times
+        flow_times = self.get_poisson_times(average=flowRate, totalTime=totalTime)
+
+        # Iterate each flow
+        for flow_time in flow_times:
+            # Is flow mice or elephant?
+            flow_type = self.get_flow_type()
+
+            # Get flow duration
+            flow_duration = self.get_flow_duration(flow_type)
+
+            # Get flow size
+            flow_size = self.get_flow_size(flow_type)
+
+            # Choose receiver
+            receiver = self.get_flow_destination(receivers)
+
+            # Create temporal flow
+            flow_tmp = {'srcHost':sender, 'dstHost':receiver, 'size':flow_size, 'startTime':flow_time, 'duration':flow_duration, 'sport': -1, 'dport': -1}
+
+            # Append it to the list
+            flowlist.append(flow_tmp)
+
+        # Re-write correct source and destination ports
+        flowlist = self.choose_correct_ports(flowlist)
+
+        return flowlist
+
+    def trafficPlanner(self, senders=["r_0_e0"], receivers=["r_1_e0"], flowRate=0.25, totalTime=500):
+
+        # Parse communication pattern limitations
+        #TODO: do it per pod: senders=[pod0, pod1], receivers=[pod3]
+        if senders[0] == 'all':
+            senders = self.topology.getEdgeRouters()
+
+        if receivers[0] == "all":
+            receivers = self.topology.getEdgeRouters()
+
+        # Maintains the used ports: {}: host -> {in, out, usedPorts}
+        hosts_capacities = {}
+        for host in set(senders+receivers):
+            hosts_capacities[host] = {'in': 0, 'out': 0 , 'usedPorts' : set({})}
+
+        # Holds {}: host -> flowlist
+        traffic_per_host = {}
+
+        for sender in senders:
+            # Generate flowlist
+            flowlist = self.plan_flows(sender, receivers, flowRate, totalTime)
+
+            # Save it
+            traffic_per_host[sender] = flowlist
+
+        # Return all generated traffic
+        return traffic_per_host
+
     #@profile
-    def trafficPlanner(self,numFlows=50,senders=["r_0_e0"],receivers=["r_1_e0"],percentageMice=0.9, percentageElephants=0.1,totalTime=500):
+    def trafficPlanner2(self,numFlows=50,senders=["r_0_e0"],receivers=["r_1_e0"],percentageMice=0.9, percentageElephants=0.1,totalTime=500):
 
 
         #First we will compute the length and size ranges of mice and elephant flows. This two parameters will depend
@@ -155,7 +326,7 @@ class TrafficGenerator(Base):
 
         #Mice and elephatn parameters are the percentage of numFlows that are mice or elephant.
 
-        #the function should take into account the links bandwitdhs and maximum number of paths between nodes (dont really know how to use that because there are collisions everywhere....)
+        #the function should take into account the links Bandwidths and maximum number of paths between nodes (dont really know how to use that because there are collisions everywhere....)
 
         #for every host we have we will track the current capacity for receiving and sending traffic so we do not generate more than what they can generate or receive.
 
@@ -236,7 +407,7 @@ class TrafficGenerator(Base):
 
                 senders_tmp = []
                 for sender in senders:
-                    if hosts_capacities[sender]["out"] + size <= self.linkBandwitdh:
+                    if hosts_capacities[sender]["out"] + size <= self.linkBandwidth:
                         senders_tmp.append(sender)
                 if senders_tmp:
                     sender = random.choice(senders_tmp)
@@ -245,7 +416,7 @@ class TrafficGenerator(Base):
 
                 receivers_tmp = []
                 for receiver in receivers:
-                    if hosts_capacities[receiver]["in"] + size <= self.linkBandwitdh:
+                    if hosts_capacities[receiver]["in"] + size <= self.linkBandwidth:
                         receivers_tmp.append(receiver)
                 if receivers_tmp:
                     receiver = random.choice(receivers_tmp)
@@ -295,8 +466,8 @@ class TrafficGenerator(Base):
                 #the remaining time is bigger than the minimum for this type of flow.
 
                 #flow should not be allocated however we try to fit duration and size
-                if current_times[flow_n][0]+duration > totalTime or hosts_capacities[sender]['out'] + size > self.linkBandwitdh \
-                        or hosts_capacities[receiver]['in'] + size > self.linkBandwitdh:
+                if current_times[flow_n][0]+duration > totalTime or hosts_capacities[sender]['out'] + size > self.linkBandwidth \
+                        or hosts_capacities[receiver]['in'] + size > self.linkBandwidth:
 
 
                     #remaining duration
@@ -324,13 +495,13 @@ class TrafficGenerator(Base):
                                 continue
 
                     #here we ajust the size I check because we could be here only for the time condition
-                    if hosts_capacities[sender]['out'] + size > self.linkBandwitdh or hosts_capacities[receiver]['in'] + size > self.linkBandwitdh:
+                    if hosts_capacities[sender]['out'] + size > self.linkBandwidth or hosts_capacities[receiver]['in'] + size > self.linkBandwidth:
 
                         #lets find which one has the least space for flow allocation and adapt to that..
-                        size = min(self.linkBandwitdh - hosts_capacities[sender]['out'], self.linkBandwitdh-hosts_capacities[receiver]['in'])
+                        size = min(self.linkBandwidth - hosts_capacities[sender]['out'], self.linkBandwidth-hosts_capacities[receiver]['in'])
 
                         #it there is less than the 5 % of the link we do not allocate
-                        if size < self.linkBandwitdh*0.05:
+                        if size < self.linkBandwidth*0.05:
 
                             #current_times[flow_n] = (current_times[flow_n]+duration,'noAllocated')
                             continue
@@ -455,7 +626,7 @@ class TrafficGenerator(Base):
 
                 senders_tmp = []
                 for sender in senders:
-                    if hosts_capacities[sender]["out"] + size <= self.linkBandwitdh:
+                    if hosts_capacities[sender]["out"] + size <= self.linkBandwidth:
                         senders_tmp.append(sender)
                 if senders_tmp:
                     sender = random.choice(senders_tmp)
@@ -464,7 +635,7 @@ class TrafficGenerator(Base):
 
                 receivers_tmp = []
                 for receiver in receivers:
-                    if hosts_capacities[receiver]["in"] + size <= self.linkBandwitdh:
+                    if hosts_capacities[receiver]["in"] + size <= self.linkBandwidth:
                         receivers_tmp.append(receiver)
                 if receivers_tmp:
                     receiver = random.choice(receivers_tmp)
@@ -512,7 +683,7 @@ class TrafficGenerator(Base):
 
                 starting_time = current_times[0][0] + 3
 
-                if current_times[0][0]+3+duration > totalTime or hosts_capacities[sender]['out'] + size > self.linkBandwitdh or hosts_capacities[receiver]['in'] + size > self.linkBandwitdh:
+                if current_times[0][0]+3+duration > totalTime or hosts_capacities[sender]['out'] + size > self.linkBandwidth or hosts_capacities[receiver]['in'] + size > self.linkBandwidth:
                     #flow is not allocated
 
 
@@ -544,13 +715,13 @@ class TrafficGenerator(Base):
                                 # bisect.insort(current_times,(duration_tmp,'noAllocated'))
                                 continue
 
-                    if hosts_capacities[sender]['out'] + size > self.linkBandwitdh or hosts_capacities[receiver]['in'] + size > self.linkBandwitdh:
+                    if hosts_capacities[sender]['out'] + size > self.linkBandwidth or hosts_capacities[receiver]['in'] + size > self.linkBandwidth:
 
                         #lets find which one has the least space for flow allocation and adapt to that..
-                        size = min(self.linkBandwitdh - hosts_capacities[sender]['out'], self.linkBandwitdh-hosts_capacities[receiver]['in'])
+                        size = min(self.linkBandwidth - hosts_capacities[sender]['out'], self.linkBandwidth-hosts_capacities[receiver]['in'])
 
                         #it there is less than the 5 % of the link we do not allocate
-                        if size < self.linkBandwitdh*0.05:
+                        if size < self.linkBandwidth*0.05:
                             # duration_tmp = current_times[0][0]+duration +1
                             # del(current_times[0])
                             # bisect.insort(current_times,(duration_tmp,'noAllocated'))
@@ -619,8 +790,14 @@ class TrafficGenerator(Base):
 
         return flows
 
+    def schedule(self, traffic_per_host):
+        self.ControllerClient.send(json.dumps({"type":"reset"}),"")
+
+        # Send all flowlist to each host
+        pass
+
     #@profile
-    def schedule(self,flows):
+    def schedule2(self,flows):
 
         #reset flows list
         # url = "http://127.0.0.1:5001/resetFlows"
@@ -666,87 +843,6 @@ class TrafficGenerator(Base):
         #sends command to the server
         clientName = self.topology.getHostName(flow["src"])
         self.unixClient.send(json.dumps({"type":"flow","data":flow.toDICT()}),clientName)
-
-    #@profile
-    def pushFlow(self,flow):
-
-        #url of the controller listening
-        url = "http://127.0.0.1:5001/startingFlow"
-        try:
-            requests.post(url,data = flow.toJSON())
-        except ConnectionError:
-            pass
-
-        #if hosts are remote (not simulated in this computer)
-        if self.remoteHosts:
-
-            pass
-
-        #if hosts are simulated here. Then, we can run mx commands
-        else:
-            self.mxStartFlow(flow)
-
-
-    #@profile
-    def mxStartFlow(self,flow):
-
-        if self.iperf:
-            #start server
-            serverName = self.topology.getHostName(flow["dst"])
-
-            dstPort = flow["dport"]
-
-            #pidName = "/tmp/iperf_{0}_{1}.pid".format(serverName,dstPort)
-            cmd = "mx {0} iperf3 -s -p {1} -I {2}  > /dev/null &".format(serverName,dstPort,pidName)
-            #cmd = "mx {0} iperf3 -s -p {1} -1  --logfile {2}iperf_server_{0}_{1} &".format(serverName,dstPort,tmp_files)
-            subprocess.call(cmd,shell=True)
-            #print cmd
-
-        self.scheduler.enter(1,1,self.mxStartFlow_client,[flow])
-
-    #@profile
-    def mxStartFlow_client(self,flow):
-        #read pid and delete file
-
-        clientName = self.topology.getHostName(flow["src"])
-
-        if self.iperf:
-
-            #start client
-            cmd = "mx {0} iperf3 -c {1} --cport {2} --bind 0 -Z -u -b {3} -p {4} -t {5} > /dev/null &".format(clientName,flow["dst"],flow["sport"], flow.setSizeToStr(flow["size"]),flow["dport"],flow["duration"])
-            #cmd = "mx {0} iperf3 -c {1} --cport {2} --bind 0 -Z -u -b {3} -p {4} -t {5}  --logfile {6}iperf_client_{0}_{2}_{4} &".format(clientName,flow["dst"],flow["sport"], flow.setSizeToStr(flow["size"]),flow["dport"],flow["duration"],tmp_files)
-            subprocess.call(cmd,shell=True)
-        else:
-
-            self.unixClient.send(pickle.dumps({"type":"flow","data":{'dst':flow["dst"],'sport':flow['sport'],'size':flow['size'],'dport':flow['dport'],'duration':flow['duration']}}),clientName)
-
-        #schedule stop function
-        self.scheduler.enter(flow["duration"],1,self.mxStopFlow,[flow])
-
-    #@profile
-    def mxStopFlow(self,flow):
-
-        url = "http://127.0.0.1:5001/stoppingFlow"
-        try:
-            requests.post(url,data= flow.toJSON())
-        except ConnectionError:
-            pass
-        #kills server
-
-        #pid = read_pid(pidName).strip('\x00')
-
-        #del_file(pidName)
-
-        #cmd = "kill -9 {0}".format(pid)
-        #subprocess.call(cmd,shell=True)
-
-
-    def restStartFlow(self,flow):
-        pass
-
-
-    def restStopFlow(self):
-        pass
 
 if __name__ == "__main__":
 
@@ -800,7 +896,7 @@ if __name__ == "__main__":
                            help='load traffic from a file so it can be repeated',
                            default="")
 
-
+    import ipdb; ipdb.set_trace()
     args = parser.parse_args()
 
 
@@ -820,9 +916,7 @@ if __name__ == "__main__":
     if args.load_traffic:
         traffic = pickle.load(open(args.load_traffic,"r"))
     else:
-        traffic = a.trafficPlanner(numFlows=nflows,senders=senders,receivers=receivers,totalTime=totalTime,percentageElephants=pelephant,percentageMice=pmice)
-
-    #print traffic
+        traffic = a.trafficPlanner(numFlows=nflows, senders=senders, receivers=receivers, totalTime=totalTime, percentageElephants=pelephant, percentageMice=pmice)
 
     if args.save_traffic:
         with open(args.save_traffic,"w") as f:

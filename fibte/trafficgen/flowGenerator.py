@@ -1,16 +1,16 @@
 import time
 import socket
 import argparse
-import signal
 import sys
-
 #thats what I get checking wireshark and the ovs switches
 #in theory it should be 54
 minSizeUDP = 42
 #maxUDPSize = 1500
-maxUDPSize = 65507
+maxUDPSize = 65000
+import math
 
 from fibte.misc.unixSockets import UnixClient
+import threading
 import json
 
 def setSizeToInt(size):
@@ -32,24 +32,56 @@ def setSizeToInt(size):
 
 
 def sendMax(dst,dport):
+
     while True:
-        s.sendto("A"*maxUDPSize, (dst,dport))
+        s.sendto("A"*maxUDPSize,(dst,dport))
 
-def sendRate(s, dst, dport, bytesPerSec):
-    now = time.time()
+def sendRate_old(s,dst,dport,bytesPerSec):
+    now=time.time()
     while bytesPerSec > minSizeUDP:
-        bytesPerSec -= (s.sendto("A"*min(maxUDPSize, bytesPerSec - minSizeUDP), (dst, dport)) + minSizeUDP)
-    print  time.time() - now
-    time.sleep(max(0,1 - (time.time() - now)))
+        bytesPerSec -= (s.sendto("A"*min(maxUDPSize,bytesPerSec-minSizeUDP),(dst,dport)) + minSizeUDP)
+    #print  time.time()-now
+    time.sleep(max(0,1-(time.time()-now)))
 
-def die(signal, frame):
+
+def sendRate(s,dst,dport,bytesPerSec,length=None):
+    if length:
+        maxUDPSize = length
+    times = math.ceil(float(bytesPerSec) / (maxUDPSize+minSizeUDP))
+    time_step= 1/times
+    start = time.time()
+    i = 0
+    while bytesPerSec > minSizeUDP:
+        bytesPerSec -= (s.sendto("A"*min(maxUDPSize,bytesPerSec-minSizeUDP),(dst,dport)) + minSizeUDP)
+        i +=1
+        next_send_time = start + i * time_step
+        time.sleep(max(0,next_send_time - time.time()))
+    print time.time()-start
+    time.sleep(max(0,1-(time.time()-start)))
+
+
+def sendRate_batch(s,dst,dport,bytesPerSec,length=None,packets_round=1):
+    if length:
+        maxUDPSize = length
+    times = math.ceil((float(bytesPerSec) / (maxUDPSize+minSizeUDP))/packets_round)
+    time_step= 1/times
+    start = time.time()
+    i = 0
+    while bytesPerSec > minSizeUDP:
+        for _ in range(packets_round):
+            bytesPerSec -= (s.sendto("A"*min(maxUDPSize,bytesPerSec-minSizeUDP),(dst,dport)) + minSizeUDP)
+        i +=1
+        next_send_time = start + (i * time_step)
+        time.sleep(max(0,next_send_time - time.time()))
+    time.sleep(max(0,1-(time.time()-start)))
+
+def die(signal,frame):
     sys.exit(0)
 
-def sendFlow(dst="10.0.32.2", sport=5000, size='10M', dport=5001, duration = 10,**kwargs):
+def sendFlow(dst="10.0.32.2",sport=5000,size='10M',dport=5001,duration=10,**kwargs):
     #register signal handler
     #signal.signal(signal.SIGTERM,die)
-
-    # Rates are in bits per second
+    #rates are in bits per second
     rate = setSizeToInt(size)/8
 
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -59,10 +91,12 @@ def sendFlow(dst="10.0.32.2", sport=5000, size='10M', dport=5001, duration = 10,
 
     startTime = time.time()
     while (time.time() - startTime < totalTime):
-        sendRate(s, dst, dport, rate)
+        sendRate_batch(s,dst,dport,rate,length=10000, packets_round=5)
+        #sendRate_old(s, dst, dport, rate)
 
 
 def sendRound(socket,dst,rate,dport,offset):
+
     while rate > 0 and dport < 65535:
         for destination in dst[offset:]:
             socket.sendto("",(destination,dport))
@@ -71,23 +105,26 @@ def sendRound(socket,dst,rate,dport,offset):
                 dport +=1
                 break
 
-        # So we only offset the first round
+        #so we onlyoffset the first round
         if offset != 0:
             offset = 0
         dport +=1
-    return dport, dst.index(destination) + 1
+
+    return dport, dst.index(destination)+1
 
 
-def keepSending(initialDestinations, rate, totalTime):
+def keepSending(initialDestinations,rate,totalTime):
+
     dport = 6005
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-    # If rate is samller than the amount of hosts we set it to that value
+    #if rate is samller than the amount of hosts we set it to that value
+
     startTime = time.time()
     offset = 0
     while (time.time() - startTime < totalTime):
         now = time.time()
-        dport,offset= sendRound(s, initialDestinations, rate, dport, offset)
+        dport,offset= sendRound(s,initialDestinations,rate,dport,offset)
         time.sleep(max(0,1-(time.time()-now)))
 
         #restart the source port
@@ -97,17 +134,25 @@ def keepSending(initialDestinations, rate, totalTime):
 
 
 def sendFlowNotifyController(**flow):
+    #store time so we sleep 1 seconds - time needed for the following commands
+    now  = time.time()
     client = UnixClient("/tmp/controllerServer")
-    # Tell controller that flow will start - only if it is an elephant flow
-
+    #tell controller that flow will start
     if flow["duration"] >= 20:
-        client.send(json.dumps({"type": "startingFlow", "flow": flow}),"")
-    #time.sleep(1)
-    # Start flow
+        #notify controller that a flow will start
+        client.send(json.dumps({"type":"startingFlow","flow":flow}),"")
+
+        # #start a traceroute for this flow in a different thread
+        # p = threading.Thread(target=tracerouteThread,kwargs=(flow))
+        # p.setDaemon(True)
+        # p.start()
+
+    time.sleep(max(0, 1 - (time.time() - now)))
+    #start flow
     sendFlow(**flow)
 
     if flow["duration"] >= 20:
-        client.send(json.dumps({"type" : "stoppingFlow", "flow" : flow}),"")
+        client.send(json.dumps({"type":"stoppingFlow","flow":flow}),"")
     client.sock.close()
 
 if __name__ == "__main__":
@@ -132,7 +177,7 @@ if __name__ == "__main__":
                        default='5000')
 
     parser.add_argument('-t', '--time',
-                       help='flow duration in seconds',
+                       help='',
                        default='500')
 
 
@@ -147,13 +192,11 @@ if __name__ == "__main__":
     dport = int(args.dport)
 
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.bind(('', int(args.cport)))
+    s.bind(('',int(args.cport)))
 
     totalTime = int(args.time)
 
     startTime = time.time()
     if not(args.debug):
         while (time.time() - startTime < totalTime):
-            sendRate(s, dst, dport, rate)
-
-
+            sendRate(s,dst,dport,rate)
