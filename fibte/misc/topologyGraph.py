@@ -400,6 +400,27 @@ class TopologyGraph(TopologyDB):
 
         return self.networkGraph.getHostsBehindRouter(router)
 
+    def getHostsBehindPod(self, pod):
+        """
+        Returns all the hosts under a given pod
+
+        :param pod: a pod number is expected in string form "pod_X"
+        :return: a list of hosts under that pod
+        """
+        # Get pod number
+        pod_number = pod.split('_')[1]
+
+        # Calculate corresponding edge router regex
+        regex = "r_{0}_e".format(pod_number)
+
+        # Get all edge routers
+        edge_routers = self.getEdgeRouters()
+
+        # Filter those that match the regex and get a set of hosts
+        host_lists = [self.getHostsBehindRouter(edge_router) for edge_router in edge_routers if regex in edge_router]
+        host_set = {host for host_list in host_lists for host in host_list}
+        return list(host_set)
+
     def getHostsInOtherSubnetworks(self, host):
         """
         Returns all the hosts from other subnetworks. This is used to generate traffic only to "remote" hosts
