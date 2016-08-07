@@ -50,7 +50,10 @@ class TrafficGenerator(Base):
         self.pMice = pMice
         self.pElephant = pElephant
 
-        self.topology = TopologyGraph(getIfindexes = False, openFlowInformation = False, db = os.path.join(tmp_files,db_topo))
+        self.topology = TopologyGraph(getIfindexes=False,
+                                      snmp=False,
+                                      interfaceToRouterName=False,
+                                      db=os.path.join(tmp_files,db_topo))
 
         self.linkBandwidth = LINK_BANDWIDTH
 
