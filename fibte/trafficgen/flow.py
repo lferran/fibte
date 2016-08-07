@@ -56,6 +56,10 @@ class Base(object):
         """
         if isinstance(duration,int):
             return duration
+
+        if isinstance(duration, float):
+            return duration
+
         ftr = [3600,60,1]
 
         return sum([a*b for a,b in zip(ftr, map(int,duration.split(':')))])
