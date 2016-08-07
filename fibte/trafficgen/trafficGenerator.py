@@ -43,7 +43,7 @@ def del_file(f):
     os.remove(f)
 
 class TrafficGenerator(Base):
-    def __init__(self, pMice = 0.9, pElephant = 0.1, remoteHosts=False, *args, **kwargs):
+    def __init__(self, pMice = 0.9, pElephant = 0.1, *args, **kwargs):
         super(TrafficGenerator, self).__init__(*args,**kwargs)
 
         # Set traffic mice/elephant flow percent
@@ -216,8 +216,7 @@ class TrafficGenerator(Base):
 
             # Create the flow object
             flow = Flow(src=srcIp, dst=dstIp, sport=sport, dport=dport, size=flow_tmp['size'],
-                        start_time=flow_tmp['startTime'], duration=flow_tmp['duration'],
-                        tos=flow_tmp['tos'], proto=flow_tmp['proto'])
+                        start_time=flow_tmp['startTime'], duration=flow_tmp['duration'])
 
             # Append it to the list
             flowlist.append(flow)
@@ -282,27 +281,44 @@ class TrafficGenerator(Base):
 
         return flowlist
 
-    def trafficPlanner(self, senders=["r_0_e0"], receivers=["r_1_e0"], flowRate=0.25, totalTime=500):
+    def trafficPlanner(self, senders=['pod_0'], receivers=['pod_3'], flowRate=0.25, totalTime=500):
+        """
+        Generates a traffic plan for specified senders and receivers, with
+        a given flow starting rate per each host for a specified simulation time
 
-        # Parse communication pattern limitations
-        #TODO: do it per pod: senders=[pod0, pod1], receivers=[pod3]
-        if senders[0] == 'all':
-            senders = self.topology.getEdgeRouters()
+        :param senders: list of pods or edge routers
+        :param receivers: list of pods or edge routers
+        :param flowRate: floating number indicating flow stargin rate
+        :param totalTime: total simulation time
+        :return: dictionary host -> flowlist
+        """
 
-        if receivers[0] == "all":
-            receivers = self.topology.getEdgeRouters()
+        # Parse communication parties
+        if senders != ['all']:
+            # Get all hosts behind pod or edge router
+            host_senders_lists = [self.topology.getHostsBehindPod(sender) if 'pod' in sender else self.topology.getHostsBehindRouter(sender) for sender in senders]
+            host_senders = list({host for host_list in host_senders_lists for host in host_list})
 
-        # Maintains the used ports: {}: host -> {in, out, usedPorts}
-        hosts_capacities = {}
-        for host in set(senders+receivers):
-            hosts_capacities[host] = {'in': 0, 'out': 0 , 'usedPorts' : set({})}
+        else:
+            # Get all of them
+            host_senders = self.topology.getHosts().keys()
+
+        if receivers != ['all']:
+            # Get all hosts behind pod or edge router
+            host_receivers_lists = [self.topology.getHostsBehindPod(receiver) if 'pod' in receiver else self.topology.getHostsBehindRouter(receiver) for receiver in receivers]
+            host_receivers = list({host for host_list in host_receivers_lists for host in host_list})
+
+        else:
+            # Get all of them
+            host_receivers = self.topology.getHosts().keys()
 
         # Holds {}: host -> flowlist
         traffic_per_host = {}
 
-        for sender in senders:
+        for sender in host_senders:
+
             # Generate flowlist
-            flowlist = self.plan_flows(sender, receivers, flowRate, totalTime)
+            flowlist = self.plan_flows(sender, host_receivers, flowRate, totalTime)
 
             # Save it
             traffic_per_host[sender] = flowlist
@@ -310,542 +326,53 @@ class TrafficGenerator(Base):
         # Return all generated traffic
         return traffic_per_host
 
-    #@profile
-    def trafficPlanner2(self,numFlows=50,senders=["r_0_e0"],receivers=["r_1_e0"],percentageMice=0.9, percentageElephants=0.1,totalTime=500):
-
-
-        #First we will compute the length and size ranges of mice and elephant flows. This two parameters will depend
-        #on link bandwidth and total time.
-
-        time_range_elephant = [20,500]
-        time_range_mice = [2,5]
-
-
-        #This function should think which flows should be scheduled during totalTime. It should create a list
-        #of flows that more or less at all time the number of current "running" flows is equal or close to numFlows.
-
-        #senders should be the list of "edge" or hosts that can generate traffic. And receivers the edge or list of host
-        #that can receive traffic in our network.
-
-        #Mice and elephatn parameters are the percentage of numFlows that are mice or elephant.
-
-        #the function should take into account the links Bandwidths and maximum number of paths between nodes (dont really know how to use that because there are collisions everywhere....)
-
-        #for every host we have we will track the current capacity for receiving and sending traffic so we do not generate more than what they can generate or receive.
-
-        if senders[0] == "all":
-            senders = self.topology.getEdgeRouters()
-
-        if receivers[0] == "all":
-            receivers = self.topology.getEdgeRouters()
-
-        hosts_capacities={}
-        #hosts_capacities_receivers = {}
-        senders_tmp = []
-        for router in senders:
-            for host in self.topology.getHostsBehindRouter(router):
-                senders_tmp.append(host)
-        senders = senders_tmp
-
-        receivers_tmp = []
-        for router in receivers:
-            for host in self.topology.getHostsBehindRouter(router):
-                receivers_tmp.append(host)
-        receivers = receivers_tmp
-
-        for host in set(senders+receivers):
-            hosts_capacities[host] = {'in':0,'out':0 , 'usedPorts' : set({})}
-
-
-        #We make the first allocation of flows using the number of flows we want to keep.
-        flows = []
-
-        #we use the number of elephant flows allocated to limit how many do we allocate
-        maxElephantFlows = int(percentageElephants*numFlows) + 1
-
-        #we keep track of the amount of bytes/kb/mb/gb generated by each type of flows.
-        #with that we will be able to allocate the size of the flows following datacenter traffic matrices.
-        elephantTrafficCounter = 0
-
-        current_times = []
-        #fill the first value with a random number from 0 to 10 so not all the flows start at the same time
-        for i in range(numFlows):
-            current_times.append((random.randint(0,3),0))
-
-
-        numRounds = 5
-        #first round of allocation
-
-        temporal_port_list = []
-        for flow_n in range(numFlows):
-            #we get the type of flow we will allocate
-            #we repeat this 5 times and we break if a flow is found.
-            for round in xrange(numRounds):
-                #chooses if the flow will be elephant or mice. However, we have a maximum amount of elephant flows.
-                if elephantTrafficCounter > maxElephantFlows:
-                    type = "m"
-                else:
-                    type = self.weighted_choice(percentageMice,percentageElephants)
-
-                #select a sender and receiver and avoids to choose two in the same subnetwork
-                #if elephant
-                # #getting sender and receiver
-                # sender = random.choice(senders)
-                # receiver = random.choice(receivers)
-                # while self.topology.inSameSubnetwork(sender,receiver):
-                #     receiver = random.choice(receivers)
-
-                if type == 'e':
-                    size = self.getSizeElephant()
-                    duration = self.getTimeElephant()
-                    starting_time = current_times[flow_n][0]
-
-                #if mice
-                elif type == 'm':
-                    size = self.getSizeMice()
-                    duration = self.getTimeMice()
-                    starting_time = current_times[flow_n][0]
-
-                # compute some temporal senders and receivers removing senders or receivers that can not fit the path
-
-                senders_tmp = []
-                for sender in senders:
-                    if hosts_capacities[sender]["out"] + size <= self.linkBandwidth:
-                        senders_tmp.append(sender)
-                if senders_tmp:
-                    sender = random.choice(senders_tmp)
-                else:
-                    sender = []
-
-                receivers_tmp = []
-                for receiver in receivers:
-                    if hosts_capacities[receiver]["in"] + size <= self.linkBandwidth:
-                        receivers_tmp.append(receiver)
-                if receivers_tmp:
-                    receiver = random.choice(receivers_tmp)
-                else:
-                    receiver = []
-
-                #if some of them are empty it means that we have to use the previous technique
-                if not(receiver) or not(sender):
-
-                    sender = random.choice(senders)
-                    receiver = random.choice(receivers)
-                    while self.topology.inSameSubnetwork(sender,receiver):
-                        sender = random.choice(senders)
-                        receiver = random.choice(receivers)
-
-                else:
-
-                    #we use that to limit
-                    c = 0
-                    while self.topology.inSameSubnetwork(sender,receiver) and c < numRounds:
-                        c +=1
-                        receiver = random.choice(receivers_tmp)
-                        sender = random.choice(senders_tmp)
-
-                    #we did not find it
-                    if c == numRounds:
-                        if round == numRounds-1:
-                            current_times[flow_n] = (current_times[flow_n][0]+duration,'noAllocated')
-                            break
-                        else:
-                            sender = random.choice(senders)
-                            receiver = random.choice(receivers)
-                            while self.topology.inSameSubnetwork(sender,receiver):
-                                receiver = random.choice(receivers)
-
-
-                #we increase the current time even if the flow can not be allocated.
-                #we check if the flow can be allocated or not.
-
-                #if the flow will finish later than the simulation time is not scheduled.
-                #or the sender can not fit this flow in its link
-                #or the receiver can not fit this flow in its link
-
-                #changed my mind when a flow is to big we will just adapt the duration or size to the remaining
-
-                #however we still have to check if the link is completly full (lets say 0.95% of its capacity), and
-                #the remaining time is bigger than the minimum for this type of flow.
-
-                #flow should not be allocated however we try to fit duration and size
-                if current_times[flow_n][0]+duration > totalTime or hosts_capacities[sender]['out'] + size > self.linkBandwidth \
-                        or hosts_capacities[receiver]['in'] + size > self.linkBandwidth:
-
-
-                    #remaining duration
-                    #update current_times
-                    #not allocated flows are not added to the flows to be scheduled list
-                    if round == numRounds-1:
-                        current_times[flow_n] = (current_times[flow_n][0]+duration,'noAllocated')
-                        break
-                        #why not a break here
-                        #break
-
-                    #here we adjust the time to fit
-                    if current_times[flow_n][0]+duration > totalTime:
-                        duration = totalTime - current_times[flow_n][0]
-
-                        if type == 'm':
-                            #if the remainging time its smaller than the minimum of a mice we do not allocate
-                            if duration < time_range_mice[0]:
-                                #current_times[flow_n] = (current_times[flow_n]+duration,'noAllocated')
-                                continue
-                        if type =='e':
-                            #same for elephants
-                            if duration < time_range_elephant[0]:
-                                #current_times[flow_n] = (current_times[flow_n]+duration,'noAllocated')
-                                continue
-
-                    #here we ajust the size I check because we could be here only for the time condition
-                    if hosts_capacities[sender]['out'] + size > self.linkBandwidth or hosts_capacities[receiver]['in'] + size > self.linkBandwidth:
-
-                        #lets find which one has the least space for flow allocation and adapt to that..
-                        size = min(self.linkBandwidth - hosts_capacities[sender]['out'], self.linkBandwidth-hosts_capacities[receiver]['in'])
-
-                        #it there is less than the 5 % of the link we do not allocate
-                        if size < self.linkBandwidth*0.05:
-
-                            #current_times[flow_n] = (current_times[flow_n]+duration,'noAllocated')
-                            continue
-
-                        #we reduce that a 10%
-                        size = int(size*0.90)
-
-
-                    #we allocate that modified flow
-
-                    hosts_capacities[sender]['out'] += size
-                    hosts_capacities[receiver]['in'] += size
-                    flow = self.randomFlow(srcHost=sender, dstHost=receiver, size=size, startTime=starting_time, duration=duration,hosts_capacities=hosts_capacities)
-
-                    hosts_capacities[sender]['usedPorts'].add(flow['sport'])
-                    hosts_capacities[receiver]['usedPorts'].add(flow['dport'])
-                    temporal_port_list.append((flow["sport"],flow["dport"]))
-                    flows.append(flow)
-
-                    #update current_times
-                    current_times[flow_n] = (current_times[flow_n][0]+duration,flow)
-
-                    #if its long enough we consider it elephant
-                    if flow['duration'] >= time_range_elephant[0]:
-                        elephantTrafficCounter +=1
-                    #Break the loop because a flow was found
-                    break
-
-
-
-                #allocate flow
-                else:
-                    #we add the size of the flow | so we are allocating it.
-                    hosts_capacities[sender]['out'] += size
-                    hosts_capacities[receiver]['in'] += size
-                    flow = self.randomFlow(srcHost=sender, dstHost=receiver, size=size, startTime=starting_time, duration=duration,hosts_capacities=hosts_capacities)
-
-                    hosts_capacities[sender]['usedPorts'].add(flow['sport'])
-                    hosts_capacities[receiver]['usedPorts'].add(flow['dport'])
-                    temporal_port_list.append((flow["sport"],flow["dport"]))
-                    flows.append(flow)
-
-
-                    #update current_times
-                    current_times[flow_n] = (current_times[flow_n][0]+duration,flow)
-
-                    #if its long enough we consider it elephant
-                    if flow['duration'] >= time_range_elephant[0]:
-                        elephantTrafficCounter +=1
-                    #Break the loop because a flow was found
-                    break
-
-        #now we start allocating flows until all reach time > totalTime
-        #for that we will use the list current_times, sort it and erase the first flow and
-        #schedule a new one.
-
-
-
-
-        #sorting the list
-        current_times.sort()
-
-
-        #while there is a flow that can be fitted...
-        while current_times[0][0] < totalTime:
-
-            #here we do something similar to what we did in the first round but we only schedule 1 flow per round, and
-            #we erase 1 flow per round also.
-
-            #first we take that flow and update host_capacities, and try to allocate a new flow
-
-            flow = current_times[0][1]
-            if flow != 'noAllocated':
-
-                srcHost = self.topology.getHostName(flow["src"])
-                dstHost = self.topology.getHostName(flow["dst"])
-                size = flow["size"]
-
-                #free space for new flows
-                hosts_capacities[srcHost]['out'] -= size
-                hosts_capacities[dstHost]['in'] -= size
-
-                #if its elephant we make 1 slot free
-                #if its long enough we consider it elephant
-                if flow['duration'] >= time_range_elephant[0]:
-                    elephantTrafficCounter -=1
-
-                #print hosts_capacities
-
-                hosts_capacities[srcHost]['usedPorts'].remove(flow['sport'])
-                hosts_capacities[dstHost]['usedPorts'].remove(flow['dport'])
-
-
-            #we look for a new flow
-            for round in xrange(numRounds):
-
-                if elephantTrafficCounter >= maxElephantFlows:
-                    type = "m"
-
-                else:
-                    type = self.weighted_choice(percentageMice,percentageElephants)
-
-                # #getting sender and receiver
-                # sender = random.choice(senders)
-                # receiver = random.choice(receivers)
-                # while self.topology.inSameSubnetwork(sender,receiver):
-                #     receiver = random.choice(receivers)
-
-                #if elephant
-                if type == 'e':
-                    size = self.getSizeElephant()
-                    duration = self.getTimeElephant()
-
-                #if mice
-                elif type == 'm':
-                    size = self.getSizeMice()
-                    #print "mice"
-                    duration = self.getTimeMice()
-
-
-                # compute some temporal senders and receivers removing senders or receivers that can not fit the path
-
-                senders_tmp = []
-                for sender in senders:
-                    if hosts_capacities[sender]["out"] + size <= self.linkBandwidth:
-                        senders_tmp.append(sender)
-                if senders_tmp:
-                    sender = random.choice(senders_tmp)
-                else:
-                    sender = []
-
-                receivers_tmp = []
-                for receiver in receivers:
-                    if hosts_capacities[receiver]["in"] + size <= self.linkBandwidth:
-                        receivers_tmp.append(receiver)
-                if receivers_tmp:
-                    receiver = random.choice(receivers_tmp)
-                else:
-                    receiver = []
-
-                #if some of them are empty it means that we have to use the previous technique
-                if not(receiver) or not(sender):
-
-                    sender = random.choice(senders)
-                    receiver = random.choice(receivers)
-                    while self.topology.inSameSubnetwork(sender,receiver):
-                        receiver = random.choice(receivers)
-
-
-                else:
-
-                    #we use that to limit
-                    c = 0
-                    while self.topology.inSameSubnetwork(sender,receiver) and c < numRounds:
-                        c +=1
-                        receiver = random.choice(receivers_tmp)
-                        sender = random.choice(senders_tmp)
-
-                    #we did not find it
-                    if c == numRounds:
-                        if round == numRounds-1:
-                            duration_tmp = current_times[0][0]+duration +3
-                            del(current_times[0])
-                            bisect.insort(current_times,(duration_tmp,'noAllocated'))
-                            break
-                        else:
-
-                            sender = random.choice(senders)
-                            receiver = random.choice(receivers)
-                            while self.topology.inSameSubnetwork(sender,receiver):
-                                receiver = random.choice(receivers)
-
-                #we increase the current time even if the flow can not be allocated.
-                #we check if the flow can be allocated or not.
-
-                #if the flow will finish later than the simulation time is not scheduled.
-                #or the sender can not fit this flow in its link
-                #or the receiver can not fit this flow in its link
-
-                starting_time = current_times[0][0] + 3
-
-                if current_times[0][0]+3+duration > totalTime or hosts_capacities[sender]['out'] + size > self.linkBandwidth or hosts_capacities[receiver]['in'] + size > self.linkBandwidth:
-                    #flow is not allocated
-
-
-                    #update current_times
-                    if round == numRounds-1:
-                        duration_tmp = current_times[0][0]+duration +3
-                        del(current_times[0])
-                        bisect.insort(current_times,(duration_tmp,'noAllocated'))
-                        # current_times[0] = (current_times[0][0]+duration+1,'noAllocated').
-                        break
-
-                    #remaining duration
-                    if current_times[0][0]+duration > totalTime:
-                        duration = totalTime - current_times[0][0]
-
-                        if type == 'm':
-                            #if the remainging time its smaller than the minimum of a mice we do not allocate
-                            if duration < time_range_mice[0]:
-                                # duration_tmp = current_times[0][0]+duration +1
-                                # del(current_times[0])
-                                # bisect.insort(current_times,(duration_tmp,'noAllocated'))
-
-                                continue
-                        if type =='e':
-                            #same for elephants
-                            if duration < time_range_elephant[0]:
-                                # duration_tmp = current_times[0][0]+duration +1
-                                # del(current_times[0])
-                                # bisect.insort(current_times,(duration_tmp,'noAllocated'))
-                                continue
-
-                    if hosts_capacities[sender]['out'] + size > self.linkBandwidth or hosts_capacities[receiver]['in'] + size > self.linkBandwidth:
-
-                        #lets find which one has the least space for flow allocation and adapt to that..
-                        size = min(self.linkBandwidth - hosts_capacities[sender]['out'], self.linkBandwidth-hosts_capacities[receiver]['in'])
-
-                        #it there is less than the 5 % of the link we do not allocate
-                        if size < self.linkBandwidth*0.05:
-                            # duration_tmp = current_times[0][0]+duration +1
-                            # del(current_times[0])
-                            # bisect.insort(current_times,(duration_tmp,'noAllocated'))
-                            continue
-
-                        #we reduce that a 10%
-                        size = int(size*0.90)
-
-
-                    #we allocate that modified flow
-                    hosts_capacities[sender]['out'] += size
-                    hosts_capacities[receiver]['in'] += size
-                    flow = self.randomFlow(srcHost=sender, dstHost=receiver, size=size, startTime=starting_time, duration=duration,hosts_capacities=hosts_capacities)
-
-                    hosts_capacities[sender]['usedPorts'].add(flow['sport'])
-                    hosts_capacities[receiver]['usedPorts'].add(flow['dport'])
-
-                    temporal_port_list.append((flow["sport"],flow["dport"]))
-
-                    flows.append(flow)
-
-                    #update current_times
-                    duration_tmp = current_times[0][0]+duration +1
-                    del(current_times[0])
-                    bisect.insort(current_times,(duration_tmp,flow))
-
-                    #if its long enough we consider it elephant
-                    if flow['duration'] >= time_range_elephant[0]:
-                        elephantTrafficCounter +=1
-
-                    #Break the loop because a flow was found
-                    break
-
-
-                    #update current_times
-                    #not allocated flows are not added to the flows to be scheduled list
-
-
-                #allocate flow
-                else:
-                    #we add the size of the flow | so we are allocating it.
-                    hosts_capacities[sender]['out'] += size
-                    hosts_capacities[receiver]['in'] += size
-                    flow = self.randomFlow(srcHost=sender,dstHost=receiver,size=size,startTime=starting_time,duration=duration,hosts_capacities=hosts_capacities)
-
-                    hosts_capacities[sender]['usedPorts'].add(flow['sport'])
-                    hosts_capacities[receiver]['usedPorts'].add(flow['dport'])
-                    temporal_port_list.append((flow["sport"],flow["dport"]))
-                    flows.append(flow)
-
-                    #update current_times
-                    duration_tmp = current_times[0][0]+duration +3
-                    del(current_times[0])
-                    bisect.insort(current_times,(duration_tmp,flow))
-                    # current_times[0] = (current_times[0][0]+duration+1,flow)
-
-                    #if its long enough we consider it elephant
-                    if flow['duration'] >= time_range_elephant[0]:
-                        elephantTrafficCounter +=1
-
-                    #Break the loop because a flow was found
-                    break
-
-            #current_times.sort()
-
-
-        return flows
-
     def schedule(self, traffic_per_host):
-        self.ControllerClient.send(json.dumps({"type":"reset"}),"")
 
-        # Send all flowlist to each host
-        pass
-
-    #@profile
-    def schedule2(self,flows):
-
-        #reset flows list
-        # url = "http://127.0.0.1:5001/resetFlows"
-        # try:
-        #     requests.post(url,data = {})
-        # except ConnectionError:
-        #     pass
-        #reset controller
-        self.ControllerClient.send(json.dumps({"type":"reset"}),"")
-
-        #schedule all the flows
         try:
-            for flow in flows:
-                #self.scheduler.enter(flow["start_time"],1, self.pushFlow, [flow])
-                self.scheduler.enter(flow["start_time"],1, self.startFlowSingle, [flow])
+            # Reset controller
+            self.ControllerClient.send(json.dumps({"type":"reset"}),"")
+        except:
+            # log.debug("Controller is not connected/present")
+            pass
 
-            self.scheduler.run()
-        except KeyboardInterrupt:
-            #kill all the iperf3 servers and clients
-            print "killing all"
-            if self.iperf:
+        # Set sync. delay
+        SYNC_DELAY = 10
 
-                subprocess.call("sudo killall -9 iperf3",shell=True)
-            else:
-                for host in self.topology.networkGraph.getHosts():
+        # Set traffic start time
+        traffic_start_time = time.time() + SYNC_DELAY
 
-                    self.unixClient.send(json.dumps({"type":"terminate"}),host)
+        # Schedule all the flows
+        try:
+            for sender, flowlist in traffic_per_host.iteritems():
+                # Sends flowlist to the sender's server
+                self.unixClient.send(json.dumps({"type": "flowlist", "data": flowlist}), sender)
 
-                #reset to the controller
-                self.ControllerClient.send(json.dumps({"type":"reset"}),"")
+                # Send traffic starting time
+                self.unixClient.send(json.dumps({"type": "starttime", "data": traffic_start_time}), sender)
+        except:
 
-                #subprocess.call("kill -9  $(ps aux | grep '/flowGenerator.py' | awk '{print $2}')",shell=True)
+            # reset to the controller
+            self.ControllerClient.send(json.dumps({"type": "reset"}), "")
 
-            #reset flows list
-            url = "http://127.0.0.1:5001/resetFlows"
-            try:
-                requests.post(url,data = {})
-            except ConnectionError:
-                pass
+    def terminateTraffic(self):
+        """
+        Sends a reset command to the controller and terminate traffic command
+        to all flowServers of the network
+        """
+        try:
+            for host in self.topology.networkGraph.getHosts():
+                self.unixClient.send(json.dumps({"type": "terminate"}), host)
+        except:
+            #log.info("FlowServer of {0} did not receive terminate command".format(host))
+            pass
+        try:
+            # Send reset to the controller
+            self.ControllerClient.send(json.dumps({"type": "reset"}), "")
+        except:
+            # log.debug("Controller is not connected/present")
+            pass
 
-    #@profile
-    def startFlowSingle(self,flow):
-        #sends command to the server
-        clientName = self.topology.getHostName(flow["src"])
-        self.unixClient.send(json.dumps({"type":"flow","data":flow.toDICT()}),clientName)
+
 
 if __name__ == "__main__":
 
@@ -853,43 +380,37 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     #group = parser.add_mutually_exclusive_group()
+    parser.add_argument('--terminate', help='Terminate ongoing traffic', action='store_true')
 
     parser.add_argument('-t', '--time',
                            help='Duration of the traffic generator',
+                           type=int,
                            default=400)
 
-    parser.add_argument('-n', '--nflows',
-                           help="Number of flows kept constant",
-                           default=20)
+    parser.add_argument('-r', '--flow_rate',
+                           help="Rate at which a host starts new flows (flows/second)",
+                           type=float,
+                           default=0.25)
 
     parser.add_argument('-e', '--elephant',
                            help='Percentage of elephant flows',
+                           type=float,
                            default=0.1)
 
     parser.add_argument('-m', '--mice',
                            help='Percentage of mice flows',
+                           type=float,
                            default=0.9)
 
 
     parser.add_argument('--senders',
-                           help='List of switch edges that can send traffic',
+                           help='List of switch edges or pods that can send traffic',
                            default="r_0_e0")
 
 
     parser.add_argument('--receivers',
-                           help='List of switch edges that can receive traffic',
+                           help='List of switch edges or pods that can receive traffic',
                            default="r_1_e0")
-
-
-    parser.add_argument('--remote_hosts',
-                        help='enables remote host traffic generation option',
-                        action='store_true',
-                        default=False)
-
-    parser.add_argument('--iperf',
-                        help='enables iperf3 traffic generator',
-                        action='store_true',
-                        default=False)
 
     parser.add_argument('--save_traffic',
                            help='saves traffic in a file so it can be repeated',
@@ -899,35 +420,44 @@ if __name__ == "__main__":
                            help='load traffic from a file so it can be repeated',
                            default="")
 
-    import ipdb; ipdb.set_trace()
     args = parser.parse_args()
-
-
-    totalTime = int(args.time)
-    nflows = int(args.nflows)
-
-    pelephant = float(args.elephant)
-    pmice = float(args.mice)
 
     senders = args.senders.split(",")
     receivers = args.receivers.split(",")
 
+    # Start the TG object
+    tg = TrafficGenerator(pMice=args.mice, pElephant=args.elephant)
 
-    a = TrafficGenerator(remoteHosts=args.remote_hosts,iperf=args.iperf)
     t = time.time()
 
-    if args.load_traffic:
-        traffic = pickle.load(open(args.load_traffic,"r"))
+    if args.terminate:
+        tg.terminateTraffic()
+
     else:
-        traffic = a.trafficPlanner(numFlows=nflows, senders=senders, receivers=receivers, totalTime=totalTime, percentageElephants=pelephant, percentageMice=pmice)
+        # If traffic must be loaded
+        if args.load_traffic:
+            # Fetch traffic from file
+            traffic = pickle.load(open(args.load_traffic,"r"))
+        else:
+            # Generate traffic
+            traffic = tg.trafficPlanner(senders=senders,
+                                        receivers=receivers,
+                                        flowRate=args.flow_rate,
+                                        totalTime=args.time)
 
-    if args.save_traffic:
-        with open(args.save_traffic,"w") as f:
-            pickle.dump(traffic,f)
+        # If it must be saved
+        if args.save_traffic:
+            with open(args.save_traffic,"w") as f:
+                pickle.dump(traffic,f)
 
-    a.schedule(traffic)
+        # Orchestrate the traffic (either loaded or generated)
+        tg.schedule(traffic)
+
     print "elapsed time ", time.time()-t
 
 
+# Example commandline call:
+# python trafficGenerator.py --senders pod_0,pod_1 --receivers pod_2,pod_3 --mice 0.8 --elephant 0.2 --flow_rate 0.25 --time 300 --save_traffic pod01_to_pod02_m08e02_fr025_t300.traffic
 
+# python trafficGenerator.py --terminate
 
