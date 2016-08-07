@@ -134,10 +134,11 @@ def keepSending(initialDestinations,rate,totalTime):
 
 
 def sendFlowNotifyController(**flow):
-    #store time so we sleep 1 seconds - time needed for the following commands
+
+    # Store time so we sleep 1 seconds - time needed for the following commands
     now  = time.time()
     client = UnixClient("/tmp/controllerServer")
-    #tell controller that flow will start
+    # Tell controller that flow will start
     if flow["duration"] >= 20:
         #notify controller that a flow will start
         client.send(json.dumps({"type":"startingFlow","flow":flow}),"")
