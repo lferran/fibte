@@ -110,6 +110,10 @@ class FlowServer(object):
             raise ValueError("starttime is older than the current time!")
 
     def startFlow(self, flow):
+        """
+        Start flow calling the flow generation function
+        :param flow:
+        """
         process = multiprocessing.Process(target = flowGenerator.sendFlowNotifyController, kwargs = (flow))
         process.daemon = True
         process.start()
@@ -125,7 +129,7 @@ class FlowServer(object):
                 self.terminateALL()
                 break
 
-            elif event["type"] == 'startime':
+            elif event["type"] == 'starttime':
                 self.setStartTime(event["data"])
                 self.received_starttime = True
 
@@ -135,15 +139,21 @@ class FlowServer(object):
 
         if self.received_flowlist and self.received_starttime:
             try:
-                for (flowtime, flow) in self.flowlist:
+                for flow in self.flowlist:
                     delta = self.starttime - time.time()
-                    self.scheduler.enter(delta+flow["start_time"], 1, self.startFlow, [flow])
+                    self.scheduler.enter(delta + flow["start_time"], 1, self.startFlow, [flow])
 
+                # Run is blocking
                 self.scheduler.run()
+
+                # Reset everything
+                self.received_flowlist = False
+                self.received_starttime = False
 
             except KeyboardInterrupt:
                 self.terminateALL()
                 sys.exit(0)
+
 
 if __name__ == "__main__":
     import os
