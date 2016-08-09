@@ -684,6 +684,14 @@ class TopologyGraph(TopologyDB):
                             link_loads[(router, self.network[router][intfData["ifname"]]["connectedTo"])] = round(
                                 routersUsage[router]["out"][intfData['ifname']], 3)
 
+    def isEdgeRouter(self, router):
+        """
+        Check if router is edge router
+
+        :param router: router name
+        :return: boolean
+        """
+        return self.networkGraph.graph.node[router].has_key("edge")
 
 if __name__ == "__main__":
 
