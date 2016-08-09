@@ -410,7 +410,6 @@ class TrafficGenerator(Base):
             log.debug("Controller is not connected/present. Exception: {0}".format(e))
             pass
 
-
 if __name__ == "__main__":
 
     import argparse
@@ -490,7 +489,7 @@ if __name__ == "__main__":
                                                                str(args.elephant).replace('.', ''),
                                                                str(args.flow_rate).replace('.', ''),
                                                                args.time)
-            with open(args.save_traffic,"w") as f:
+            with open(filename,"w") as f:
                 pickle.dump(traffic,f)
 
         # Orchestrate the traffic (either loaded or generated)
