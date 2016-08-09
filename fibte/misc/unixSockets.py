@@ -9,6 +9,8 @@ import threading
 from fibte import CFG
 tmp_files = CFG.get("DEFAULT","tmp_files")
 
+RECV_BUFFER_SIZE = 1024
+
 def send_msg(sock, msg):
     msg = struct.pack('>I', len(msg)) + msg
     sock.sendall(msg)
@@ -74,6 +76,8 @@ class UnixClientTCP(object):
                 print serr
                 print "Server {0} could not be reached".format(server)
 
+
+
 class UnixServerTCP(object):
     def __init__(self, address, queue):
         self.server_address = address
@@ -107,7 +111,7 @@ class UnixServerTCP(object):
 
 
     def receive(self):
-        return self.sock.recv(1024)
+        return self.sock.recv(RECV_BUFFER_SIZE)
 
 
     def run(self):
