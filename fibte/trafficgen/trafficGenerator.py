@@ -1,13 +1,9 @@
 from flow import Flow, Base
 from fibte.misc.topologyGraph import TopologyGraph
 import random
-import sched
 import time
-import requests
 import os
-import subprocess
-import bisect
-from requests.exceptions import ConnectionError
+
 try:
     import cPickle as pickle
 except:
@@ -15,11 +11,8 @@ except:
 
 import json
 
-from fibte.misc.unixSockets import UnixClient
-
-#import inspect
-
-from fibte import CFG, LINK_BANDWIDTH
+from fibte.misc.unixSockets import UnixClient, UnixClientTCP
+from fibte import CFG, LINK_BANDWIDTH, MICE_SIZE_RANGE, ELEPHANT_SIZE_RANGE, MICE_SIZE_STEP, ELEPHANT_SIZE_STEP
 
 tmp_files = CFG.get("DEFAULT","tmp_files")
 db_topo = CFG.get("DEFAULT","db_topo")
@@ -59,7 +52,7 @@ class TrafficGenerator(Base):
 
         # Used to communicate with flowServers at the hosts.
         # {0} is because it will be filled with whichever server we want to talk to!
-        self.unixClient = UnixClient(tmp_files+"flowServer_{0}")
+        self.unixClient = UnixClientTCP(tmp_files+"flowServer_{0}")
 
         # Used to communicate with LoadBalancer Controller
         self.ControllerClient = UnixClient(os.path.join(tmp_files, controllerServer))
@@ -146,20 +139,10 @@ class TrafficGenerator(Base):
         :param flow_type:
         :return:
         """
-        # Size ranges in % of link bandwidth
-        mice_size_step = 0.001
-        mice_size_range = [0.002, 0.01+mice_size_step]
-        elephant_size_step = 0.05
-        elephant_size_range = [0.1, 0.6+elephant_size_step]
-
-        # Size ranges in bits per second
-        mice_size_range_bps = map(lambda x: int(x*self.linkBandwidth), mice_size_range)
-        elephant_size_range_bps = map(lambda x: int(x*self.linkBandwidth), elephant_size_range)
-
         if flow_type == 'e':
-            return random.choice(range(elephant_size_range_bps[0], elephant_size_range_bps[1], int(self.linkBandwidth*elephant_size_step)))
+            return random.randrange(ELEPHANT_SIZE_RANGE[0], ELEPHANT_SIZE_RANGE[1] + ELEPHANT_SIZE_STEP, ELEPHANT_SIZE_STEP)
         elif flow_type == 'm':
-            return random.choice(range(mice_size_range_bps[0], mice_size_range_bps[1], int(self.linkBandwidth * mice_size_step)))
+            return random.randrange(MICE_SIZE_RANGE[0], MICE_SIZE_RANGE[1]+MICE_SIZE_STEP, MICE_SIZE_STEP)
         else:
             raise ValueError("Unknown flow type: {0}".format(flow_type))
 
@@ -218,8 +201,8 @@ class TrafficGenerator(Base):
             flow = Flow(src=srcIp, dst=dstIp, sport=sport, dport=dport, size=flow_tmp['size'],
                         start_time=flow_tmp['startTime'], duration=flow_tmp['duration'])
 
-            # Append it to the list
-            flowlist.append(flow)
+            # Append it to the list -- must be converted to dictionary to be serializable
+            flowlist.append(flow.toDICT())
 
         # Return flowlist
         return flowlist
@@ -281,6 +264,73 @@ class TrafficGenerator(Base):
 
         return flowlist
 
+    def parse_communication_parties(self, senders, receivers):
+        """
+        Given lists of possible senders and receivers, returns the lists
+        of sender and receiver hosts.
+
+        Senders and receivers are two lists of strings specifying pods,
+        edge routers or hosts, indistinctively.
+
+        :param senders: []-> {pod_X | r_X_eY | h_X_Y}
+        :param receivers: []-> {pod_X | r_X_eY | h_X_Y}
+        :return: Two lists: (sender_hosts, receiver_hosts)
+        """
+        if senders != ['all']:
+            # Get all hosts behind pod, edge router or hostname
+            host_senders_lists = []
+            for sender in senders:
+                # Pod specified
+                if 'pod' in sender:
+                    host_senders_lists.append(self.topology.getHostsBehindPod(sender))
+
+                # Router edge was specified
+                elif 'r_' in sender and self.topology.isEdgeRouter(sender):
+                    host_senders_lists.append(self.topology.getHostsBehindRouter(sender))
+
+                # Host was directly specified
+                elif 'h_' in sender:
+                    host_senders_lists.append([sender])
+
+                # Raise error
+                else:
+                    raise ValueError("Communicatoin pattern was wrongly specified. Error due to: {0}".format(sender))
+
+            # Convert it to list of unique senders
+            host_senders = list({host for host_list in host_senders_lists for host in host_list})
+
+        else:
+            # Get all of them
+            host_senders = self.topology.getHosts().keys()
+
+        if receivers != ['all']:
+            # Get all hosts behind pod, edge router or hostname
+            host_receivers_lists = []
+            for receiver in receivers:
+                # Pod specified
+                if 'pod' in receiver:
+                    host_receivers_lists.append(self.topology.getHostsBehindPod(receiver))
+
+                # Router edge was specified
+                elif 'r_' in receiver and self.topology.isEdgeRouter(receiver):
+                    host_receivers_lists.append(self.topology.getHostsBehindRouter(receiver))
+
+                # Host was directly specified
+                elif 'h_' in receiver:
+                    host_receivers_lists.append([receiver])
+
+                # Raise error
+                else:
+                    raise ValueError("Communicatoin pattern was wrongly specified. Error due to: {0}".format(receiver))
+
+            # Convert it to list of unique receivers
+            host_receivers = list({host for host_list in host_receivers_lists for host in host_list})
+        else:
+            # Get all of them
+            host_receivers = self.topology.getHosts().keys()
+
+        return (host_senders, host_receivers)
+
     def trafficPlanner(self, senders=['pod_0'], receivers=['pod_3'], flowRate=0.25, totalTime=500):
         """
         Generates a traffic plan for specified senders and receivers, with
@@ -294,29 +344,12 @@ class TrafficGenerator(Base):
         """
 
         # Parse communication parties
-        if senders != ['all']:
-            # Get all hosts behind pod or edge router
-            host_senders_lists = [self.topology.getHostsBehindPod(sender) if 'pod' in sender else self.topology.getHostsBehindRouter(sender) for sender in senders]
-            host_senders = list({host for host_list in host_senders_lists for host in host_list})
-
-        else:
-            # Get all of them
-            host_senders = self.topology.getHosts().keys()
-
-        if receivers != ['all']:
-            # Get all hosts behind pod or edge router
-            host_receivers_lists = [self.topology.getHostsBehindPod(receiver) if 'pod' in receiver else self.topology.getHostsBehindRouter(receiver) for receiver in receivers]
-            host_receivers = list({host for host_list in host_receivers_lists for host in host_list})
-
-        else:
-            # Get all of them
-            host_receivers = self.topology.getHosts().keys()
+        host_senders, host_receivers = self.parse_communication_parties(senders, receivers)
 
         # Holds {}: host -> flowlist
         traffic_per_host = {}
 
         for sender in host_senders:
-
             # Generate flowlist
             flowlist = self.plan_flows(sender, host_receivers, flowRate, totalTime)
 
@@ -330,7 +363,8 @@ class TrafficGenerator(Base):
 
         try:
             # Reset controller
-            self.ControllerClient.send(json.dumps({"type":"reset"}),"")
+            #self.ControllerClient.send(json.dumps({"type":"reset"}),"")
+            pass
         except:
             # log.debug("Controller is not connected/present")
             pass
@@ -344,15 +378,16 @@ class TrafficGenerator(Base):
         # Schedule all the flows
         try:
             for sender, flowlist in traffic_per_host.iteritems():
+
                 # Sends flowlist to the sender's server
                 self.unixClient.send(json.dumps({"type": "flowlist", "data": flowlist}), sender)
 
                 # Send traffic starting time
                 self.unixClient.send(json.dumps({"type": "starttime", "data": traffic_start_time}), sender)
-        except:
 
-            # reset to the controller
-            self.ControllerClient.send(json.dumps({"type": "reset"}), "")
+        except Exception as e:
+            #log.info("Host {0} could not be informed about flowlist/starttime".format(sender))
+            raise Exception("Host {0} could not be informed about flowlist/starttime.\n\tException: {1}".format(sender, e))
 
     def terminateTraffic(self):
         """
@@ -362,8 +397,9 @@ class TrafficGenerator(Base):
         try:
             for host in self.topology.networkGraph.getHosts():
                 self.unixClient.send(json.dumps({"type": "terminate"}), host)
+
         except:
-            #log.info("FlowServer of {0} did not receive terminate command".format(host))
+            log.debug("FlowServer of {0} did not receive terminate command".format(host))
             pass
         try:
             # Send reset to the controller
@@ -371,7 +407,6 @@ class TrafficGenerator(Base):
         except:
             # log.debug("Controller is not connected/present")
             pass
-
 
 
 if __name__ == "__main__":
