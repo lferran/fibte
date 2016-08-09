@@ -11,6 +11,8 @@ except:
 
 import json
 
+from fibte.logger import log
+
 from fibte.misc.unixSockets import UnixClient, UnixClientTCP
 from fibte import CFG, LINK_BANDWIDTH, MICE_SIZE_RANGE, ELEPHANT_SIZE_RANGE, MICE_SIZE_STEP, ELEPHANT_SIZE_STEP
 
@@ -398,14 +400,14 @@ class TrafficGenerator(Base):
             for host in self.topology.networkGraph.getHosts():
                 self.unixClient.send(json.dumps({"type": "terminate"}), host)
 
-        except:
-            log.debug("FlowServer of {0} did not receive terminate command".format(host))
+        except Exception as e:
+            log.debug("FlowServer of {0} did not receive terminate command. Exception: {1}".format(host, e))
             pass
         try:
             # Send reset to the controller
             self.ControllerClient.send(json.dumps({"type": "reset"}), "")
-        except:
-            # log.debug("Controller is not connected/present")
+        except Exception as e:
+            log.debug("Controller is not connected/present. Exception: {0}".format(e))
             pass
 
 
@@ -449,7 +451,7 @@ if __name__ == "__main__":
 
     parser.add_argument('--save_traffic',
                            help='saves traffic in a file so it can be repeated',
-                           default="")
+                           action="store_true")
 
     parser.add_argument('--load_traffic',
                            help='load traffic from a file so it can be repeated',
@@ -482,6 +484,12 @@ if __name__ == "__main__":
 
         # If it must be saved
         if args.save_traffic:
+            filename = "{0}_to_{1}_m{2}e{3}_fr{4}_t{5}.traffic".format(','.join(senders),
+                                                               ','.join(receivers),
+                                                               str(args.mice).replace('.', ''),
+                                                               str(args.elephant).replace('.', ''),
+                                                               str(args.flow_rate).replace('.', ''),
+                                                               args.time)
             with open(args.save_traffic,"w") as f:
                 pickle.dump(traffic,f)
 
