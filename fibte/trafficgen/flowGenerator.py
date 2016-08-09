@@ -9,6 +9,8 @@ minSizeUDP = 42
 maxUDPSize = 65000
 import math
 
+from fibte import ELEPHANT_THRESHOLD
+
 from fibte.misc.unixSockets import UnixClient
 import threading
 import json
@@ -30,7 +32,6 @@ def setSizeToInt(size):
     except:
         return 0
 
-
 def sendMax(dst,dport):
 
     while True:
@@ -42,7 +43,6 @@ def sendRate_old(s,dst,dport,bytesPerSec):
         bytesPerSec -= (s.sendto("A"*min(maxUDPSize,bytesPerSec-minSizeUDP),(dst,dport)) + minSizeUDP)
     #print  time.time()-now
     time.sleep(max(0,1-(time.time()-now)))
-
 
 def sendRate(s,dst,dport,bytesPerSec,length=None):
     if length:
@@ -58,7 +58,6 @@ def sendRate(s,dst,dport,bytesPerSec,length=None):
         time.sleep(max(0,next_send_time - time.time()))
     print time.time()-start
     time.sleep(max(0,1-(time.time()-start)))
-
 
 def sendRate_batch(s,dst,dport,bytesPerSec,length=None,packets_round=1):
     if length:
@@ -94,7 +93,6 @@ def sendFlow(dst="10.0.32.2",sport=5000,size='10M',dport=5001,duration=10,**kwar
         sendRate_batch(s,dst,dport,rate,length=10000, packets_round=5)
         #sendRate_old(s, dst, dport, rate)
 
-
 def sendRound(socket,dst,rate,dport,offset):
 
     while rate > 0 and dport < 65535:
@@ -111,7 +109,6 @@ def sendRound(socket,dst,rate,dport,offset):
         dport +=1
 
     return dport, dst.index(destination)+1
-
 
 def keepSending(initialDestinations,rate,totalTime):
 
@@ -132,28 +129,29 @@ def keepSending(initialDestinations,rate,totalTime):
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             dport = 6005
 
-
 def sendFlowNotifyController(**flow):
-
     # Store time so we sleep 1 seconds - time needed for the following commands
     now  = time.time()
+
+    # Start controller client
     client = UnixClient("/tmp/controllerServer")
+
     # Tell controller that flow will start
-    if flow["duration"] >= 20:
-        #notify controller that a flow will start
+    if flow["size"] >= ELEPHANT_THRESHOLD:
+        # Notify controller that an elephant flow started
         client.send(json.dumps({"type":"startingFlow","flow":flow}),"")
 
-        # #start a traceroute for this flow in a different thread
-        # p = threading.Thread(target=tracerouteThread,kwargs=(flow))
-        # p.setDaemon(True)
-        # p.start()
+    # Sleep 1 second before the flow actually starts
+    #time.sleep(max(0, 1 - (time.time() - now)))
 
-    time.sleep(max(0, 1 - (time.time() - now)))
-    #start flow
+    # Start flow
     sendFlow(**flow)
 
-    if flow["duration"] >= 20:
+    if flow["size"] >= ELEPHANT_THRESHOLD:
+        # Notify controller that elephant flow finished
         client.send(json.dumps({"type":"stoppingFlow","flow":flow}),"")
+
+    # Close the socket
     client.sock.close()
 
 if __name__ == "__main__":
