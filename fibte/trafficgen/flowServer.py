@@ -2,17 +2,20 @@
 
 import flowGenerator
 from fibte.misc.unixSockets import UnixServerTCP
+import multiprocessing
 from multiprocessing import Process
 import json
 import signal
 import sched
 import time
 import sys
+
 import logging
 from fibte.logger import log
 from threading import Thread
 import Queue
 
+from fibte.trafficgen.flowGenerator import isElephant
 
 import select
 def my_sleep(seconds):
@@ -83,11 +86,10 @@ class FlowServer(object):
         self.scheduler = sched.scheduler(time.time, my_sleep)
 
         # Start the Scheduler Thread
-        self.scheduler_process = Thread(target=self.scheduler.run)
-        self.scheduler_process.daemon = True
+        self.scheduler_process = Process(target=self.scheduler.run)
+        self.scheduler_process.daemon = False
 
-
-    def signal_term_handler(self,signal,frame):
+    def signal_term_handler(self, signal, frame):
         # Only parent will do this
         if os.getpid() == self.parentPid:
             #self.queue.put(None)
@@ -96,11 +98,11 @@ class FlowServer(object):
         else:
             sys.exit(0)
 
-    #TODO this should be a thread. When reading self.processes we should use a lock.
-    def terminateALL(self):
-        #log.debug(str(len(self.processes)))
-        # for process in self.processes
 
+    def terminateALL(self):
+        """TODO: this should be a thread. When reading self.processes we
+        should use a lock.
+        """
         for process in self.processes:
             if process.is_alive():
                 try:
@@ -108,7 +110,6 @@ class FlowServer(object):
                     process.join()
                 except OSError:
                     pass
-
         self.processes = []
 
     def setStartTime(self, starttime):
@@ -129,6 +130,14 @@ class FlowServer(object):
         self.queue.put(process)
         log.debug("New flow started: {0}".format(str(flow)))
 
+    def stopFlow(self, flow):
+        process = Process(target = flowGenerator.stopFlowNotifyController, kwargs = (flow))
+        process.daemon = True
+        process.start()
+        self.processes.append(process)
+        self.queue.put(process)
+        log.debug("Flow finished: {0}".format(str(flow)))
+        
     def terminateTraffic(self):
         # Terminate all flow start processes
         self.terminateALL()
@@ -168,55 +177,72 @@ class FlowServer(object):
                     # Receive event from Socket server and convert it to a dict (--blocking)
                     event = json.loads(self.q_server.get())
                     self.q_server.task_done()
-
+                    
                     # Log a bit
-                    log.debug("server: {0}, event: {1}".format(self.address, str(event['type'])))
+                    #log.debug("server: {0}, event: {1}".format(self.address, str(event['type'])))
 
                     if event["type"] == "starttime":
                         self.setStartTime(event["data"])
                         self.received_starttime = True
                         log.debug("Event starttime arrived")
-
+                            
                     elif event["type"] == "flowlist":
                         self.flowlist = event["data"]
                         self.received_flowlist = True
                         log.debug("Event flowlist arrived")
 
-                log.debug("flowlist and starttime events received")
+                log.debug("Flowlist and starttime events received")
+                log.debug("Scheduling flows... ")
                 if self.received_flowlist and self.received_starttime:
                     for flow in self.flowlist:
                         delta = self.starttime - time.time()
+                        log.debug("Delta time observed: {0}".format(delta))
                         if delta < 0:
                             log.error("We neet do wait a bit more in the TrafficGenerator!! Delta is negative!")
 
                         # Schedule the flow start
+                        log.debug("\t {0}".format(flow))
                         self.scheduler.enterabs(self.starttime + flow["start_time"], 1, self.startFlow, [flow])
+                        
+                        # Schedule the flow finish notification (only if it is an elephant flow)
+                        if isElephant(flow):
+                            self.scheduler.enterabs(self.starttime + flow["start_time"] + flow["duration"], 1, self.stopFlow, [flow])
 
+                    log.debug("All flows were scheduled! Let's run the scheduler (in a different thread)")
                     # Run scheduler in another thread
                     self.scheduler_process.start()
 
-
             # Simulation ongoing -- only terminate event allowed
             else:
+                
                 # While traffic stil ongoing
                 while self.scheduler_process.is_alive():
-
+                    #log.debug("Scheduler process is still alive -- Traffic ongoing")
                     # Check if new event in the queue
+                    #import ipdb; ipdb.set_trace()
                     try:
-                        data = self.q_server.get(timeout=3)
+                        data = self.q_server.get(timeout=3)#block=False)
                     except Queue.Empty:
-                        self.q_server.task_done()
+                        #log.debug("Timeout occurred reading from server event queue")
+                        pass
                     else:
-                        event = json.loads(data)
+                        #log.debug("Timeout didn't occur: loading json object...")
                         self.q_server.task_done()
+                        event = json.loads(data)
 
                         if event["type"] == "terminate":
                             # Stop traffic during ongoing traffic
+                            log.debug("Terminate event received from trafficGenerator - terminating...")
                             self.terminateTraffic()
 
+                    # Sleep a bit
+                    #time.sleep(1)
+                    
                 # Stop traffic
+                log.debug("Traffic finished - terminating...")
                 self.terminateTraffic()
 
+                
 if __name__ == "__main__":
     import os
     # Name of the flowServer is passed when called
