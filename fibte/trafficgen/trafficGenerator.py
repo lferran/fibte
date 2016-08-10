@@ -12,7 +12,7 @@ except:
 import json
 
 from fibte.logger import log
-
+from fibte.trafficgen.flowGenerator import isElephant
 from fibte.misc.unixSockets import UnixClient, UnixClientTCP
 from fibte import CFG, LINK_BANDWIDTH, MICE_SIZE_RANGE, ELEPHANT_SIZE_RANGE, MICE_SIZE_STEP, ELEPHANT_SIZE_STEP
 
@@ -119,7 +119,7 @@ class TrafficGenerator(Base):
 
         # Flow duration ranges
         min_len_elephant = 20
-        max_len_elephant = 500
+        max_len_elephant = 50#500
         min_len_mice = 2
         max_len_mice = 10
 
@@ -209,14 +209,92 @@ class TrafficGenerator(Base):
         # Return flowlist
         return flowlist
 
-    def plan_flows(self, sender, receivers, flowRate, totalTime):
+    def _get_count(self, active_flows):
         """
-        Given a sender and a list of possible receivers, together with the
-        total simulation time, this function generates random flows from
-        sender to the receiver.
+        Count the number of mice and elephant flows
+        """
+        n_mice = sum([1 for flow in active_flows.values() if not isElephant(flow)])
+        return (n_mice, len(active_flows) - n_mice)
 
-        The number of flows that sender generates and their starting time
+    def _get_ratios(self, active_flows):
+        """
+        Given the current list of active flows, returns the percentages of mice and elephants
+
+        :param active_flows: []: [{'type': 'mice', 'src': ...}, {flow2}]
+        returns: tuple of ratio: (mice_rate, eleph_rate)
+        """
+        total_flows = len(active_flows)
+        # Avoid zero division error
+        if total_flows == 0:
+            return (0, 0)
+
+        else:
+            # Get current mice&eleph count
+            (n_mice, n_elephant) = self._get_count(active_flows)
+
+            # Return ratios
+            return map(lambda x: x/float(total_flows), (n_mice, n_elephant))
+
+    def _get_active_flows(self, all_flows, period):
+        """
+        Returns a dict of the current flows in a certain traffic simulation period
+
+        :param flows_per_sender: dict of all flows keyed by flow_id
+        :param period: current time period
+        :return: dict of active flows in the current time step keyed by flow_id
+        """
+        # Filter out the ones that haven't been visited yet
+        visited_flows = {f_id: flow for f_id, flow in all_flows.iteritems() if flow.get("dstHost") != None}
+
+        # Filter out the ones that finished before the start of the current period
+        active_flows = {f_id: flow for f_id, flow in visited_flows.iteritems() if flow.get('startTime') + flow.get('duration') > period}
+
+        # Return the active flows for the period
+        return active_flows
+
+    def _get_starting_flows(self, all_flows, period):
+        """
+        Returns a dictionary of all the flows that are starting in the current time period.
+        Dictionary is keyed by flow id
+        """
+
+        # Filter out the visited ones
+        non_visited_flows = {f_id: flow for f_id, flow in all_flows.iteritems() if flow.get("type") == None}
+
+        # Filter out the ones that do not start in the period
+        starting_flows = {f_id: flow for f_id, flow in non_visited_flows.iteritems()
+                          if flow.get('startTime') >= period and flow.get('startTime') < period + self.time_step}
+
+        return starting_flows
+
+    def _get_best_mice_number(self, xm, n, x):
+        results = []
+        xe = x - xm
+        for i in range(0, n+1):
+            nm = i
+            ne = n - nm
+            new_pMice = ((xm + nm)/(float(x+n)))
+            new_pElephant = ((xe + ne) / (float(x + n)))
+            dm = abs(self.pMice - new_pMice)
+            de = abs(self.pElephant - new_pElephant)
+            sumde = dm + de
+            results.append((i, sumde))
+
+        optimal_mice = min(results, key=lambda x: x[1])
+
+        return optimal_mice[0]
+
+    def plan_flows(self, senders, receivers, flowRate, totalTime, timeStep):
+        """
+        Given a sender list and a list of possible receivers, together with the
+        total simulation time, this function generates random flows from each
+        sender to the possible receivers.
+
+        The number of flows that each sender generates and their starting time
         is given by a Poisson arrival process with a certain average.
+
+        The objective is that, at any point in the simulation time, a certain
+        fraction of flows are elephant and the rest are mice.
 
         For each flow:
           - A receiver is chosen uniformly at random among the receivers list
@@ -228,43 +306,112 @@ class TrafficGenerator(Base):
 
           - Size is chosen from a normal distribution relative to the total link capacity
 
-        :param sender: sending host
+        :param sender: sending hosts list
         :param receivers: list of possible receiver hosts
         :param totalTime: total simulation time
 
-        :return: flowlist of ordered flows for a certain host
+        :return: dictionary keyed by sender associated with the flowlist
+                 of ordered flows for each sender
         """
 
-        # List of flows planned for the sender
-        flowlist = []
+        # The resulting traffic is stored here
+        flows_per_sender = {}
 
-        # Generate flow starting times
-        flow_times = self.get_poisson_times(average=flowRate, totalTime=totalTime)
+        # We first obtain the flow start times for each host
+        flows_per_sender_tmp = {sender: self.get_poisson_times(flowRate, totalTime) for sender in senders}
 
-        # Iterate each flow
-        for flow_time in flow_times:
-            # Is flow mice or elephant?
-            flow_type = self.get_flow_type()
+        # Initial flow id
+        next_id = 0
 
-            # Get flow duration
-            flow_duration = self.get_flow_duration(flow_type)
+        # Convert start times list into dict
+        for sender, time_list in flows_per_sender_tmp.iteritems():
+            # Convert it in a list of dicts with unique id for each flow
+            list_of_dicts = [{'startTime': starttime, 'id': next_id+index, 'srcHost': sender, 'type': None} for index, starttime in enumerate(time_list)]
+            next_id += len(time_list)
+            flows_per_sender[sender] = list_of_dicts
 
-            # Get flow size
-            flow_size = self.get_flow_size(flow_type)
+        # Create dict indexed by flow id {}: id -> flow
+        all_flows = {flow['id']: flow for sender, flowlist in flows_per_sender.iteritems() for flow in flowlist}
 
-            # Choose receiver
-            receiver = self.get_flow_destination(receivers)
+        # Iterate simulation time trying to keep the desired elephant and mice ratios
+        if timeStep == 0:
+            self.time_step = totalTime/10
+        else:
+            self.time_step = timeStep
 
-            # Create temporal flow
-            flow_tmp = {'srcHost':sender, 'dstHost':receiver, 'size':flow_size, 'startTime':flow_time, 'duration':flow_duration, 'sport': -1, 'dport': -1}
+        for period in range(0, totalTime, self.time_step):
 
-            # Append it to the list
-            flowlist.append(flow_tmp)
+            # Get active flows in current period
+            active_flows = self._get_active_flows(all_flows, period)
 
-        # Re-write correct source and destination ports
-        flowlist = self.choose_correct_ports(flowlist)
+            # Get next starting flows
+            starting_flows = self._get_starting_flows(all_flows, period)
 
-        return flowlist
+            # If not enough active flows yet - choose e/m with weighted prob.
+            if len(active_flows) < 10:
+                # Flow ids of the flows that will be mice
+                starting_flows_mice = []
+
+                # Randomly draw if elephant or mice for each new active_flow
+                for f_id, flow in starting_flows.iteritems():
+                    # Draw the choice
+                    flow_type = self.weighted_choice(self.pMice, self.pElephant)
+                    if flow_type == 'm': starting_flows_mice.append(f_id)
+
+            # Calculate how many should be mice to keep good ratio otherwise
+            else:
+                # Get current counts
+                (current_nMice, current_nElephant) = self._get_count(active_flows)
+
+                # Compute what's the best allocation
+                n_mice = self._get_best_mice_number(xm=current_nMice, n=len(starting_flows), x=len(active_flows))
+
+                # Choose randomly which flow ids will be mice
+                msflows = starting_flows.keys()
+                random.shuffle(msflows)
+                starting_flows_mice = msflows[:n_mice]
+
+            # Update starting flows data
+            for f_id, flow in starting_flows.iteritems():
+                # Mice
+                if f_id in starting_flows_mice:
+                    flow_type = 'm'
+
+                # Elephant
+                else:
+                    flow_type = 'e'
+
+                # Get flow duration
+                flow_duration = self.get_flow_duration(flow_type)
+
+                # Get flow size
+                flow_size = self.get_flow_size(flow_type)
+
+                # Choose receiver
+                receiver = self.get_flow_destination(receivers)
+
+                # Update flow
+                all_flows[f_id] = {'srcHost': flow['srcHost'],
+                                   'dstHost': receiver,
+                                   'size': flow_size,
+                                   'startTime': flow['startTime'],
+                                   'duration': flow_duration,
+                                   'sport': -1, 'dport': -1}
+
+        # Update the flows_per_sender dict
+        new_flows_per_sender = {}
+        for sender, flowlist in flows_per_sender.iteritems():
+            new_flows_per_sender[sender] = []
+            for flow in flowlist:
+                new_flows_per_sender[sender].append(all_flows[flow['id']])
+
+        # Re-write correct source and destination ports per each sender
+        flows_per_sender = {}
+        for sender, flowlist in new_flows_per_sender.iteritems():
+            flowlist = self.choose_correct_ports(flowlist)
+            flows_per_sender[sender] = flowlist
+
+        return flows_per_sender
 
     def parse_communication_parties(self, senders, receivers):
         """
@@ -333,7 +480,7 @@ class TrafficGenerator(Base):
 
         return (host_senders, host_receivers)
 
-    def trafficPlanner(self, senders=['pod_0'], receivers=['pod_3'], flowRate=0.25, totalTime=500):
+    def trafficPlanner(self, senders=['pod_0'], receivers=['pod_3'], flowRate=0.25, totalTime=500, timeStep=0):
         """
         Generates a traffic plan for specified senders and receivers, with
         a given flow starting rate per each host for a specified simulation time
@@ -344,19 +491,11 @@ class TrafficGenerator(Base):
         :param totalTime: total simulation time
         :return: dictionary host -> flowlist
         """
-
         # Parse communication parties
         host_senders, host_receivers = self.parse_communication_parties(senders, receivers)
 
         # Holds {}: host -> flowlist
-        traffic_per_host = {}
-
-        for sender in host_senders:
-            # Generate flowlist
-            flowlist = self.plan_flows(sender, host_receivers, flowRate, totalTime)
-
-            # Save it
-            traffic_per_host[sender] = flowlist
+        traffic_per_host = self.plan_flows(host_senders, host_receivers, flowRate, totalTime, timeStep)
 
         # Return all generated traffic
         return traffic_per_host
@@ -438,15 +577,19 @@ if __name__ == "__main__":
                            type=float,
                            default=0.9)
 
+    parser.add_argument('-s', '--time_step',
+                           help="Granularity at which we inspect the generated traffic so that the rates are kept",
+                           type=int,
+                           default=0)
 
     parser.add_argument('--senders',
                            help='List of switch edges or pods that can send traffic',
-                           default="r_0_e0")
+                           default="all")
 
 
     parser.add_argument('--receivers',
                            help='List of switch edges or pods that can receive traffic',
-                           default="r_1_e0")
+                           default="all")
 
     parser.add_argument('--save_traffic',
                            help='saves traffic in a file so it can be repeated',
@@ -479,16 +622,17 @@ if __name__ == "__main__":
             traffic = tg.trafficPlanner(senders=senders,
                                         receivers=receivers,
                                         flowRate=args.flow_rate,
-                                        totalTime=args.time)
+                                        totalTime=args.time,
+                                        timeStep=args.time_step)
 
         # If it must be saved
         if args.save_traffic:
-            filename = "{0}_to_{1}_m{2}e{3}_fr{4}_t{5}.traffic".format(','.join(senders),
+            filename = "{0}_to_{1}_m{2}e{3}_fr{4}_t{5}_ts{6}.traffic".format(','.join(senders),
                                                                ','.join(receivers),
                                                                str(args.mice).replace('.', ''),
                                                                str(args.elephant).replace('.', ''),
                                                                str(args.flow_rate).replace('.', ''),
-                                                               args.time)
+                                                               args.time, args.time_step)
             with open(filename,"w") as f:
                 pickle.dump(traffic,f)
 

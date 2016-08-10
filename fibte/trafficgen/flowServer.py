@@ -128,7 +128,6 @@ class FlowServer(object):
         process.start()
         self.processes.append(process)
         self.queue.put(process)
-        log.debug("New flow started: {0}".format(str(flow)))
 
     def stopFlow(self, flow):
         process = Process(target = flowGenerator.stopFlowNotifyController, kwargs = (flow))
@@ -136,7 +135,6 @@ class FlowServer(object):
         process.start()
         self.processes.append(process)
         self.queue.put(process)
-        log.debug("Flow finished: {0}".format(str(flow)))
         
     def terminateTraffic(self):
         # Terminate all flow start processes
@@ -193,22 +191,28 @@ class FlowServer(object):
 
                 log.debug("Flowlist and starttime events received")
                 log.debug("Scheduling flows... ")
+                log.debug("DELTA time observed: {0}".format(self.starttime - time.time()))
+                schedule_time = time.time()
+                flow_count = {'elephant': 0, 'mice': 0}
                 if self.received_flowlist and self.received_starttime:
                     for flow in self.flowlist:
                         delta = self.starttime - time.time()
-                        log.debug("Delta time observed: {0}".format(delta))
                         if delta < 0:
                             log.error("We neet do wait a bit more in the TrafficGenerator!! Delta is negative!")
 
                         # Schedule the flow start
-                        log.debug("\t {0}".format(flow))
                         self.scheduler.enterabs(self.starttime + flow["start_time"], 1, self.startFlow, [flow])
                         
                         # Schedule the flow finish notification (only if it is an elephant flow)
                         if isElephant(flow):
+                            flow_count['elephant'] += 1
+                            log.debug("ELEPHANT flow to {0} with {1} (bps) will start in {2} and last for {3}".format(flow['dst'], flow['size'], flow['start_time'], flow["duration"]))
                             self.scheduler.enterabs(self.starttime + flow["start_time"] + flow["duration"], 1, self.stopFlow, [flow])
-
+                        else:
+                            flow_count['mice'] += 1
+                            
                     log.debug("All flows were scheduled! Let's run the scheduler (in a different thread)")
+                    log.debug("A total of {0} flows will be started at host. {1} MICE | {2} ELEPHANT".format(sum(flow_count.values()), flow_count['mice'], flow_count['elephant']))
                     # Run scheduler in another thread
                     self.scheduler_process.start()
 
@@ -217,9 +221,8 @@ class FlowServer(object):
                 
                 # While traffic stil ongoing
                 while self.scheduler_process.is_alive():
-                    #log.debug("Scheduler process is still alive -- Traffic ongoing")
+                    log.debug("Scheduler process is still alive -- Traffic ongoing")
                     # Check if new event in the queue
-                    #import ipdb; ipdb.set_trace()
                     try:
                         data = self.q_server.get(timeout=3)#block=False)
                     except Queue.Empty:

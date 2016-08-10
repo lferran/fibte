@@ -2,6 +2,7 @@ import time
 import socket
 import argparse
 import sys
+
 #thats what I get checking wireshark and the ovs switches
 #in theory it should be 54
 minSizeUDP = 42
@@ -9,11 +10,14 @@ minSizeUDP = 42
 maxUDPSize = 65000
 import math
 
-from fibte import ELEPHANT_THRESHOLD
+from fibte import ELEPHANT_SIZE_RANGE
 
 from fibte.misc.unixSockets import UnixClient
-import threading
+
 import json
+
+import logging
+from fibte.logger import log
 
 def setSizeToInt(size):
     """" Converts the sizes string notation to the corresponding integer
@@ -129,6 +133,9 @@ def keepSending(initialDestinations,rate,totalTime):
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             dport = 6005
 
+def isElephant(flow):
+    return flow['size'] >= ELEPHANT_SIZE_RANGE[0]
+            
 def sendFlowNotifyController(**flow):
     # Store time so we sleep 1 seconds - time needed for the following commands
     now  = time.time()
@@ -137,22 +144,34 @@ def sendFlowNotifyController(**flow):
     client = UnixClient("/tmp/controllerServer")
 
     # Tell controller that flow will start
-    if flow["size"] >= ELEPHANT_THRESHOLD:
-        # Notify controller that an elephant flow started
-        client.send(json.dumps({"type":"startingFlow","flow":flow}),"")
+    if isElephant(flow):
+        try:
+            log.debug("New ELEPHANT is STARTING: to {0} {1}(bps) during {2}".format(flow['dst'], flow['size'], flow['duration']))
+            # Notify controller that an elephant flow started
+            client.send(json.dumps({"type": "startingFlow", "flow": flow}), "")
+        except socket.error, v:
+            log.error("[Connectoin refused] Controller cound not be informed.")
+    # Close the socket
+    client.sock.close()
 
     # Sleep 1 second before the flow actually starts
     #time.sleep(max(0, 1 - (time.time() - now)))
 
-    # Start flow
+    # Start sending flow
     sendFlow(**flow)
 
-    if flow["size"] >= ELEPHANT_THRESHOLD:
-        # Notify controller that elephant flow finished
-        client.send(json.dumps({"type":"stoppingFlow","flow":flow}),"")
+    
+def stopFlowNotifyController(**flow):
+    # Open socket with controller
+    client = UnixClient("/tmp/controllerServer")
 
-    # Close the socket
-    client.sock.close()
+    log.debug("New ELEPHANT is STOPPING: to {0} {1}(bps) during {2}".format(flow['dst'], flow['size'], flow['duration']))
+    
+    # Notify controller that elephant flow finished
+    client.send(json.dumps({"type": "stoppingFlow", "flow": flow}), "")
+
+    # Close socket
+    client.close()    
 
 if __name__ == "__main__":
 
