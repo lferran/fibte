@@ -52,16 +52,25 @@ class IfDescr(object):
         return ifindex
 
     def loadMapping(self):
+        """
+        Iterates the interface names and collects their indexes. Results
+        are stored in self.ifIndexMapping dict: {}: iface_name -> iface_index
+        """
         for interface in self.getInterfaceNames():
             self.ifindexMapping[interface] = self.getIfIndex(interface)
 
     def getIfMapping(self):
+        """
+        Return the mappings dictionary
+        """
         return self.ifindexMapping
 
     def saveIfMapping(self,path):
+        """
+        Saves the mappings in a file specified by path
+        """
         with open(path,"w") as f:
-            json.dump(self.ifindexMapping,f)
-
+            json.dump(self.ifindexMapping, f)
 
 
 class CountersDev(object):
@@ -93,7 +102,7 @@ class CountersDev(object):
 
     def getCounters(self):
 
-        # Read the counter file first
+        # Read the counter file first (from the OS)
         values = self.readFile()
 
         # Update timestamps
@@ -109,8 +118,8 @@ class CountersDev(object):
                     counters["in"][interface[0][:-1]] = float(interface[1])
                     counters["out"][interface[0][:-1]] = float(interface[9])
 
-            self.countersDiff = {"in": {x:counters["in"][x] - self.counters["in"][x] for x in counters["in"] if x in self.counters["in"]},
-                                 "out": {x:counters["out"][x] - self.counters["out"][x] for x in counters["out"] if x in self.counters["out"]}}
+            self.countersDiff = {"in": {x: counters["in"][x] - self.counters["in"][x] for x in counters["in"] if x in self.counters["in"]},
+                                 "out": {x: counters["out"][x] - self.counters["out"][x] for x in counters["out"] if x in self.counters["out"]}}
             self.totalBytes["in"] = sum(self.countersDiff["in"].values())
             self.totalBytes["out"] = sum(self.countersDiff["out"].values())
 
@@ -120,7 +129,7 @@ class CountersDev(object):
                 if interface[0][:-1] in self.interfaces:
                     counters["out"][interface[0][:-1]] = float(interface[9])
 
-            self.countersDiff = {"out": {x:counters["out"][x] - self.counters["out"][x] for x in counters["out"] if x in self.counters["out"]}}
+            self.countersDiff = {"out": {x: counters["out"][x] - self.counters["out"][x] for x in counters["out"] if x in self.counters["out"]}}
             self.totalBytes["out"] = sum(self.countersDiff["out"].values())
 
         # Update counters
