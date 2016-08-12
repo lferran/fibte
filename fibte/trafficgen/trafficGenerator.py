@@ -46,10 +46,12 @@ class TrafficGenerator(Base):
         self.pElephant = pElephant
 
         self.topology = TopologyGraph(getIfindexes=False,
-                                      snmp=False,
                                       interfaceToRouterName=False,
                                       db=os.path.join(tmp_files,db_topo))
 
+        #TESTTTTTTT
+        import ipdb; ipdb.set_trace()
+        
         self.linkBandwidth = LINK_BANDWIDTH
 
         # Used to communicate with flowServers at the hosts.
