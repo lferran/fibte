@@ -4,11 +4,15 @@ from fibbingnode.algorithms.southbound_interface import SouthboundManager
 from fibbingnode import CFG as CFG_fib
 from fibte.misc.unixSockets import UnixServer
 import threading
+import subprocess
 import os
+import time
 import argparse
 import json
-import logging
-from fibte.logger import log
+
+from fibte.misc.topologyGraph import TopologyGraph
+
+from fibte.monitoring.getLoads import GetLoads
 
 from fibte import tmp_files, db_topo, LINK_BANDWIDTH, CFG
 
@@ -18,6 +22,13 @@ HAS_INITIAL_GRAPH = threading.Event()
 
 UDS_server_name = CFG.get("DEFAULT","controller_UDS_name")
 C1_cfg = CFG.get("DEFAULT", "C1_cfg")
+
+import inspect
+import fibte.monitoring.getLoads
+getLoads_path = inspect.getsourcefile(fibte.monitoring.getLoads)
+
+import logging
+from fibte.logger import log
 
 class MyGraphProvider(SouthboundManager):
     """This class overrwides the received_initial_graph abstract method of
@@ -33,10 +44,30 @@ class MyGraphProvider(SouthboundManager):
         HAS_INITIAL_GRAPH.set()
 
 class LBController(object):
-    def __init__(self, doBalance = True):
+    def __init__(self, doBalance = True, k=4):
+
+        # Config logging to dedicated file for this thread
+        handler = logging.FileHandler(filename='{0}loadbalancer.log'.format(tmp_files))
+        fmt = logging.Formatter('[%(levelname)20s] %(asctime)s %(funcName)s: %(message)s ')
+
+        handler.setFormatter(fmt)
+        log.addHandler(handler)
         log.setLevel(logging.DEBUG)
 
+        # Set fat-tree parameter
+        self.k = k
+
+        # Load the topology
+        self.topology = TopologyGraph(getIfindexes=True, db=os.path.join(tmp_files, db_topo))
+
+        # Either we load balance or not
         self.doBalance = doBalance
+
+        # Lock for accessing link loads
+        self.link_loads_lock = threading.Lock()
+
+        # Get dictionary where loads are stored
+        self.link_loads = self.topology.getEdgesUsageDictionary()
 
         # Unix domain server to make things faster and possibility to communicate with hosts
         self.server = UnixServer(os.path.join(tmp_files, UDS_server_name))
@@ -57,6 +88,14 @@ class LBController(object):
         # Receive network graph
         self.networw_graph = self.sbmanager.igp_graph
 
+        # Start getLoads thread that reads from counters
+        process = subprocess.call([getLoads_path, '-k', str(self.k)], shell=False)
+
+        # Start getLoads thread reads from link usage
+        thread = threading.Thread(target=self._getLoads, args=([1]))
+        thread.setDaemon(True)
+        thread.start()
+
     def reset(self):
         pass
 
@@ -73,8 +112,40 @@ class LBController(object):
         else:
             log.error("epali")
 
+    def _getLoads(self, t):
+        """
+        This function runs in a separate thread and periodically reads
+         updates the loads of the network links
+
+        :param t: period at which we update the LB link_loads
+        :return:
+        """
+        getLoads = GetLoads(k=self.k)
+        while True:
+            # Take time
+            now = time.time()
+
+            # Locking to update link_loads
+            with self.link_loads_lock:
+                getLoads.topology.routerUsageToLinksLoad(getLoads.readLoads(), self.link_loads)
+
+            # Sleep remaining interval time
+            time.sleep(max(0, t - (time.time() - now)))
+
+    def _getStats(self, t):
+        """
+        Function that periodically updates the statistics gathered
+        from the edge of the network.
+
+        :param t:
+        :return:
+        """
+        # TODO
+        pass
+
     def run(self):
         # Receive events and handle them
+        #import ipdb; ipdb.set_trace()
         while True:
             try:
                 if not(self.doBalance):
@@ -93,8 +164,8 @@ class LBController(object):
                 break
 
 if __name__ == '__main__':
-    #from lb.logger import log
-    #import logging
+    from fibte.logger import log
+    import logging
 
     parser = argparse.ArgumentParser()
     #group = parser.add_mutually_exclusive_group()
@@ -103,12 +174,15 @@ if __name__ == '__main__':
                         help='If set to False, ignores all events and just prints them',
                         action='store_true',
                         default = True)
+
+    parser.add_argument('-k', '--k', help='Fat-Tree parameter', type=int, default=4)
+
     args = parser.parse_args()
 
-    #log.setLevel(logging.DEBUG)
-    #log.info("Starting Controller")
+    log.setLevel(logging.DEBUG)
+    log.info("Starting Controller - k = {0} , doBalance = {1}".format(args.k, args.doBalance))
 
-    lb = LBController(doBalance = args.doBalance)
+    lb = LBController(doBalance = args.doBalance, k=args.k)
     lb.run()
 
     #import ipdb; ipdb.set_trace()
