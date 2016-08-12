@@ -25,6 +25,9 @@ MAX_PORT = 2**16 -1
 RangePorts = xrange(MIN_PORT,MAX_PORT)
 
 
+saved_traffic_folder = os.path.join(os.path.dirname(__file__), 'saved_traffic/')
+
+
 def read_pid(n):
     """
     Extract a pid from a file
@@ -49,9 +52,6 @@ class TrafficGenerator(Base):
                                       interfaceToRouterName=False,
                                       db=os.path.join(tmp_files,db_topo))
 
-        #TESTTTTTTT
-        import ipdb; ipdb.set_trace()
-        
         self.linkBandwidth = LINK_BANDWIDTH
 
         # Used to communicate with flowServers at the hosts.
@@ -513,7 +513,7 @@ class TrafficGenerator(Base):
             pass
 
         # Set sync. delay
-        SYNC_DELAY = 10
+        SYNC_DELAY = 5
 
         # Set traffic start time
         traffic_start_time = time.time() + SYNC_DELAY
@@ -629,7 +629,8 @@ if __name__ == "__main__":
 
         # If it must be saved
         if args.save_traffic:
-            filename = "{0}_to_{1}_m{2}e{3}_fr{4}_t{5}_ts{6}.traffic".format(','.join(senders),
+            filename = '{0}'.format(saved_traffic_folder)
+            filename += "{0}_to_{1}_m{2}e{3}_fr{4}_t{5}_ts{6}.traffic".format(','.join(senders),
                                                                ','.join(receivers),
                                                                str(args.mice).replace('.', ''),
                                                                str(args.elephant).replace('.', ''),
