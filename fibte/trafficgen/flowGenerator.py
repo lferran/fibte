@@ -154,9 +154,6 @@ def sendFlowNotifyController(**flow):
     # Close the socket
     client.sock.close()
 
-    # Sleep 1 second before the flow actually starts
-    #time.sleep(max(0, 1 - (time.time() - now)))
-
     # Start sending flow
     sendFlow(**flow)
 
