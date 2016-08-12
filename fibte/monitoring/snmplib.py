@@ -162,14 +162,20 @@ class SnmpCounters(object):
     # @profile
     def getCounters64Walk(self, out=True):
         if out:
+            # OID of the ifHCOutOctets
             oid = "1.3.6.1.2.1.31.1.1.1.10"
         else:
+            # OID of the ifHCInOctets
             oid = "1.3.6.1.2.1.31.1.1.1.6"
+
+        # Make the snmpwalk query
         values = subprocess.check_output("snmpwalk -v 2c -c public {0} {1}".format(self.routerIp, oid), shell=True)
 
+        # Parse output
         counters = {x.split(" = ")[0].strip(".")[-1]: float(x.split("Counter64:")[-1].strip()) for x in
                     values.strip().split("\n")}
-        # filter only the interfaces we want
+
+        # Filter only the interfaces we want
         counters = {x: y for x, y in counters.items() if x in self.interfaces}
 
         countersTimeStamp = time.time()
