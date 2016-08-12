@@ -4,17 +4,19 @@ from fibbingnode.algorithms.southbound_interface import SouthboundManager
 from fibbingnode import CFG as CFG_fib
 from fibte.misc.unixSockets import UnixServer
 import threading
-import subprocess
 import os
 import time
 import argparse
 import json
+import networkx as nx
 
 from fibte.misc.topologyGraph import TopologyGraph
 
 from fibte.monitoring.getLoads import GetLoads
 
 from fibte import tmp_files, db_topo, LINK_BANDWIDTH, CFG
+
+from fibte.misc.dc_graph import DCGraph
 
 # Threading event to signal that the initial topo graph
 # has been received from the Fibbing controller
@@ -57,17 +59,11 @@ class LBController(object):
         # Set fat-tree parameter
         self.k = k
 
-        # Load the topology
-        self.topology = TopologyGraph(getIfindexes=True, db=os.path.join(tmp_files, db_topo))
-
         # Either we load balance or not
         self.doBalance = doBalance
 
         # Lock for accessing link loads
         self.link_loads_lock = threading.Lock()
-
-        # Get dictionary where loads are stored
-        self.link_loads = self.topology.getEdgesUsageDictionary()
 
         # Unix domain server to make things faster and possibility to communicate with hosts
         self.server = UnixServer(os.path.join(tmp_files, UDS_server_name))
@@ -84,17 +80,188 @@ class LBController(object):
         # Blocks until initial graph received from SouthBound Manager
         HAS_INITIAL_GRAPH.wait()
         log.info("Initial graph received from SouthBound Controller")
-        
-        # Receive network graph
-        self.networw_graph = self.sbmanager.igp_graph
 
+        # Load the topology
+        self.topology = TopologyGraph(getIfindexes=True, db=os.path.join(tmp_files, db_topo))
+
+        # Get dictionary where loads are stored
+        self.link_loads = self.topology.getEdgesUsageDictionary()
+
+        # Receive network graph
+        self.network_graph = self.sbmanager.igp_graph
+
+        # Create my modified version of the graph
+        self.dc_graph = self._addDCInfoToGraph(self.network_graph.copy())
+
+        # Here we store the current dags for each destiantion
+        self.dags = {}
+
+        import ipdb; ipdb.set_trace()
         # Start getLoads thread that reads from counters
-        process = subprocess.call([getLoads_path, '-k', str(self.k)], shell=False)
+        os.system(getLoads_path + ' -k {0} &'.format(self.k))
 
         # Start getLoads thread reads from link usage
         thread = threading.Thread(target=self._getLoads, args=([1]))
         thread.setDaemon(True)
         thread.start()
+
+    def getRouterPod(self, router):
+        return self.dc_graph.node[router]['pod']
+
+    def getEdgeRouters(self, pod=-1):
+        if pod == -1:
+            return [router for router in self.dc_graph.routers if self.dc_graph.node[router].has_key('edge')]
+        else:
+            return [router for router in self.dc_graph.routers if self.dc_graph.node[router].has_key('edge') and self.dc_graph.node[router]['pod'] == pod]
+
+    def getAggregationRouters(self, pod=-1):
+        if pod == -1:
+            return [router for router in self.dc_graph.routers if self.dc_graph.node[router].has_key('aggregation')]
+        else:
+            return [router for router in self.dc_graph.routers if self.dc_graph.node[router].has_key('aggregation') and self.dc_graph.node[router]['pod'] == pod]
+
+    def getCoreRouters(self):
+        return [router for router in self.dc_graph.routers if self.dc_graph.node[router].has_key('core')]
+
+    def getConnectedCoreRouters(self, aggregationRouter):
+        return [r for r in self.getCoreRouters() if self.dc_graph[aggregationRouter].hay_key(r)]
+
+    def getConnectedAggregation(self, coreRouter, pod=-1):
+        """
+        Given a core router, returns the connected aggregatoin routers. If pod number is given, it returns
+        the corresponding aggregatoin router connected in that pod.
+        :param coreRouter:
+        :param pod:
+        :return:
+        """
+        if pod == -1:
+            return [r for r in self.dc_graph[coreRouter].keys() if
+                    self.dc_graph[coreRouter][r]['direction'] == 'downlink']
+        else:
+            return [r for r in self.dc_graph[coreRouter].keys() if
+                    self.dc_graph[coreRouter][r]['direction'] == 'downlink'
+                    and self.getRouterPod(r) == pod]
+
+    def getGatewayRouter(self, prefix):
+        """
+        Given a prefix, returns the connected edge router
+        :param prefix:
+        :return:
+        """
+        if self.dc_graph.is_prefix(prefix):
+            edgeRouters = self.getEdgeRouters()
+            return [edgeRouter for edgeRouter in edgeRouters if self.dc_graph[edgeRouter].has_key(prefix)][0]
+        else:
+            raise ValueError
+
+    def getConnectedPrefixes(self, edgeRouter):
+        """
+        Given an edge router, returns the connected prefixes
+        :param edgeRouter:
+        :return:
+        """
+        if self.dc_graph.node[edgeRouter].has_key('edge'):
+            return [r for r in self.dc_graph[edgeRouter].keys() if self.dc_graph.is_prefix(r)]
+        else:
+            raise ValueError
+
+    def _addDCInfoToGraph(self, graph):
+
+        # Now iterate router links and say if they are uplink or downlink
+        visited = []
+        for (u,v) in graph.router_links:
+            if (u, v) not in visited and (v, u) not in visited:
+                uname = self.topology.getRouterName(u)
+                utype = self.topology.getRouterType(uname)
+                vname = self.topology.getRouterName(v)
+                vtype = self.topology.getRouterType(vname)
+
+                upod = self.topology.getRouterPod(uname)
+                vpod = self.topology.getRouterPod(vname)
+                graph.node[u]['pod'] = upod
+                graph.node[v]['pod'] = vpod
+
+                if utype == 'edge' and vtype == 'aggregation':
+                    graph.node[u]['edge'] = True
+                    graph.node[v]['aggregation'] = True
+                    graph.edge[u][v]['direction'] = 'uplink'
+                    graph.edge[v][u]['direction'] = 'downlink'
+
+                elif utype == 'aggregation' and vtype == 'edge':
+                    graph.node[u]['aggregation'] = True
+                    graph.node[v]['edge'] = True
+                    graph.edge[u][v]['direction'] = 'downlink'
+                    graph.edge[v][u]['direction'] = 'uplink'
+
+                elif utype == 'core' and vtype == 'aggregation':
+                    graph.node[u]['core'] = True
+                    graph.node[v]['aggregation'] = True
+                    graph.edge[u][v]['direction'] = 'downlink'
+                    graph.edge[v][u]['direction'] = 'uplink'
+
+                elif utype == 'aggregation' and vtype == 'core':
+                    graph.node[u]['aggregation'] = True
+                    graph.node[v]['core'] = True
+                    graph.edge[u][v]['direction'] = 'uplink'
+                    graph.edge[v][u]['direction'] = 'downlink'
+
+                visited.append((u, v))
+
+        return graph
+
+    def _createInitialDags(self):
+        """
+        Populates the self.dags dictionary for each existing prefix in the network
+
+        """
+        # Get edge routers
+        edgeRouters = self.getEdgeRouters()
+
+        # Get aggregation routers
+        aggregationRouters = self.getAggregationRouters()
+
+        # Get Core routers
+        coreRouters = self.getCoreRouters()
+
+        for prefix in self.network_graph.prefix:
+
+            dag = nx.DiGraph()
+
+            # Get Edge router connected to prefix
+            gatewayRouter = self.getGatewayRouter(prefix)
+
+            # Get pod
+            pod = self.getRouterPod(gatewayRouter)
+
+            # Add uplinks edge->aggr
+            for edgeRouter in edgeRouters:
+                if edgeRouter != gatewayRouter:
+                    # Get pod of edgeRouter
+                    pod_eR = self.getRouterPod(edgeRouter)
+
+                    # Add edges to aggregation routers
+                    add_aggRouterLinks = [dag.add_edge(edgeRouter, aR) for aR in self.getAggregationRouters(pod=pod_eR)]
+
+            #  Get aggregaton routers of the same pod
+            aggrRoutersSamePod = self.getAggregationRouters(pod=pod)
+
+            # Add uplinks aggr->core
+            for aggrRouter in aggregationRouters:
+                if aggrRouter in aggrRoutersSamePod:
+                    # Add downlins to gateway edge router
+                    dag.add_edge(aggrRouter, gatewayRouter)
+
+                else:
+                    # Add uplinks to core routers
+                    add_coreRouterLinks = [dag.add_edge(aggrRouter, cR) for cR in self.getConnectedCoreRouters(aggrRouter)]
+
+            # Add downlinks core -> pod
+            for coreRouter in coreRouters:
+                # Only downling from core router to aggregation router of specific pod
+                action = [dag.add_edge(coreRouter, aR) for aR in  self.getConnectedAggregation(pod=pod)]
+
+            # Add dag
+            self.dags[prefix] = dag
 
     def reset(self):
         pass
@@ -107,10 +274,14 @@ class LBController(object):
 
         elif event["type"] == 'stoppingFlow':
             flow = event['flow']
-            log.debug("Flow FINISHED: {0}".format(flow))            
+            log.debug("Flow FINISHED: {0}".format(flow))
 
         else:
             log.error("epali")
+
+    def _runGetLoads(self):
+        getLoads = GetLoads(k=self.k)
+        getLoads.run()
 
     def _getLoads(self, t):
         """
@@ -159,7 +330,7 @@ class LBController(object):
                         continue
                     else:
                         self.handleFlow(event)
-                        
+
             except KeyboardInterrupt:
                 break
 
@@ -181,6 +352,7 @@ if __name__ == '__main__':
 
     log.setLevel(logging.DEBUG)
     log.info("Starting Controller - k = {0} , doBalance = {1}".format(args.k, args.doBalance))
+
 
     lb = LBController(doBalance = args.doBalance, k=args.k)
     lb.run()
