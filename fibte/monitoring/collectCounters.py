@@ -2,7 +2,6 @@
 
 import subprocess
 import time
-from snmplib import SnmpIfDescr, SnmpCounters
 import json
 import os
 from fibte.misc.topologyGraph import TopologyGraph
@@ -15,7 +14,7 @@ tmp_files = CFG.get("DEFAULT","tmp_files")
 db_topo = CFG.get("DEFAULT","db_topo")
 
 """
-This module defines a process that collects the counter information of a single host
+This module defines a process that collects the counter information of a single host/router
 in an isolated process. It either gathers snmp data or directly reads from the dev file.
 
 credit: Edgar Costa - edgarcosta@hotmail.es
@@ -35,34 +34,20 @@ def collectCounters(name='h_0_0', interval=1.5, snmp=False):
         # Checks if its a edge router
         isEdge = "e" in name
 
-        # Checks if we use snmp to get router information
-        if snmp:
-            interfaces = SnmpIfDescr("127.0.0.1").ifindexMapping.values()
-            if isEdge:
-                countersIn = SnmpCounters(interfaces=interfaces, routerIp="127.0.0.1",port=161)
-            countersOut = SnmpCounters(interfaces=interfaces, routerIp="127.0.0.1",port=161)
+        # We use /proc/net/dev
+        counters = CountersDev(interfaces=IfDescr().getIfMapping(), isEdge=isEdge)
 
-        # Else we use /proc/net/dev
-        else:
-            counters = CountersDev(interfaces=IfDescr().getIfMapping(), isEdge=isEdge)
-
-        with open("{1}load_{0}.pid".format(name,tmp_files),"w") as f:
+        # Pid of each collectCounters process is written in a different file - to be able to stop them gracefully
+        with open("{1}load_{0}.pid".format(name, tmp_files),"w") as f:
             f.write(str(os.getpid()))
 
         # Callibrate counters with the first lecture
-        if snmp:
-            if isEdge:
-                countersIn.getCounters64Walk(out=False)
-            countersOut.getCounters64Walk()
-
-        else:
-            counters.getCounters()
+        counters.getCounters()
 
         start_time = time.time()
         i = 1
 
         d = {"in": {}, "out": {}}
-
         while True:
             try:
                 # I do this so it does not get too big and computing the w_time is not expensive
@@ -75,64 +60,15 @@ def collectCounters(name='h_0_0', interval=1.5, snmp=False):
                     w_time = 0
                 time.sleep(w_time)
 
-                # time_file.write(str(datetime.datetime.now())+"\n")
-                # time_file.flush()
-                # while counters.fromLastLecture() < interval:
-                #     pass
-                # print name
-
-                if snmp:
-                    if isEdge:
-                        countersIn.getCounters64Walk(out=False)
-                    countersOut.getCounters64Walk()
-
-                    if isEdge:
-                        # if all are 0 we don't write in file
-                        if countersOut.totalBytes == 0 and countersIn.totalBytes == 0:
-                            i +=1
-                            continue
-
-                        elif countersOut.totalBytes == 0 and countersIn.totalBytes != 0:
-                            d["in"] = countersIn.link_capacity()
-
-                        elif countersOut.totalBytes != 0 and countersIn.totalBytes == 0:
-                            d['out'] = countersOut.link_capacity()
-
-                        else:
-                            d['out'] = countersOut.link_capacity()
-                            d["in"] = countersIn.link_capacity()
-
-                        with open("{1}load_{0}_tmp".format(name,tmp_files), "w") as f:
-                            json.dump(d,f)
-
-                    else:
-                        # If total bytes is 0, we skip this sample
-                        if countersOut.totalBytes == 0:
-                            i +=1
-                            continue
-
-                    with open("{1}load_{0}_tmp".format(name,tmp_files), "w") as f:
-                        json.dump(countersOut.link_capacity(),f)
-
-                else:
-                    counters.getCounters()
-                    with open("{1}load_{0}_tmp".format(name,tmp_files), "w") as f:
-                        json.dump(counters.link_capacity(),f)
+                # Get the counter read-outs
+                counters.getCounters()
+                # Write it in the load tmp file
+                with open("{1}load_{0}_tmp".format(name,tmp_files), "w") as f:
+                    json.dump(counters.link_capacity(),f)
 
                 # mv it.
                 os.rename("{1}load_{0}_tmp".format(name,tmp_files) ,"{1}load_{0}".format(name,tmp_files))
                 i +=1
-
-                # time_file.write(str(countersOut.link_capacity())+"\n")
-                # time_file.flush()
-
-                # #first erase content
-                # load_file.seek(0)
-                # load_file.truncate()
-                #
-                # #write
-                # json.dump(counters.link_capacity(),load_file)
-                # load_file.flush()
 
             except KeyboardInterrupt:
                 # time_file.close()
