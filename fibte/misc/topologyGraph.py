@@ -339,6 +339,8 @@ class TopologyGraph(TopologyDB):
 
         # Populates self.hostsIpMapping dictionary
         self.hostsIpMapping()
+        # Populataes self.routersIpMappin dictionary
+        self.routersIdMapping()
 
         # Populates self.interfaceIPToRouterName dict
         if interfaceToRouterName:
@@ -542,6 +544,16 @@ class TopologyGraph(TopologyDB):
             self.hostsIpMapping["ipToName"][(hosts[host]["%s-eth0" % (host)]["ip"]).split("/")[0]] = host
             self.hostsIpMapping["nameToIp"][host] = (hosts[host]["%s-eth0" % (host)]["ip"]).split("/")[0]
 
+    def routersIdMapping(self):
+        self.routersIdMapping = {}
+        self.routersIdMapping["idToName"] = {}
+        self.routersIdMapping["nameToId"] = {}
+        routers = self.getRouters()
+        for name, data in routers.iteritems():
+            routerid = data['routerid']
+            self.routersIdMapping["idToName"][routerid] = name
+            self.routersIdMapping["nameToId"][name] = routerid
+
     def getHostName(self, ip):
 
         """
@@ -554,6 +566,23 @@ class TopologyGraph(TopologyDB):
             raise ValueError("Any host of the network has the ip {0}".format(ip))
 
         return self.hostsIpMapping["ipToName"][ip]
+
+    def getRouterName(self, routerid):
+        return self.routersIdMapping['idToName'][routerid]
+
+    def getRouterId(self, routername):
+        return self.routersIdMapping['nameToId'][routername]
+
+    def getRouterPod(self, routername):
+        if not self.isCoreRouter(routername):
+            return int(routername.split('_')[1])
+
+    def getRouterType(self, routername):
+        e = [key for key in self.networkGraph.graph.node[routername].keys() if key in ['edge', 'core', 'aggregation']]
+        if e:
+            return e[0]
+        else:
+            raise ValueError
 
     def getHostIp(self, name):
 
@@ -707,6 +736,8 @@ class TopologyGraph(TopologyDB):
 if __name__ == "__main__":
 
     topology = TopologyGraph(getIfindexes=True, db=os.path.join(tmp_files, db_topo))
+#    import ipdb; ipdb.set_trace()
+
     g = topology.networkGraph
 
     # topology.loadIfNames()
