@@ -3,8 +3,6 @@
 from fibbingnode.misc.mininetlib.ipnet import TopologyDB
 import os
 import json
-from fibte.monitoring.snmplib import SnmpIfDescr
-from fibte.monitoring.countersDev import IfDescr
 import networkx as nx
 from ipaddress import ip_interface
 import subprocess
@@ -42,8 +40,14 @@ class NetworkGraph(object):
                 # TODO IMPORTANT, here we will differenciate a type of routers. The ones that contain the letter e, will be
                 # classified as edge routers. Edge routers are used to compute all the possible paths within the
                 # topology
-                if 'e' in node:
+                if '_e' in node:
                     g.node[node]['edge'] = True
+
+                elif '_a' in node:
+                    g.node[node]['aggregation'] = True
+
+                elif 'r_c' in node:
+                    g.node[node]['core'] = True
 
                 for itf in topologyDB.network[node]:
                     # we should ignore routerid, type.
@@ -183,6 +187,12 @@ class NetworkGraph(object):
     def getEdgeRouters(self):
         return [x for x in self.graph.node if self.graph.node[x].has_key("edge")]
 
+    def getAggregationRouters(self):
+        return [x for x in self.graph.node if self.graph.node[x].has_key("aggregation")]
+
+    def getCoreRouters(self):
+        return [x for x in self.graph.node if self.graph.node[x].has_key("core")]
+
     def getRouters(self):
         return [x for x in self.graph.node if self.graph.node[x]["type"] == "router"]
 
@@ -299,22 +309,29 @@ class NetworkGraph(object):
         # Filter the edges and remove the ones that have switches connected
         return [x for x in allEdges if not (any("sw" in s for s in x) or any("ovs" in s for s in x))]
 
+    def getBisectionEdges(self):
+        """
+        Returns all edges between routers in the network
+        :return:
+        """
+        allEdges = self.graph.to_directed().edges(nbunch=self.getRouters())
+
+        # Filter the edges and remove the ones that have switches connected
+        return [x for x in allEdges if not (any("sw" in s for s in x) or any("ovs" in s for s in x))]
+
 class TopologyGraph(TopologyDB):
-    def __init__(self, getIfindexes=True, snmp=False, interfaceToRouterName=False, *args,
+    def __init__(self, getIfindexes=True, interfaceToRouterName=False, *args,
                  **kwargs):
 
         super(TopologyGraph, self).__init__(*args, **kwargs)
 
-        # Indicates weather snmp is used or not
-        self.snmp = snmp
-
-        # Router interface name to interface snmp index mappings
+        # Router interface name to interface index mappings
         self.getIfIndexes = getIfindexes
 
         # Holds the data of router interfaces
         self.routersInterfaces = {}
 
-        # Retrieces the interface names from SNMP
+        # Retrieces the interface names
         self.getIfNames()
 
         # Starts the network graph
@@ -470,6 +487,20 @@ class TopologyGraph(TopologyDB):
         """
         return self.networkGraph.getEdgeRouters()
 
+    def getAgreggationRouters(self):
+        """
+        Only aggregation routers
+        :return: list of aggregation routers
+        """
+        return self.networkGraph.getAggregationRouters()
+
+    def getCoreRouters(self):
+        """
+        Only core routers
+        :return: list of core routers
+        """
+        return self.networkGraph.getCoreRouters()
+
     def getHosts(self):
         """
         Gets the hosts from the topologyDB
@@ -539,7 +570,7 @@ class TopologyGraph(TopologyDB):
 
     def loadIfNames(self):
         """
-        Loads from the routers and using SNMP the interface index corresponding to each router interface.
+        Loads from the interface index corresponding to each router interface.
         The process is repeated for every router in the network.
 
         It will also update the interface information. it will add the mac and the ifindex
@@ -558,17 +589,14 @@ class TopologyGraph(TopologyDB):
             # otherwise we should get the interface-mon ips
             routerId = self.routerid(router)
 
-            # If we want to use SNMP ifindexes
+            # If we want to use ifindexes
             if self.getIfIndexes:
-                if self.snmp:
-                    nameToIfindex = SnmpIfDescr(routerIp=routerId).getIfMapping()
-                else:
-                    path = "{1}ifDescr_{0}".format(router, tmp_files)
-                    try:
-                        with open(path, "r") as f:
-                            nameToIfindex = json.load(f)
-                    except IOError:
-                        raise KeyError("File {0} does not exist".format(path))
+                path = "{1}ifDescr_{0}".format(router, tmp_files)
+                try:
+                    with open(path, "r") as f:
+                        nameToIfindex = json.load(f)
+                except IOError:
+                    raise KeyError("File {0} does not exist".format(path))
 
                 tmp_dict = {}
                 for interface in nameToIfindex:
@@ -576,7 +604,7 @@ class TopologyGraph(TopologyDB):
                         mac = self.network[router][interface]['mac']
                         tmp_dict[mac] = {'ifname': interface, 'ifindex': nameToIfindex[interface]}
 
-            # If we dont use SNMP ifindexes
+            # If we dont use ifindexes
             else:
                 tmp_dict = {}
                 for interface in self.network[router]:
@@ -599,9 +627,9 @@ class TopologyGraph(TopologyDB):
         if not (self.routersInterfaces):
             self.loadIfNames()
 
-            # If its still empty, it means that snmp is not working.
+            # If its still empty, it means that countersDev is not working.
             if not (self.routersInterfaces):
-                raise RuntimeError('Could not get SNMP data from the routers')
+                raise RuntimeError('Could not get data from the routers: check countersDev.py')
 
         return self.routersInterfaces
 
@@ -647,42 +675,19 @@ class TopologyGraph(TopologyDB):
             routerId = self.routerid(router)
             for intfData in self.routersInterfaces[routerId].values():
                 if isEdge:
-                    # In case we are using ifindex for the loads
-                    if self.snmp:
-                        if routersUsage[router]["out"].has_key(intfData["ifindex"]):
-                            # Here we do the same
-                            link_loads[(router, self.network[router][intfData["ifname"]]["connectedTo"])] = round(
-                                routersUsage[router]["out"][intfData['ifindex']], 3)
-                            # However if it connect to a switch (sw, or ovs) we get the input value of that ifindex and compute the link cost (switch/ovs -> router)
+                     # Using /proc/net/dev
+                     if routersUsage[router]["out"].has_key(intfData["ifname"]):
 
-                            if self.network[self.network[router][intfData["ifname"]]["connectedTo"]][
-                                "type"] == "switch":
-                                link_loads[(self.network[router][intfData["ifname"]]["connectedTo"], router)] = round(
-                                    routersUsage[router]["in"][intfData['ifindex']], 3)
+                         link_loads[(router, self.network[router][intfData["ifname"]]["connectedTo"])] = round(routersUsage[router]["out"][intfData['ifname']], 3)
+                         # however if it connect to a switch (sw, or ovs) we get the input value of that ifindex and compute the link cost (switch/ovs -> router)
 
-                    # Using /proc/net/dev
-                    else:
-                        if routersUsage[router]["out"].has_key(intfData["ifname"]):
-
-                            link_loads[(router, self.network[router][intfData["ifname"]]["connectedTo"])] = round(
-                                routersUsage[router]["out"][intfData['ifname']], 3)
-                            # however if it connect to a switch (sw, or ovs) we get the input value of that ifindex and compute the link cost (switch/ovs -> router)
-
-                            if self.network[self.network[router][intfData["ifname"]]["connectedTo"]][
-                                "type"] == "switch":
-                                link_loads[(self.network[router][intfData["ifname"]]["connectedTo"], router)] = round(
-                                    routersUsage[router]["in"][intfData['ifname']], 3)
+                         if self.network[self.network[router][intfData["ifname"]]["connectedTo"]]["type"] == "switch":
+                             link_loads[(self.network[router][intfData["ifname"]]["connectedTo"], router)] = round(routersUsage[router]["in"][intfData['ifname']], 3)
 
                 else:
-                    if self.snmp:
-                        if routersUsage[router].has_key(intfData["ifindex"]):
-                            link_loads[(router, self.network[router][intfData["ifname"]]["connectedTo"])] = round(
-                                routersUsage[router][intfData['ifindex']], 3)
-                    else:
-                        # Only for countersDev class
-                        if routersUsage[router]["out"].has_key(intfData["ifname"]):
-                            link_loads[(router, self.network[router][intfData["ifname"]]["connectedTo"])] = round(
-                                routersUsage[router]["out"][intfData['ifname']], 3)
+                    # Only for countersDev class
+                    if routersUsage[router]["out"].has_key(intfData["ifname"]):
+                        link_loads[(router, self.network[router][intfData["ifname"]]["connectedTo"])] = round(routersUsage[router]["out"][intfData['ifname']], 3)
 
     def isEdgeRouter(self, router):
         """
@@ -693,9 +698,15 @@ class TopologyGraph(TopologyDB):
         """
         return self.networkGraph.graph.node[router].has_key("edge")
 
+    def isAggregationRouter(self, router):
+        return self.networkGraph.graph.node[router].has_key("aggregation")
+
+    def isCoreRouter(self, router):
+        return self.networkGraph.graph.node[router].has_key("core")
+
 if __name__ == "__main__":
 
-    topology = TopologyGraph(getIfindexes=True, snmp=False, db=os.path.join(tmp_files, db_topo))
+    topology = TopologyGraph(getIfindexes=True, db=os.path.join(tmp_files, db_topo))
     g = topology.networkGraph
 
     # topology.loadIfNames()
