@@ -106,8 +106,29 @@ class LBController(object):
         thread.setDaemon(True)
         thread.start()
 
+    def isCoreRouter(self, router):
+        return (self.dc_graph.is_router(router) and self.dc_graph.node[router].has_key('core'))
+
+    def isAggregationRouter(self, router):
+        return (self.dc_graph.is_router(router) and self.dc_graph.node[router].has_key('aggregation'))
+
+    def isEdgeRouter(self, router):
+        return (self.dc_graph.is_router(router) and self.dc_graph.node[router].has_key('edge'))
+
     def getRouterPod(self, router):
-        return self.dc_graph.node[router]['pod']
+        """
+        Returns the pod of the given router. Raises error
+        if router is not edge or aggregation.
+        :param router:
+        :return: pod number
+        """
+        if self.dc_graph.is_router(router):
+            if self.isAggregationRouter(router) or self.isEdgeRouter(router):
+                return self.dc_graph.node[router]['pod']
+            else:
+                raise ValueError("{0} is not an aggregation or edge router".format(router))
+        else:
+            raise ValueError("{0} is not a router!".format(router))
 
     def getAllRouters(self):
         return [router for router in self.dc_graph.routers
@@ -115,22 +136,47 @@ class LBController(object):
                         if type in self.dc_graph.node[router].keys()])]
 
     def getEdgeRouters(self, pod=-1):
+        """
+        Returns a list of edge routers. If filtered by pod,
+        only the aggregation routers for that pod are returned.
+
+        :param pod:
+        :return:
+        """
         if pod == -1:
-            return [router for router in self.dc_graph.routers if self.dc_graph.node[router].has_key('edge')]
+            return [router for router in self.dc_graph.routers if self.isEdgeRouter(router)]
         else:
-            return [router for router in self.dc_graph.routers if self.dc_graph.node[router].has_key('edge') and self.dc_graph.node[router]['pod'] == pod]
+            return [router for router in self.dc_graph.routers if self.isEdgeRouter(router) and self.getRouterPod(router) == pod]
 
     def getAggregationRouters(self, pod=-1):
+        """
+        Returns a list of aggregation routers. If filtered by pod,
+        only the aggregation routers for that pod are returned.
+
+        :param pod:
+        :return:
+        """
         if pod == -1:
-            return [router for router in self.dc_graph.routers if self.dc_graph.node[router].has_key('aggregation')]
+            return [router for router in self.dc_graph.routers if self.isAggregationRouter(router)]
         else:
-            return [router for router in self.dc_graph.routers if self.dc_graph.node[router].has_key('aggregation') and self.dc_graph.node[router]['pod'] == pod]
+            return [router for router in self.dc_graph.routers if self.isAggregationRouter(router) and self.getRouterPod(router) == pod]
 
     def getCoreRouters(self):
-        return [router for router in self.dc_graph.routers if self.dc_graph.node[router].has_key('core')]
+        """
+        :return: a list of all core routers in the topology
+        """
+        return [router for router in self.dc_graph.routers if self.isCoreRouter(router)]
 
     def getConnectedCoreRouters(self, aggregationRouter):
-        return [r for r in self.getCoreRouters() if self.dc_graph[aggregationRouter].has_key(r)]
+        """
+        Given an aggregation router, returns the connected core routers.
+        :param aggregationRouter:
+        :return:
+        """
+        if self.isAggregationRouter(aggregationRouter):
+            return [r for r in self.getCoreRouters() if self.dc_graph[aggregationRouter].has_key(r)]
+        else:
+            raise ValueError('{0} is not an aggregation router'.format(aggregationRouter))
 
     def getConnectedAggregation(self, coreRouter, pod=-1):
         """
@@ -140,14 +186,17 @@ class LBController(object):
         :param pod:
         :return:
         """
-        if pod == -1:
-            return [r for r in self.dc_graph[coreRouter].keys() if
-                    self.dc_graph.is_router(r) and self.dc_graph[coreRouter][r]['direction'] == 'downlink']
+        if self.isCoreRouter(coreRouter):
+            if pod == -1:
+                return [r for r in self.dc_graph[coreRouter].keys() if
+                        self.dc_graph.is_router(r) and self.dc_graph[coreRouter][r]['direction'] == 'downlink']
+            else:
+                return [r for r in self.dc_graph[coreRouter].keys()
+                        if self.dc_graph.is_router(r)
+                        and self.dc_graph[coreRouter][r]['direction'] == 'downlink'
+                        and self.getRouterPod(r) == pod][0]
         else:
-            return [r for r in self.dc_graph[coreRouter].keys()
-                    if self.dc_graph.is_router(r)
-                    and self.dc_graph[coreRouter][r]['direction'] == 'downlink'
-                    and self.getRouterPod(r) == pod][0]
+            raise ValueError("{0} is not a core router".format(coreRouter))
 
     def getGatewayRouter(self, prefix):
         """
@@ -200,10 +249,10 @@ class LBController(object):
         :param edgeRouter:
         :return:
         """
-        if self.dc_graph.node[edgeRouter].has_key('edge'):
+        if self.isEdgeRouter(edgeRouter):
             return [r for r in self.dc_graph[edgeRouter].keys() if self.dc_graph.is_prefix(r)]
         else:
-            raise ValueError
+            raise ValueError("{0} is not an edge router".format(edgeRouter))
 
     def _addDCInfoToGraph(self, graph):
 
