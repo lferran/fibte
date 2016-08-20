@@ -1,5 +1,5 @@
 from flow import Flow, Base
-from fibte.misc.topologyGraph import TopologyGraph
+from fibte.misc.topology_graph import TopologyGraph
 import random
 import time
 import os
@@ -621,10 +621,8 @@ if __name__ == "__main__":
             traffic = pickle.load(open(args.load_traffic,"r"))
         else:
             # Generate traffic
-            traffic = tg.trafficPlanner(senders=senders,
-                                        receivers=receivers,
-                                        flowRate=args.flow_rate,
-                                        totalTime=args.time,
+            traffic = tg.trafficPlanner(senders=senders,receivers=receivers,
+                                        flowRate=args.flow_rate,totalTime=args.time,
                                         timeStep=args.time_step)
 
         # If it must be saved
@@ -632,9 +630,9 @@ if __name__ == "__main__":
             filename = '{0}'.format(saved_traffic_folder)
             filename += "{0}_to_{1}_m{2}e{3}_fr{4}_t{5}_ts{6}.traffic".format(','.join(senders),
                                                                ','.join(receivers),
-                                                               str(args.mice).replace('.', ''),
-                                                               str(args.elephant).replace('.', ''),
-                                                               str(args.flow_rate).replace('.', ''),
+                                                               str(args.mice).replace('.', ','),
+                                                               str(args.elephant).replace('.', ','),
+                                                               str(args.flow_rate).replace('.', ','),
                                                                args.time, args.time_step)
             with open(filename,"w") as f:
                 pickle.dump(traffic,f)
