@@ -255,7 +255,6 @@ class DCDiGraph(DiGraph):
             # Add downlink
             self.add_edge(upper_rid, lower_rid, {'direction': 'downlink'})
 
-
 class DCGraph(DCDiGraph):
     """
     Models the DC graph as a networkx DiGraph subclass object
@@ -272,7 +271,7 @@ class DCGraph(DCDiGraph):
         # Build himself from topoDB information
         self.buildFromTopoDB()
 
-    def buildFromTopoDB(self):
+    def build_from_topo_db(self):
         # Add first the cores
         coreRouters=self.topo.getCoreRouters()
         for router in coreRouters:
@@ -310,7 +309,7 @@ class DCGraph(DCDiGraph):
                     self.add_uplink(routerid, arid)
                     self.add_downlink(arid, routerid)
 
-    def getDefaultOSPFDag(self, sinkid):
+    def get_default_ospf_dag(self, sinkid):
         """
         Given a sink edge router, returns the default fat-tree dag from
         all other hosts to the sink.
@@ -336,7 +335,6 @@ class DCGraph(DCDiGraph):
         else:
             raise ValueError("Sink must be an edge router. {0} isn't".format(sinkid))
 
-
 class DCDag(DCDiGraph):
     def __init__(self, sink_id, k=4, *args, **kwargs):
         super(DCDag, self).__init__(k, *args, **kwargs)
@@ -350,6 +348,10 @@ class DCDag(DCDiGraph):
             self._build_from_dc_graph(kwargs['dc_graph'])
 
     def _get_printable(self):
+        """
+        Helper function that returns a DCDag with router names instead.
+        :return:
+        """
         other = DCDag(self.sink, self.k)
         for (u, v, data) in self.edges_iter(data=True):
              other.add_edge(self.get_router_name(u), self.get_router_name(v))
@@ -444,11 +446,9 @@ class DCDag(DCDiGraph):
                 # If they are from the same pod
                 lpod = self.get_router_pod(lower_rid)
                 rpod = self.get_router_pod(upper_rid)
-                # Check that is in same pod
-                if lpod == rpod:
-                    # Check that downlink is only in same pod as sink:
-                    if lpod == self.get_sink_pod():
-                        return True
+                # Check that is in same pod as the sink and that the downlinks are directed towards the sink.
+                if lpod == rpod == self.get_sink_pod() and lower_rid == self.sink['id']:
+                    return True
 
             # Core->aggregation downlink
             else:
@@ -462,6 +462,9 @@ class DCDag(DCDiGraph):
                     if self.get_router_pod(lower_rid) == self.get_sink_pod():
                         return True
         return False
+
+    def modify_random_uplinks(self, pod):
+        pass
 
 if __name__ == "__main__":
 
