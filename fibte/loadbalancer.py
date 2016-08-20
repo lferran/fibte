@@ -9,14 +9,13 @@ import time
 import argparse
 import json
 import networkx as nx
+from fibte.misc.dc_dag import DCDag
 import random
-from fibte.misc.topologyGraph import TopologyGraph
+from fibte.misc.topology_graph import TopologyGraph
 
 from fibte.monitoring.getLoads import GetLoads
 
 from fibte import tmp_files, db_topo, LINK_BANDWIDTH, CFG
-
-from fibte.misc.dc_graph import DCGraph
 
 # Threading event to signal that the initial topo graph
 # has been received from the Fibbing controller
@@ -318,7 +317,6 @@ class LBController(object):
     def _createInitialDags(self):
         """
         Populates the self.dags dictionary for each existing prefix in the network
-
         """
         # Result is stored here
         dags = {}
@@ -376,6 +374,11 @@ class LBController(object):
         return dags
 
     def getRandomUpLinkChoice(self, max_depth=2, curr_depth=0):
+        """
+        Recursive function that returns a random number of random choices
+        that correspond to the paths taken  from an edge node to a set of
+        core routers.
+        """
         if curr_depth == max_depth:
             return []
 
@@ -562,6 +565,7 @@ if __name__ == '__main__':
 
 
     lb = LBController(doBalance = args.doBalance, k=args.k)
+
 
     prefix = lb.dags.keys()[3]
     pdag = lb.getRandomDag(prefix)
