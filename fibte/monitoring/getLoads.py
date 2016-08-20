@@ -1,6 +1,6 @@
 #!/usr/bin/python
 
-from fibte.misc.topologyGraph import TopologyGraph
+from fibte.misc.topology_graph import TopologyGraph
 import json
 import time
 

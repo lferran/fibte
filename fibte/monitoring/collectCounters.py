@@ -4,7 +4,7 @@ import subprocess
 import time
 import json
 import os
-from fibte.misc.topologyGraph import TopologyGraph
+from fibte.misc.topology_graph import TopologyGraph
 
 from countersDev import IfDescr, CountersDev
 
