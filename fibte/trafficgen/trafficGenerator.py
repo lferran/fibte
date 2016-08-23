@@ -551,6 +551,47 @@ class TrafficGenerator(Base):
             log.debug("Controller is not connected/present. Exception: {0}".format(e))
             pass
 
+    def changeTrafficHostnamesToIps(self, traffic):
+        """
+        Changes all hostnames in traffic dictionary to ips
+        :param traffic:
+        :return:
+        """
+        traffic_copy = {}
+        for sender, flowlist in traffic.iteritems():
+            flowlist_copy = []
+            for flow in flowlist:
+                flow_copy = flow.copy()
+                flow_copy['src'] = self.topology.getHostIp(flow['src'])
+                flow_copy['dst'] = self.topology.getHostIp(flow['dst'])
+                flowlist_copy.append(flow_copy)
+
+            traffic_copy[sender] = flowlist_copy
+
+        return traffic_copy
+
+    def changeTrafficIpsToHostnames(self, traffic):
+        """
+        Searches in host->flowlist traffic dictionary and changes all ips for
+        hostnames, so that we save the traffic regardles of the current ip assigned
+        to the hosts
+
+        :param traffic:
+        :return: dict: host->flowlist
+        """
+        traffic_copy = {}
+        for sender, flowlist in traffic.iteritems():
+            flowlist_copy = []
+            for flow in flowlist:
+                flow_copy = flow.copy()
+                flow_copy['src'] = self.topology.getHostName(flow['src'])
+                flow_copy['dst'] = self.topology.getHostName(flow['dst'])
+                flowlist_copy.append(flow_copy)
+
+            traffic_copy[sender] = flowlist_copy
+
+        return traffic_copy
+
 if __name__ == "__main__":
 
     import argparse
@@ -615,27 +656,35 @@ if __name__ == "__main__":
         tg.terminateTraffic()
 
     else:
+
         # If traffic must be loaded
         if args.load_traffic:
             # Fetch traffic from file
             traffic = pickle.load(open(args.load_traffic,"r"))
+
+            # Convert hostnames to current ips
+            traffic = tg.changeTrafficHostnamesToIps(traffic)
+
         else:
             # Generate traffic
             traffic = tg.trafficPlanner(senders=senders,receivers=receivers,
                                         flowRate=args.flow_rate,totalTime=args.time,
                                         timeStep=args.time_step)
 
-        # If it must be saved
-        if args.save_traffic:
-            filename = '{0}'.format(saved_traffic_folder)
-            filename += "{0}_to_{1}_m{2}e{3}_fr{4}_t{5}_ts{6}.traffic".format(','.join(senders),
-                                                               ','.join(receivers),
-                                                               str(args.mice).replace('.', ','),
-                                                               str(args.elephant).replace('.', ','),
-                                                               str(args.flow_rate).replace('.', ','),
-                                                               args.time, args.time_step)
-            with open(filename,"w") as f:
-                pickle.dump(traffic,f)
+            # If it must be saved
+            if args.save_traffic:
+                filename = '{0}'.format(saved_traffic_folder)
+                filename += "{0}_to_{1}_m{2}e{3}_fr{4}_t{5}_ts{6}.traffic".format(','.join(senders), ','.join(receivers),
+                                                                                  str(args.mice).replace('.', ','),
+                                                                                  str(args.elephant).replace('.', ','),
+                                                                                  str(args.flow_rate).replace('.', ','),
+                                                                                  args.time, args.time_step)
+
+                # Convert current ip's to hostnames
+                traffic = tg.changeTrafficIpsToHostnames(traffic)
+
+                with open(filename,"w") as f:
+                    pickle.dump(traffic,f)
 
         # Orchestrate the traffic (either loaded or generated)
         tg.schedule(traffic)
