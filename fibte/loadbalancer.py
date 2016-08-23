@@ -6,12 +6,17 @@ from fibte.misc.unixSockets import UnixServer
 import threading
 import os
 import time
+import copy
 import argparse
 import json
 import networkx as nx
 from fibte.misc.dc_graph import DCGraph, DCDag
-import random
+import ipaddress as ip
+
+import subprocess
+
 from fibte.misc.topology_graph import TopologyGraph
+
 
 from fibte.monitoring.getLoads import GetLoads
 
@@ -45,7 +50,7 @@ class MyGraphProvider(SouthboundManager):
         HAS_INITIAL_GRAPH.set()
 
 class LBController(object):
-    def __init__(self, doBalance = True, k=4):
+    def __init__(self, doBalance = True, k=4, load_variables=True):
 
         # Config logging to dedicated file for this thread
         handler = logging.FileHandler(filename='{0}loadbalancer.log'.format(tmp_files))
@@ -94,26 +99,104 @@ class LBController(object):
 
         # Here we store the current dags for each destiantion
         self.dags = self._createInitialDags()
+        self.initial_dags = copy.deepcopy(self.dags)
+
+        # Fill ospf_prefixes dict
+        self.ospf_prefixes = self._fillInitialOSPFPrefixes()
 
         # Start getLoads thread that reads from counters
-        os.system(getLoads_path + ' -k {0} &'.format(self.k))
+        #os.system(getLoads_path + ' -k {0} &'.format(self.k))
+        self.p_getLoads = subprocess.Popen([getLoads_path, '-k', str(self.k)], shell=False)
 
         # Start getLoads thread reads from link usage
         thread = threading.Thread(target=self._getLoads, args=([1]))
         thread.setDaemon(True)
         thread.start()
 
-    def getGatewayRouter(self, prefix):
+        # This is for debugging purposes only --should be removed
+        if load_variables == True and self.k == 4:
+            self.r_0_e0 = self.topology.getRouterId('r_0_e0')
+            self.r_0_e1 = self.topology.getRouterId('r_0_e1')
+
+            self.r_1_e0 = self.topology.getRouterId('r_1_e0')
+            self.r_1_e1 = self.topology.getRouterId('r_1_e1')
+
+            self.r_2_e0 = self.topology.getRouterId('r_2_e0')
+            self.r_2_e1 = self.topology.getRouterId('r_2_e1')
+
+            self.r_3_e0 = self.topology.getRouterId('r_3_e0')
+            self.r_3_e1 = self.topology.getRouterId('r_3_e1')
+
+            self.r_0_a0 = self.topology.getRouterId('r_0_a0')
+            self.r_0_a1 = self.topology.getRouterId('r_0_a1')
+
+            self.r_1_a0 = self.topology.getRouterId('r_1_a0')
+            self.r_1_a1 = self.topology.getRouterId('r_1_a1')
+
+            self.r_2_a0 = self.topology.getRouterId('r_2_a0')
+            self.r_2_a1 = self.topology.getRouterId('r_2_a1')
+
+            self.r_3_a0 = self.topology.getRouterId('r_3_a0')
+            self.r_3_a1 = self.topology.getRouterId('r_3_a1')
+
+            self.r_c0 = self.topology.getRouterId('r_c0')
+            self.r_c1 = self.topology.getRouterId('r_c1')
+            self.r_c2 = self.topology.getRouterId('r_c2')
+            self.r_c3 = self.topology.getRouterId('r_c3')
+
+    def _getGatewayRouter(self, prefix):
         """
         Given a prefix, returns the connected edge router
         :param prefix:
         :return:
         """
         if self.network_graph.is_prefix(prefix):
-            edgeRouters = self.dc_graph.edge_routers()
-            return [edgeRouter for edgeRouter in edgeRouters if self.network_graph[edgeRouter].has_key(prefix)][0]
+            pred = self.network_graph.predecessors(prefix)
+            if len(pred) == 1 and not self.network_graph.is_fake_route(pred[0], prefix):
+                return pred[0]
+            else:
+                real_gw = [p for p in pred if self.network_graph.is_fake_route(p, prefix)]
+                if len(real_gw) == 1:
+                    return real_gw[0]
+                else:
+                    import ipdb; ipdb.set_trace()
+                    log.error("This prefix has several predecessors: {0}".format(prefix))
+
+                    #raise ValueError("This prefix has several predecessors: {0}".format(prefix))
         else:
             raise ValueError("{0} is not a prefix!".format(prefix))
+
+    def getGatewayRouter(self, prefix):
+        """
+        Checks if is already stored. Otherwise calls _getGatewayRouter()
+        :param prefix:
+        :return:
+        """
+        if prefix in self.dags.keys() and self.dags[prefix].has_key('gateway'):
+            return self.dags[prefix]['gateway']
+        else:
+            # Maybe it's a newly created prefix -- so check in the network graph
+            return self._getGatewayRouter(prefix)
+
+    def getMatchingPrefix(self, hostip):
+        """
+        Given a ip address of a host in the mininet network, returns
+        the longest prefix currently being advertised by the OSPF routers.
+
+        :param hostip: string representing a host's ip of an IPv4Address object
+                             address. E.g: '192.168.233.254/30'
+        Returns: an ipaddress.IPv4Network object
+        """
+        if not isinstance(hostip, ip.IPv4Address) and (isinstance(hostip, str) or isinstance(hostip, unicode)):
+            # Convert it to ipv4address type
+            hostip = ip.ip_address(hostip)
+
+        longest_match = (None, 0)
+        for prefix in self.ospf_prefixes:
+            prefix_len = prefix.prefixlen
+            if hostip in prefix and prefix_len > longest_match[1]:
+                longest_match = (prefix, prefix_len)
+        return longest_match[0].compressed
 
     def getConnectedPrefixes(self, edgeRouter):
         """
@@ -122,7 +205,7 @@ class LBController(object):
         :return:
         """
         if self.dc_graph.is_edge(edgeRouter):
-            return [r for r in self.network_graph[edgeRouter].keys() if self.network_graph.is_prefix(r)]
+            return [r for r in self.network_graph.successors(edgeRouter) if self.network_graph.is_prefix(r)]
         else:
             raise ValueError("{0} is not an edge router".format(edgeRouter))
 
@@ -131,25 +214,61 @@ class LBController(object):
         Populates the self.dags dictionary for each existing prefix in the network
         """
         # Result is stored here
+        log.info("Creating initial DAGs (default OSPF)")
         dags = {}
 
         for prefix in self.network_graph.prefixes:
 
-            # Get Edge router connected to prefix
-            gatewayRouter = self.getGatewayRouter(prefix)
+            # TODO: change this so that IP is read dynamically
+            if prefix != '192.168.255.0/24': #IP of the fibbing controller prefix...
 
-            # Create a new dag
-            dc_dag = self.dc_graph.get_default_ospf_dag(sinkid=gatewayRouter)
+                # Get Edge router connected to prefix
+                gatewayRouter = self._getGatewayRouter(prefix)
 
-            # Add dag
-            dags[prefix] = {'gateway': gatewayRouter, 'dag': dc_dag}
+                # Create a new dag
+                dc_dag = self.dc_graph.get_default_ospf_dag(sinkid=gatewayRouter)
+
+                # Add dag
+                dags[prefix] = {'gateway': gatewayRouter, 'dag': dc_dag}
+
+                try:
+                    # Instruct fibbing controller
+                    self.sbmanager.add_dag_requirement(prefix, dc_dag)
+                except Exception as e:
+                    import ipdb; ipdb.set_trace()
 
         return dags
 
+    def _fillInitialOSPFPrefixes(self):
+        """
+        Fills up the data structure
+        """
+        prefixes = []
+        fill = [prefixes.append(ip.ip_network(prefix)) for prefix in self.network_graph.prefixes]
+        return prefixes
+
     def reset(self):
-        pass
+        """
+        Sets the load balancer to its initial state
+        :return:
+        """
+        # Start crono
+        reset_time = time.time()
+
+        # Set all dags to original ospf dag
+        self.dags = copy.deepcopy(self.initial_dags)
+
+        # Reset all dags to initial state
+        action = [self.sbmanager.add_dag_requirement(prefix, self.dags[prefix]['dag']) for prefix in self.dags.keys()]
+
+        log.debug("Time to perform the reset to the load balancer: {0}s".format(time.time() - reset_time))
 
     def handleFlow(self, event):
+        """
+         Default handle flow skeleton
+         :param event:
+         :return:
+         """
         log.info("Event to handle received: {0}".format(event["type"]))
         if event["type"] == 'startingFlow':
             flow = event['flow']
@@ -160,7 +279,7 @@ class LBController(object):
             log.debug("Flow FINISHED: {0}".format(flow))
 
         else:
-            log.error("epali")
+            log.error("Unknown event type: {0}".format(event['type']))
 
     def _runGetLoads(self):
         getLoads = GetLoads(k=self.k)
@@ -197,11 +316,27 @@ class LBController(object):
         # TODO
         pass
 
+    def exitGracefully(self):
+        """
+        Exit load balancer gracefully
+        :return:
+        """
+        log.info("Keyboad Interrupt catched!")
+
+        # Remove all lies
+        import ipdb; ipdb.set_trace()
+
+        # self.p_getLoads.terminate()
+
+        # Finally exit
+        os._exit(0)
+
+
     def run(self):
         # Receive events and handle them
-        #import ipdb; ipdb.set_trace()
         while True:
             try:
+
                 if not(self.doBalance):
                     while True:
                         event = self.server.receive()
@@ -215,32 +350,118 @@ class LBController(object):
                         self.handleFlow(event)
 
             except KeyboardInterrupt:
-                break
+                # Exit load balancer
+                self.exitGracefully()
+
+class ECMPController(LBController):
+    def __init__(self, doBalance=True, k=4):
+        super(ECMPController, self).__init__(doBalance, k)
+
+class RandomUplinksController(LBController):
+    def __init__(self, doBalance=True, k=4):
+        super(RandomUplinksController, self).__init__(doBalance, k)
+
+    def handleFlow(self, event):
+        """
+         Default handle flow skeleton
+         :param event:
+         :return:
+         """
+        log.info("Event to handle received: {0}".format(event["type"]))
+        if event["type"] == 'startingFlow':
+            flow = event['flow']
+            self.chooseRandomUplinks(flow)
+
+        elif event["type"] == 'stoppingFlow':
+            flow = event['flow']
+            #self.resetOSPFDag(flow)
+
+        else:
+            log.error("Unknown event type: {0}".format(event['type']))
+
+    def chooseRandomUplinks(self, flow):
+        """
+        Given a new elephant flow from a certain source, it forces a random
+        uplink to the core layer, starting at the source.
+
+        (without affecting all other paths in other pods)
+        :param flow:
+        :return:
+        """
+        # Get prefix from host ip
+        src_ip = flow['src']
+        dst_ip = flow['dst']
+        src_prefix = self.getMatchingPrefix(src_ip)
+        dst_prefix = self.getMatchingPrefix(dst_ip)
+
+        # Get gateway router
+        src_gw = self.getGatewayRouter(src_prefix)
+        dst_gw = self.getGatewayRouter(dst_prefix)
+
+        # Retrieve current DAG for destination prefix
+        current_prefix_dag = self.dags[dst_prefix]['dag']
+
+        # Modify DAG
+        current_prefix_dag.modify_random_uplinks(source=src_gw)
+
+        # Apply DAG
+        import ipdb; ipdb.set_trace()
+        self.sbmanager.add_dag_requirement(prefix=dst_prefix, dag=current_prefix_dag)
+        print "-"*40
+        print
+        print
+        log.info("A new DAG was forced to prefix {0}".format(dst_prefix))
+
+    def resetOSPFDag(self, flow):
+        reset_ospf_time = time.time()
+        # Get prefix from host ip
+        src_ip = flow['src']
+        dst_ip = flow['dst']
+        src_prefix = self.getMatchingPrefix(src_ip)
+        dst_prefix = self.getMatchingPrefix(dst_ip)
+
+        # Get gateway router
+        src_gw = self.getGatewayRouter(src_prefix)
+        dst_gw = self.getGatewayRouter(dst_prefix)
+
+        # Retrieve current DAG for destination prefix
+        current_prefix_dag = self.dags[dst_prefix]['dag']
+
+        # Modify DAG
+        current_prefix_dag.set_ecmp_uplinks(source=src_gw)
+
+        # Apply DAG
+        self.sbmanager.add_dag_requirement(prefix=dst_prefix, dag=current_prefix_dag)
+        log.info("A new DAG was forced to prefix {0}".format(dst_prefix))
+        log.debug("It took {0} to reset the OSPF dag to prefix {1}".format(round(time.time() - reset_ospf_time, 3), dst_prefix))
 
 if __name__ == '__main__':
     from fibte.logger import log
     import logging
 
-    parser = argparse.ArgumentParser()
-    #group = parser.add_mutually_exclusive_group()
+    parser = argparse.ArgumentParser()    #group = parser.add_mutually_exclusive_group()
 
     parser.add_argument('--doBalance',
                         help='If set to False, ignores all events and just prints them',
                         action='store_true',
                         default = True)
 
+    parser.add_argument('--algorithm',
+                        help='Choose loadbalancing strategy: ecmp|random',
+                        default = 'ecmp')
+
     parser.add_argument('-k', '--k', help='Fat-Tree parameter', type=int, default=4)
 
     args = parser.parse_args()
 
     log.setLevel(logging.DEBUG)
-    log.info("Starting Controller - k = {0} , doBalance = {1}".format(args.k, args.doBalance))
+    log.info("Starting Controller - k = {0} , algorithm = {1}".format(args.k, args.algorithm))
 
+    if args.algorithm == 'ecmp':
+        lb = ECMPController(doBalance = args.doBalance, k=args.k)
 
-    lb = LBController(doBalance = args.doBalance, k=args.k)
-
-    import ipdb; ipdb.set_trace()
+    elif args.algorithm == 'random':
+        lb = RandomUplinksController(doBalance= args.doBalance, k=args.k)
 
     lb.run()
-
     #import ipdb; ipdb.set_trace()
