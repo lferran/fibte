@@ -35,7 +35,6 @@ class Joiner(Thread):
             # Wait for child to finish
             child.join()
 
-
 class FlowServer(object):
 
     def __init__(self, name):
@@ -50,7 +49,7 @@ class FlowServer(object):
         log.addHandler(handler)
         log.setLevel(logging.DEBUG)
         mlog.addHandler(handler)
-        mlog.setLevel(logging.NOTSET)
+        mlog.setLevel(logging.DEBUG)
 
         self.address = "/tmp/flowServer_{0}".format(name)
 
@@ -81,6 +80,7 @@ class FlowServer(object):
         # Indicators
         self.received_starttime = False
         self.received_flowlist = False
+        self.received_terminate = False
 
         # Schedules own flows
         self.scheduler = sched.scheduler(time.time, my_sleep)
@@ -97,7 +97,6 @@ class FlowServer(object):
             sys.exit(0)
         else:
             sys.exit(0)
-
 
     def terminateALL(self):
         """TODO: this should be a thread. When reading self.processes we
@@ -143,8 +142,8 @@ class FlowServer(object):
         # Cancel all upcoming scheduler events
         action = [self.scheduler.cancel(e) for e in self.scheduler.queue]
 
-        # Terminate old scheduler process
-        self.scheduler_process.terminate()
+        # Terminate old scheduler process if alive
+        if self.scheduler_process.is_alive(): self.scheduler_process.terminate()
 
         # Create a new instance of the process
         self.scheduler_process = Process(target=self.scheduler.run)
@@ -152,6 +151,7 @@ class FlowServer(object):
         # Reset everything
         self.received_flowlist = False
         self.received_starttime = False
+        self.received_terminate = False
         self.starttime = 0
         self.flowlist = []
 
@@ -171,6 +171,7 @@ class FlowServer(object):
 
                 # Wait for initial data to arrive from traffic generator
                 while not(self.received_flowlist) or not(self.received_starttime):
+                    log.debug('Waiting for flowlist and starttime events...')
 
                     # Receive event from Socket server and convert it to a dict (--blocking)
                     event = json.loads(self.q_server.get())
@@ -178,7 +179,6 @@ class FlowServer(object):
                     
                     # Log a bit
                     #log.debug("server: {0}, event: {1}".format(self.address, str(event['type'])))
-
                     if event["type"] == "starttime":
                         self.setStartTime(event["data"])
                         self.received_starttime = True
@@ -192,9 +192,11 @@ class FlowServer(object):
                 log.debug("Flowlist and starttime events received")
                 log.debug("Scheduling flows... ")
                 log.debug("DELTA time observed: {0}".format(self.starttime - time.time()))
-                schedule_time = time.time()
+
+                # Initialize counters
                 flow_count = {'elephant': 0, 'mice': 0}
                 if self.received_flowlist and self.received_starttime:
+                    # Iterate flowlist
                     for flow in self.flowlist:
                         delta = self.starttime - time.time()
                         if delta < 0:
@@ -213,6 +215,7 @@ class FlowServer(object):
                             
                     log.debug("All flows were scheduled! Let's run the scheduler (in a different thread)")
                     log.debug("A total of {0} flows will be started at host. {1} MICE | {2} ELEPHANT".format(sum(flow_count.values()), flow_count['mice'], flow_count['elephant']))
+
                     # Run scheduler in another thread
                     self.scheduler_process.start()
 
@@ -222,12 +225,14 @@ class FlowServer(object):
                 # While traffic stil ongoing
                 while self.scheduler_process.is_alive():
                     log.debug("Scheduler process is still alive -- Traffic ongoing")
+
                     # Check if new event in the queue
                     try:
                         data = self.q_server.get(timeout=3)#block=False)
                     except Queue.Empty:
                         #log.debug("Timeout occurred reading from server event queue")
                         pass
+
                     else:
                         #log.debug("Timeout didn't occur: loading json object...")
                         self.q_server.task_done()
@@ -238,14 +243,11 @@ class FlowServer(object):
                             log.debug("Terminate event received from trafficGenerator - terminating...")
                             self.terminateTraffic()
 
-                    # Sleep a bit
-                    #time.sleep(1)
-                    
-                # Stop traffic
-                log.debug("Traffic finished - terminating...")
+                # Stop traffic immediately
+                log.debug("Scheduling finished - terminate received ...")
                 self.terminateTraffic()
 
-                
+
 if __name__ == "__main__":
     import os
     # Name of the flowServer is passed when called
