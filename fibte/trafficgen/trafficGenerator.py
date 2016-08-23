@@ -598,8 +598,8 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     #group = parser.add_mutually_exclusive_group()
-    parser.add_argument('--terminate', help='Terminate ongoing traffic', action='store_true')
 
+    parser.add_argument('--terminate', help='Terminate any ongoing traffic', action='store_true')
     parser.add_argument('-t', '--time',
                            help='Duration of the traffic generator',
                            type=int,
@@ -623,12 +623,11 @@ if __name__ == "__main__":
     parser.add_argument('-s', '--time_step',
                            help="Granularity at which we inspect the generated traffic so that the rates are kept",
                            type=int,
-                           default=0)
+                           default=1)
 
     parser.add_argument('--senders',
                            help='List of switch edges or pods that can send traffic',
                            default="all")
-
 
     parser.add_argument('--receivers',
                            help='List of switch edges or pods that can receive traffic',
@@ -639,26 +638,31 @@ if __name__ == "__main__":
                            action="store_true")
 
     parser.add_argument('--load_traffic',
-                           help='load traffic from a file so it can be repeated',
+                        help='load traffic from a file so it can be repeated',
                            default="")
 
+    # Parse the arguments
     args = parser.parse_args()
 
+    # Prepare senders and receivers
     senders = args.senders.split(",")
     receivers = args.receivers.split(",")
 
     # Start the TG object
     tg = TrafficGenerator(pMice=args.mice, pElephant=args.elephant)
 
+    # Start counting time
     t = time.time()
-
     if args.terminate:
+        print "Terminating ongoing traffic!"
         tg.terminateTraffic()
 
     else:
-
         # If traffic must be loaded
         if args.load_traffic:
+            msg = "Loading traffic from file <- {0}"
+            print msg.format(args.load_traffic)
+
             # Fetch traffic from file
             traffic = pickle.load(open(args.load_traffic,"r"))
 
@@ -671,8 +675,13 @@ if __name__ == "__main__":
                                         flowRate=args.flow_rate,totalTime=args.time,
                                         timeStep=args.time_step)
 
+            msg = "Generating traffic:\n\tSenders: {0}\n\tReceivers: {1}\n\tFlow rate: {2}\n\t"
+            msg += "Total time: {3}\n\tTime step: {4}"
+            print msg.format(args.senders, args.receivers, args.flow_rate, args.time, args.time_step)
+
             # If it must be saved
             if args.save_traffic:
+                msg = "Saving traffic file -> {0}"
                 filename = '{0}'.format(saved_traffic_folder)
                 filename += "{0}_to_{1}_m{2}e{3}_fr{4}_t{5}_ts{6}.traffic".format(','.join(senders), ','.join(receivers),
                                                                                   str(args.mice).replace('.', ','),
@@ -682,18 +691,19 @@ if __name__ == "__main__":
 
                 # Convert current ip's to hostnames
                 traffic = tg.changeTrafficIpsToHostnames(traffic)
-
+                print msg.format(filename)
                 with open(filename,"w") as f:
                     pickle.dump(traffic,f)
 
         # Orchestrate the traffic (either loaded or generated)
+        print "Scheduling traffic..."
         tg.schedule(traffic)
 
-    print "elapsed time ", time.time()-t
+    print "Elapsed time ", time.time()-t
 
 
 # Example commandline call:
-# python trafficGenerator.py --senders pod_0,pod_1 --receivers pod_2,pod_3 --mice 0.8 --elephant 0.2 --flow_rate 0.25 --time 300 --save_traffic pod01_to_pod02_m08e02_fr025_t300.traffic
-
+# python trafficGenerator.py --senders pod_0,pod_1 --receivers pod_2,pod_3 --mice 0.8 --elephant 0.2 --flow_rate 0.25 --time 300 --save_traffic
 # python trafficGenerator.py --terminate
+# python trafficGenerator.py --load_traffic saved_traffic/
 
