@@ -3,6 +3,7 @@ from fibte.misc.topology_graph import TopologyGraph
 from fibte import CFG
 import os
 import random
+import networkx as nx
 
 """
 Module that defines the DCGraph object, which extends the nx.DiGraph class
@@ -118,11 +119,12 @@ class DCDiGraph(DiGraph):
         """
         if pod == None and type == 'core' and self._valid_core_index(index):
             return [r for (r, data) in self.core_routers_iter(data=True) if data['index'] == index][0]
-        elif pod != None and type in ['edge', 'aggregation'] and (self._valid_edge_index(index) or self._valid_aggregation_index(index)):
+
+        elif pod != None and self._valid_pod_number(pod) and type in ['edge', 'aggregation'] and (self._valid_edge_index(index) or self._valid_aggregation_index(index)):
             if type == 'edge':
-                return [r for (r, data) in self.edge_routers_iter(data=True) if data['index'] == index][0]
+                return [r for (r, data) in self.edge_routers_iter(data=True) if data['index'] == index and data['pod'] == pod][0]
             else:
-                return [r for (r, data) in self.aggregation_routers_iter(data=True) if data['index'] == index][0]
+                return [r for (r, data) in self.aggregation_routers_iter(data=True) if data['index'] == index and data['pod'] == pod][0]
         else:
             raise ValueError("Wrong router position")
 
@@ -143,6 +145,9 @@ class DCDiGraph(DiGraph):
 
     def _valid_core_index(self, core_index):
         return core_index >= 0 and core_index <= (((self.k / 2) ** 2) - 1)
+
+    def _valid_pod_number(self, pod):
+        return (pod >= 0) and (pod <= self.k - 1)
 
     def _valid_aggregation_core_indexes(self, agg_index, core_index):
         if self._valid_aggregation_index(agg_index) and self._valid_core_index(core_index):
@@ -351,10 +356,76 @@ class DCGraph(DCDiGraph):
             return dc_dag
         else:
             raise ValueError("Sink must be an edge router. {0} isn't".format(sinkid))
+    # old getRandomDag code
 
-    def get_random_dag(self, sinkid):
-        #TODO
-        pass
+    # def getRandomDag(self, prefix):
+    #     """
+    #     Returns a random dag (upwards) from every
+    #     other prefix to specified target prefix.
+    #
+    #     :param prefix:
+    #     :return:
+    #     """
+    #     # Result is stored here
+    #     rdag = nx.DiGraph()
+    #
+    #     # Get first the gateway edge router of the prefix
+    #     gwRouter = self.getGatewayRouter(prefix)
+    #
+    #     # Get pod number
+    #     prefixPod = self.getRouterPod(gwRouter)
+    #
+    #     # Then starting at every other edge
+    #     for router in self.getEdgeRouters():
+    #
+    #         # Get pod of the router
+    #         rPod = self.getRouterPod(router)
+    #
+    #         # If they are in different pods
+    #         if rPod != prefixPod:
+    #
+    #             # Make uplink choices
+    #             choices = self.getRandomUpLinkChoice(max_depth=2)
+    #
+    #             # Add corresponding edges
+    #             for choice in choices:
+    #                 # Fetch aggregation router chosen
+    #                 aggChosen = self.getRouterFromIndex(type='aggregation', index=choice[0], pod=rPod)
+    #
+    #                 # Add the edge from edge router to randomly chosen aggregation router
+    #                 rdag.add_edge(router, aggChosen)
+    #
+    #                 # Traverse now the core router choices from each aggregation
+    #                 for subchoice in choice[1]:
+    #                     # Fetch core router
+    #                     coreRouter = self.getRouterFromIndex(type='core', index=subchoice[0])
+    #
+    #                     # Add edge aggregation -> core
+    #                     rdag.add_edge(aggChosen, coreRouter)
+    #
+    #                     # Add also here the downlink edge core -> aggregation
+    #                     corrAggr = self.getConnectedAggregation(coreRouter=coreRouter, pod=prefixPod)
+    #                     rdag.add_edge(coreRouter, corrAggr)
+    #
+    #         # Edge router in the same pod
+    #         else:
+    #             # Check that it's not himself
+    #             if router != gwRouter:
+    #                 # Draw also the used links (inside pod)
+    #                 choices = self.getRandomUpLinkChoice(max_depth=1)
+    #
+    #                 # Add corresponding edges
+    #                 for choice in choices:
+    #                     # Fetch aggregation router chosen
+    #                     aggChosen = self.getRouterFromIndex(type='aggregation', index=choice[0], pod=rPod)
+    #
+    #                     # Add the edge from edge router to randomly chosen aggregation router
+    #                     rdag.add_edge(router, aggChosen)
+    #
+    #                     # Add also the downlink fixed link: aggregation -> edge router
+    #                     rdag.add_edge(aggChosen, gwRouter)
+    #
+    #     return rdag
 
 class DCDag(DCDiGraph):
     """
@@ -379,7 +450,15 @@ class DCDag(DCDiGraph):
         """
         other = DCDag(self.sink, self.k)
         for (u, v, data) in self.edges_iter(data=True):
-             other.add_edge(self.get_router_name(u), self.get_router_name(v))
+            other.add_edge(self.get_router_name(u), self.get_router_name(v))
+        return other
+
+    def _get_printable_uplinks(self, source):
+        other = DCDag(self.sink, self.k)
+        for ar in self.successors(source):
+            other.add_edge(self.get_router_name(source), self.get_router_name(ar))
+            for cr in self.successors(ar):
+                other.add_edge(self.get_router_name(ar), self.get_router_name(cr))
         return other
 
     def _build_from_dc_graph(self, dc_graph):
@@ -409,8 +488,9 @@ class DCDag(DCDiGraph):
     def is_valid_dc_dag(self):
         # Check that number of nodes is complete
         if len(self.nodes()) == (self.k**2 + (self.k**2)/4):
-            #TODO: Check that all nodes have at least one path to the single sink! (with nx)
-            pass
+            # Check that at least one path exists from all other nodes to sink
+            sink_id = self.get_sink_id()
+            return all([nx.has_path(self, node, sink_id) for node in self.nodes_iter() if node != sink_id])
         else:
             print 'Nodes are missing: {0} nodes'.format(len(self.nodes()))
             return False
@@ -507,24 +587,22 @@ class DCDag(DCDiGraph):
         Given a source, choses a random set of upwards paths
         towards the sink, and modifies the DAG accordingly.
         """
-        #TODO: test it
-
         # Get source pod
         src_pod = self.get_router_pod(source)
 
         # Generate random uplink choice from edge
-        random_choice = self._get_random_uplink_choice(max_depth=2)
+        random_choice = self._get_random_uplink_choice()
 
         same_sink_pod = False
-        if src_pod != self.get_sink_pod():
+        if src_pod == self.get_sink_pod():
             same_sink_pod = True
 
         # Here we accumulate chosen edges
-        chosen_edges = []
+        chosen_edge_to_aggr = []
+        chosen_aggr_to_core = []
 
         # Iterate choice
-        for choice in random_choice:
-            aggr_index = choice[0]
+        for aggr_index, core_indexes in random_choice.iteritems():
 
             # Check if uplink exists
             ar = self.get_router_from_position(type='aggregation', index=aggr_index, pod=src_pod)
@@ -533,126 +611,73 @@ class DCDag(DCDiGraph):
             self.add_uplink(source, ar)
 
             # Add it to chosen links
-            chosen_edges.append((source, ar))
+            chosen_edge_to_aggr.append((source, ar))
 
             if not same_sink_pod:
-                # Add also core router choices
-                core_indexes = [i for (i, _) in choice[1]]
-
                 # Get core routers from index
                 crs = [self.get_router_from_position(type='core', index=ci) for ci in core_indexes]
                 add_crs = [self.add_uplink(ar, cr) for cr in crs]
 
                 # Append them to chosen edges
-                add_crs = [chosen_edges.append((ar, cr)) for cr in crs]
+                add_crs = [chosen_aggr_to_core.append((ar, cr)) for cr in crs]
 
         # Check for uplinks that should not be there and remove them
-        remove1 = [self.remove_edge(source, arx) for arx in self.successors(source) if (source, arx) not in chosen_edges]
+        remove1 = [self.remove_edge(source, arx) for arx in self.successors(source) if (source, arx) not in chosen_edge_to_aggr]
         if not same_sink_pod:
             # Check also for the core routers
-            remove2 = [self.remove_edge(arx, crx) for arx in self.successors(source) for crx in self.successors(arx) if (arx, crx) not in chosen_edges]
+            remove2 = [self.remove_edge(arx, crx) for arx in self.successors(source) for crx in self.successors(arx) if (arx, crx) not in chosen_aggr_to_core]
 
-
-    # def getRandomDag(self, prefix):
-    #     """
-    #     Returns a random dag (upwards) from every
-    #     other prefix to specified target prefix.
-    #
-    #     :param prefix:
-    #     :return:
-    #     """
-    #     # Result is stored here
-    #     rdag = nx.DiGraph()
-    #
-    #     # Get first the gateway edge router of the prefix
-    #     gwRouter = self.getGatewayRouter(prefix)
-    #
-    #     # Get pod number
-    #     prefixPod = self.getRouterPod(gwRouter)
-    #
-    #     # Then starting at every other edge
-    #     for router in self.getEdgeRouters():
-    #
-    #         # Get pod of the router
-    #         rPod = self.getRouterPod(router)
-    #
-    #         # If they are in different pods
-    #         if rPod != prefixPod:
-    #
-    #             # Make uplink choices
-    #             choices = self.getRandomUpLinkChoice(max_depth=2)
-    #
-    #             # Add corresponding edges
-    #             for choice in choices:
-    #                 # Fetch aggregation router chosen
-    #                 aggChosen = self.getRouterFromIndex(type='aggregation', index=choice[0], pod=rPod)
-    #
-    #                 # Add the edge from edge router to randomly chosen aggregation router
-    #                 rdag.add_edge(router, aggChosen)
-    #
-    #                 # Traverse now the core router choices from each aggregation
-    #                 for subchoice in choice[1]:
-    #                     # Fetch core router
-    #                     coreRouter = self.getRouterFromIndex(type='core', index=subchoice[0])
-    #
-    #                     # Add edge aggregation -> core
-    #                     rdag.add_edge(aggChosen, coreRouter)
-    #
-    #                     # Add also here the downlink edge core -> aggregation
-    #                     corrAggr = self.getConnectedAggregation(coreRouter=coreRouter, pod=prefixPod)
-    #                     rdag.add_edge(coreRouter, corrAggr)
-    #
-    #         # Edge router in the same pod
-    #         else:
-    #             # Check that it's not himself
-    #             if router != gwRouter:
-    #                 # Draw also the used links (inside pod)
-    #                 choices = self.getRandomUpLinkChoice(max_depth=1)
-    #
-    #                 # Add corresponding edges
-    #                 for choice in choices:
-    #                     # Fetch aggregation router chosen
-    #                     aggChosen = self.getRouterFromIndex(type='aggregation', index=choice[0], pod=rPod)
-    #
-    #                     # Add the edge from edge router to randomly chosen aggregation router
-    #                     rdag.add_edge(router, aggChosen)
-    #
-    #                     # Add also the downlink fixed link: aggregation -> edge router
-    #                     rdag.add_edge(aggChosen, gwRouter)
-    #
-    #     return rdag
-
-
-    def _get_random_uplink_choice(self, max_depth=2, curr_depth=0):
+    def set_ecmp_uplinks(self, source):
         """
-        Recursive function that returns a random number of random choices
-        that correspond to the paths taken  from an edge node to a set of
-        core routers.
+        Sets the original subdag from source to destination
+        :param source:
+        :return:
         """
-        if curr_depth == max_depth:
-            return []
+        # Get source pod
+        src_pod = self.get_router_pod(source)
 
-        else:
-            if curr_depth == 0:
-                # Draw how many
-                n = random.randint(1, self.k/2)
+        same_sink_pod = False
+        if src_pod == self.get_sink_pod():
+            same_sink_pod = True
 
-                # Draw which
-                indexes = range(0, self.k/2)
-                random.shuffle(indexes)
-                chosen = indexes[:n]
+        # Add edge->aggregation default edges
+        action = [self.add_uplink(source, ar) for ar in self.successors(source)]
 
-            elif curr_depth == 1:
-                # Draw how many
-                n = random.randint(1, (self.k**2/4))
+        # If not in same pod as sink
+        if not same_sink_pod:
+            # Add aggr->core too
+            action = [self.add_uplink(ar, cr) for ar in self.successors(source) for cr in self.successors(ar)]
 
-                # Draw which
-                indexes = range(0, (self.k**2/4))
-                random.shuffle(indexes)
-                chosen = indexes[:n]
+    def _get_random_uplink_choice(self):
+        """
+        Assume you are in an edge node
+        :return:
+        """
+        random_choice = {}
 
-            new_current_depth = curr_depth + 1
-            return [(c, self._get_random_uplink_choice(max_depth, curr_depth=new_current_depth)) for c in chosen]
+        # Draw how many aggregations from same pod
+        n_agg = random.randint(1, self.k/2)
+
+        # Draw which ones
+        indexes = range(0, self.k/2)
+        random.shuffle(indexes)
+        chosen = indexes[:n_agg]
+
+        # Append aggregation choices
+        append_aggregation_choices = [random_choice.setdefault(c, []) for c in chosen]
+        for i in chosen:
+            # Compute valid core_indexes
+            core_indexes = range((self.k/2)*i, (i+1)*(self.k/2))
+
+            # Compute how many
+            n_cr = random.randint(1, self.k/2)
+
+            random.shuffle(core_indexes)
+
+            # Choose which of them
+            random_choice[i] = core_indexes[:n_cr]
+
+        return random_choice
 
     def all_paths_to_sink(self, source):
         #TODO
@@ -662,8 +687,11 @@ if __name__ == "__main__":
 
     dcGraph = DCGraph(k=4)
     edgeRouters = dcGraph.edge_routers()
-    sink = edgeRouters[4]
+    sink = edgeRouters[random.randint(3, 7)]
     dcDag = dcGraph.get_default_ospf_dag(sinkid=sink)
-    source = edgeRouters[7]
-    import ipdb; ipdb.set_trace()
-    dcDag.modify_random_uplinks(source)
+    source = edgeRouters[0]
+    for i in range(20000):
+        dcDag.modify_random_uplinks(source=source)
+        if not dcDag.is_valid_dc_dag():
+            import ipdb; ipdb.set_trace()
+
