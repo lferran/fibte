@@ -47,8 +47,32 @@ class GetLoads(object):
         # Fat-Tree parameter
         self.k = k
 
-        # Load read-outs interval
+        # Load read-outs intervalt
         self.time_interval = time_interval
+
+        # Create the dictionary to store temporary aggregation loads
+        self.aggregation_loads = self.createAggregationLoads()
+
+    def createAggregationLoads(self):
+        d = {}
+        edgeRouters = self.topology.getEdgeRouters()
+        coreRouters = self.topology.getCoreRouters()
+        others = edgeRouters + coreRouters
+        for u in self.topology.getAgreggationRouters():
+            u_i = self.topology.getRouterIndex(u)
+            u_pod = self.topology.getRouterPod(u)
+            d[u] = {}
+            for v in others:
+                if v in edgeRouters:
+                    v_pod = self.topology.getRouterPod(v)
+                    if v_pod == u_pod:
+                        d[u][v] = {'in': 0, 'out': 0}
+
+                elif v in coreRouters:
+                    v_i = self.topology.getRouterIndex(v)
+                    if v_i in range((self.k/2)*u_i, (u_i+1)*(self.k/2)):
+                        d[u][v] = {'in': 0, 'out': 0}
+        return d
 
     def readLoads(self):
         """
@@ -109,6 +133,21 @@ class GetLoads(object):
 
         return bisectionBandwidth
 
+    def getAggregationTraffic(self):
+        # Get aggregation routers
+        aggregationRouters = set(self.topology.getAgreggationRouters())
+
+        readout_time = time.time()
+        for (a, b), load in self.link_loads.iteritems():
+            if a in aggregationRouters:
+                self.aggregation_loads[a][b]['out'] = load
+            elif b in aggregationRouters:
+                self.aggregation_loads[b][a]['in'] = load
+
+        aggregationTraffic = self.aggregation_loads.copy()
+        aggregationTraffic['time'] = readout_time
+        return aggregationTraffic
+
     def run(self):
         # Log a bit
         log.info("GetLoads thread is active")
@@ -123,45 +162,58 @@ class GetLoads(object):
         # File for bisection bandwidth
         bb_file = open("{1}bisection_bw_file_{0}.txt".format(self.k, results_folder), "w")
 
+        # File for aggregation traffic
+        agg_file = open("{1}aggregation_traffic_{0}.txt".format(self.k, results_folder), "w")
+
         while True:
-            # Sleep first the exact remaining time
-            time.sleep(max(0, start_time + i * interval - time.time()))
-            now = time.time()
-
-            # Fill loads of the router edges into link_loads
-            self.topology.routerUsageToLinksLoad(self.readLoads(), self.link_loads)
-            # print {x:y for x,y in self.link_loads.items() if any("sw" in e for e in x)}
-
-            # Print
             try:
-                # Get In&Out traffic
-                in_traffic, out_traffic = self.getInOutTraffic()
+                # Sleep first the exact remaining time
+                time.sleep(max(0, start_time + i * interval - time.time()))
+                now = time.time()
 
-                # Get bisection BW
-                bisecBW = self.getBisectionTraffic()
+                # Fill loads of the router edges into link_loads
+                self.topology.routerUsageToLinksLoad(self.readLoads(), self.link_loads)
+                # print {x:y for x,y in self.link_loads.items() if any("sw" in e for e in x)}
 
-                max_bisecBW = ((self.k**3)/4.0)#*LINK_BANDWIDTH
-                bisecBw_ratio = round((bisecBW / max_bisecBW)*100.0, 3)
+                # Print
+                try:
+                    # Save all link loads
+                    with open("{1}getLoads_linkLoad_{0}".format(self.k, results_folder), "w") as f:
+                        pickle.dump(self.link_loads, f)
 
-                # Save in_out traffic in a file
-                in_out_file.write("{0},{1}\n".format(in_traffic, out_traffic))
-                in_out_file.flush()
+                    # Get In&Out traffic
+                    in_traffic, out_traffic = self.getInOutTraffic()
 
-                # Save bisection bw in a file
-                bb_file.write("{0},{1}\n".format(bisecBW, bisecBw_ratio))
-                bb_file.flush()
+                    # Get bisection BW
+                    bisecBW = self.getBisectionTraffic()
 
-                # Save all link loads
-                with open("{1}getLoads_linkLoad_{0}".format(self.k, results_folder), "w") as f:
-                    pickle.dump(self.link_loads, f)
+                    max_bisecBW = ((self.k**3)/4.0)#*LINK_BANDWIDTH
+                    bisecBw_ratio = round((bisecBW / max_bisecBW)*100.0, 3)
 
-            except Exception, e:
-                log.error("Error in run(): {0}".format(e))
+                    # Get aggreagation traffic
+                    aggTraffic = self.getAggregationTraffic()
+
+                    # Save in_out traffic in a file
+                    in_out_file.write("{0},{1}\n".format(in_traffic, out_traffic))
+                    in_out_file.flush()
+
+                    # Save bisection bw in a file
+                    bb_file.write("{0},{1}\n".format(bisecBW, bisecBw_ratio))
+                    bb_file.flush()
+
+                    # Save aggregation traffic in a file
+                    agg_file.write("{0}\n".format(json.dumps(aggTraffic)))
+
+                except Exception as e:
+                    log.error("Error in run(): {0}".format(e))
+                    break
+
+            except KeyboardInterrupt:
+                #log.info("KeyboardInterrupt catched! Shutting down...")
                 break
 
             i += 1
             #print time.time() - now
-
 
 if __name__ == "__main__":
     import argparse
