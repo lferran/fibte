@@ -134,6 +134,11 @@ def keepSending(initialDestinations,rate,totalTime):
             dport = 6005
 
 def isElephant(flow):
+    """
+    Function that cheks if flow is elephant
+
+    returns: boolean
+    """
     return flow['size'] >= ELEPHANT_SIZE_RANGE[0]
             
 def sendFlowNotifyController(**flow):
@@ -149,8 +154,10 @@ def sendFlowNotifyController(**flow):
             log.debug("New ELEPHANT is STARTING: to {0} {1}(bps) during {2}".format(flow['dst'], flow['size'], flow['duration']))
             # Notify controller that an elephant flow started
             client.send(json.dumps({"type": "startingFlow", "flow": flow}), "")
+
         except socket.error, v:
-            log.error("[Connectoin refused] Controller cound not be informed.")
+            log.error("[Connectoin refused] Controller cound not be informed about: startingFlow")
+
     # Close the socket
     client.sock.close()
 
@@ -163,9 +170,12 @@ def stopFlowNotifyController(**flow):
     client = UnixClient("/tmp/controllerServer")
 
     log.debug("New ELEPHANT is STOPPING: to {0} {1}(bps) during {2}".format(flow['dst'], flow['size'], flow['duration']))
-    
-    # Notify controller that elephant flow finished
-    client.send(json.dumps({"type": "stoppingFlow", "flow": flow}), "")
+
+    try:
+        # Notify controller that elephant flow finished
+        client.send(json.dumps({"type": "stoppingFlow", "flow": flow}), "")
+    except socket.error, v:
+        log.error("[Connectoin refused] Controller cound not be informed about: stoppingFlow")
 
     # Close socket
     client.close()    
