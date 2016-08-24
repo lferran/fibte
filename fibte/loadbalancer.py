@@ -155,7 +155,7 @@ class LBController(object):
             if len(pred) == 1 and not self.network_graph.is_fake_route(pred[0], prefix):
                 return pred[0]
             else:
-                real_gw = [p for p in pred if self.network_graph.is_fake_route(p, prefix)]
+                real_gw = [p for p in pred if not self.network_graph.is_fake_route(p, prefix)]
                 if len(real_gw) == 1:
                     return real_gw[0]
                 else:
@@ -323,14 +323,15 @@ class LBController(object):
         """
         log.info("Keyboad Interrupt catched!")
 
-        # Remove all lies
-        import ipdb; ipdb.set_trace()
+        log.info("Cleaning up the network from fake LSAs ...")
+        # Remove all lies before leaving
+        for prefix in self.network_graph.prefixes:
+            self.sbmanager.remove_dag_requirement(prefix)
 
         # self.p_getLoads.terminate()
 
         # Finally exit
         os._exit(0)
-
 
     def run(self):
         # Receive events and handle them
@@ -360,6 +361,8 @@ class ECMPController(LBController):
 class RandomUplinksController(LBController):
     def __init__(self, doBalance=True, k=4):
         super(RandomUplinksController, self).__init__(doBalance, k)
+        # Keeps track of elephant flows from each pod to every destination
+        self.flows_per_pod = {px: {pod: [] for pod in range(0, self.k)} for px in self.network_graph.prefixes}
 
     def handleFlow(self, event):
         """
@@ -374,17 +377,54 @@ class RandomUplinksController(LBController):
 
         elif event["type"] == 'stoppingFlow':
             flow = event['flow']
-            #self.resetOSPFDag(flow)
+            self.resetOSPFDag(flow)
 
         else:
             log.error("Unknown event type: {0}".format(event['type']))
 
+    def areOngoingFlowsInPod(self, dst_prefix, src_pod=None):
+        """Returns the list of ongoing elephant flows to
+        destination prefix from specific pod.
+
+        If pod==None, all flows to dst_prefix are returned
+
+        :param src_pod:
+        :param dst_prefix:
+        :return:
+        """
+        if src_pod != None:
+            if self.dc_graph._valid_pod_number(src_pod):
+                return self.flows_per_pod[dst_prefix][src_pod] != []
+            else:
+                raise ValueError("Wrong pod number: {0}".format(src_pod))
+        else:
+            return any([True for _, flowlist in self.flows_per_pod[dst_prefix].iteritems() if flowlist != []])
+
+    def getOngoingFlowsInPod(self, dst_prefix, src_pod=None):
+        """Returns the list of ongoing elephant flows to
+        destination prefix from specific pod.
+
+        If pod==None, all flows to dst_prefix are returned
+
+        :param src_pod:
+        :param dst_prefix:
+        :return:
+        """
+        if src_pod != None:
+            if self.dc_graph._valid_pod_number(src_pod):
+                return self.flows_per_pod[dst_prefix][src_pod]
+            else:
+                raise ValueError("Wrong pod number: {0}".format(src_pod))
+        else:
+            final_list = []
+            action = [final_list.append(flowlist) for _, flowlist in self.flows_per_pod[dst_prefix].iteritems()]
+            return final_list
+
     def chooseRandomUplinks(self, flow):
         """
         Given a new elephant flow from a certain source, it forces a random
-        uplink to the core layer, starting at the source.
+        uplink from that pod to the core layer.
 
-        (without affecting all other paths in other pods)
         :param flow:
         :return:
         """
@@ -396,44 +436,83 @@ class RandomUplinksController(LBController):
 
         # Get gateway router
         src_gw = self.getGatewayRouter(src_prefix)
-        dst_gw = self.getGatewayRouter(dst_prefix)
 
-        # Retrieve current DAG for destination prefix
-        current_prefix_dag = self.dags[dst_prefix]['dag']
+        # Get source gateway pod
+        src_pod = self.dc_graph.get_router_pod(routerid=src_gw)
 
-        # Modify DAG
-        current_prefix_dag.modify_random_uplinks(source=src_gw)
+        # Check if already ongoing flows
+        if not self.areOngoingFlowsInPod(dst_prefix=dst_prefix, src_pod=src_pod):
+            log.debug("There are no ongoing flows to {0} from pod {1}".format(dst_prefix, src_pod))
 
-        # Apply DAG
-        import ipdb; ipdb.set_trace()
-        self.sbmanager.add_dag_requirement(prefix=dst_prefix, dag=current_prefix_dag)
-        print "-"*40
-        print
-        print
-        log.info("A new DAG was forced to prefix {0}".format(dst_prefix))
+            # Retrieve current DAG for destination prefix
+            current_dag = self.dags[dst_prefix]['dag']
+
+            # Modify DAG
+            current_dag.modify_random_uplinks(src_pod=src_pod)
+
+            # Apply DAG
+            self.sbmanager.add_dag_requirement(prefix=dst_prefix, dag=current_dag)
+            log.info("A new random uplink DAG from pod {0} was forced to prefix {1}".format(src_pod, dst_prefix))
+
+        # There are already ongoing flows!
+        else:
+            log.debug("There are ongoing flows from pod {0} to prefix {1}".format(src_pod, dst_prefix))
+
+        # Add flow to flows_per_pod
+        self.flows_per_pod[dst_prefix][src_pod].append(flow)
 
     def resetOSPFDag(self, flow):
+        """
+        When an elephant flow finishes, this function tries to reset
+        the random uplink from the pod to the core to its original
+        OSPF dag.
+
+        It will only do it if no more elephant flows to the destination
+        are ongoing from that pod.
+
+        :param flow:
+        :return:
+        """
         reset_ospf_time = time.time()
+
         # Get prefix from host ip
         src_ip = flow['src']
         dst_ip = flow['dst']
         src_prefix = self.getMatchingPrefix(src_ip)
         dst_prefix = self.getMatchingPrefix(dst_ip)
 
-        # Get gateway router
+        # Get gateway router for source
         src_gw = self.getGatewayRouter(src_prefix)
-        dst_gw = self.getGatewayRouter(dst_prefix)
 
-        # Retrieve current DAG for destination prefix
-        current_prefix_dag = self.dags[dst_prefix]['dag']
+        # Get source gateway pod
+        src_pod = self.dc_graph.get_router_pod(routerid=src_gw)
 
-        # Modify DAG
-        current_prefix_dag.set_ecmp_uplinks(source=src_gw)
+        # Remove flow from flows_per_pod
+        self.flows_per_pod[dst_prefix][src_pod].remove(flow)
 
-        # Apply DAG
-        self.sbmanager.add_dag_requirement(prefix=dst_prefix, dag=current_prefix_dag)
-        log.info("A new DAG was forced to prefix {0}".format(dst_prefix))
-        log.debug("It took {0} to reset the OSPF dag to prefix {1}".format(round(time.time() - reset_ospf_time, 3), dst_prefix))
+        # Check if already ongoing flows
+        if not self.areOngoingFlowsInPod(dst_prefix=dst_prefix, src_pod=src_pod):
+            # Retrieve current DAG for destination prefix
+            current_dag = self.dags[dst_prefix]['dag']
+
+            # Modify DAG -- set uplinks from source pod to default ECMP
+            current_dag.set_ecmp_uplinks(src_pod=src_pod)
+
+            # Apply DAG
+            self.sbmanager.add_dag_requirement(prefix=dst_prefix, dag=current_dag)
+            log.info("A new DAG was forced -> {0}".format(dst_prefix))
+
+        # Still ongoing flows from that source pod
+        else:
+            log.debug("There are ongoing flows from pod{0} -> {1}".format(src_pod, dst_prefix))
+
+        elapsed_time = round(time.time()-reset_ospf_time, 3)
+        log.debug("It took {0}s to reset the default OSPF uplinks: pod{1} -> {2}".format(elapsed_time, src_pod, dst_prefix))
+
+    def reset(self):
+        super(RandomUplinksController, self).reset()
+        # Reset the flows_per_pod too
+        self.flows_per_pod = {px: {pod: [] for pod in range(0, self.k)} for px in self.network_graph.prefixes}
 
 if __name__ == '__main__':
     from fibte.logger import log
