@@ -710,10 +710,10 @@ class TopologyGraph(TopologyDB):
         return self.routersInterfaces[router][mac]['ifname']
 
     def routerUsageToLinksLoad(self, routersUsage, link_loads):
-
         # For every router
         for router in routersUsage:
             isEdge = self.networkGraph.graph.node[router].has_key("edge")
+            isAggr = self.networkGraph.graph.node[router].has_key("aggregation")
             # For every router interface
             routerId = self.routerid(router)
             for intfData in self.routersInterfaces[routerId].values():
@@ -726,7 +726,12 @@ class TopologyGraph(TopologyDB):
 
                          if self.network[self.network[router][intfData["ifname"]]["connectedTo"]]["type"] == "switch":
                              link_loads[(self.network[router][intfData["ifname"]]["connectedTo"], router)] = round(routersUsage[router]["in"][intfData['ifname']], 3)
-
+                elif isAggr:
+                    # Using /proc/net/dev
+                    if routersUsage[router]["out"].has_key(intfData["ifname"]):
+                        link_loads[(router, self.network[router][intfData["ifname"]]["connectedTo"])] = round(routersUsage[router]["out"][intfData['ifname']], 3)
+                    if routersUsage[router]["in"].has_key(intfData["ifname"]):
+                        link_loads[(self.network[router][intfData["ifname"]]["connectedTo"], router)] = round(routersUsage[router]["in"][intfData['ifname']], 3)
                 else:
                     # Only for countersDev class
                     if routersUsage[router]["out"].has_key(intfData["ifname"]):

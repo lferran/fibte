@@ -582,102 +582,110 @@ class DCDag(DCDiGraph):
         # Remove old next hops
         pass
 
-    def modify_random_uplinks(self, source):
+    def modify_random_uplinks(self, src_pod):
         """
-        Given a source, choses a random set of upwards paths
+        Given a source pod, choses a random set of upwards paths
         towards the sink, and modifies the DAG accordingly.
         """
-        # Get source pod
-        src_pod = self.get_router_pod(source)
-
         # Generate random uplink choice from edge
-        random_choice = self._get_random_uplink_choice()
+        (edge_to_aggr, aggr_to_core) = self._get_random_uplink_choice()
 
         same_sink_pod = False
         if src_pod == self.get_sink_pod():
             same_sink_pod = True
 
-        # Here we accumulate chosen edges
-        chosen_edge_to_aggr = []
-        chosen_aggr_to_core = []
+        # Iterate choice for edges and aggr uplinks
+        for index in edge_to_aggr.keys():
+            # Get edge router
+            er = self.get_router_from_position(type='edge', index=index, pod=src_pod)
 
-        # Iterate choice
-        for aggr_index, core_indexes in random_choice.iteritems():
+            # Add edge->aggr uplinks
+            for aggr_index in edge_to_aggr[index]:
+                # Get chosen aggr
+                aggr = self.get_router_from_position(type='aggregation', index=aggr_index, pod=src_pod)
+                # Make uplink
+                self.add_uplink(er, aggr)
 
-            # Check if uplink exists
-            ar = self.get_router_from_position(type='aggregation', index=aggr_index, pod=src_pod)
+            # Compute the missing ones and delete them
+            existing = set(edge_to_aggr[index])
+            missing = set(range(0, self.k/2)).difference(existing)
+            for mi in missing:
+                # Get aggr router
+                m_aggr = self.get_router_from_position(type='aggregation', index=mi, pod=src_pod)
 
-            # Add uplinks
-            self.add_uplink(source, ar)
+                # Delete edge
+                if self.has_edge(er, m_aggr): self.remove_edge(er, m_aggr)
 
-            # Add it to chosen links
-            chosen_edge_to_aggr.append((source, ar))
-
+            # Make also the aggr->core ulinks
             if not same_sink_pod:
-                # Get core routers from index
-                crs = [self.get_router_from_position(type='core', index=ci) for ci in core_indexes]
-                add_crs = [self.add_uplink(ar, cr) for cr in crs]
+                # Get aggregation router
+                ar = self.get_router_from_position(type='aggregation', index=index, pod=src_pod)
+                for core_index in aggr_to_core[index]:
+                    # Get the core
+                    core = self.get_router_from_position(type='core', index=core_index)
+                    # Make uplink
+                    self.add_uplink(ar, core)
 
-                # Append them to chosen edges
-                add_crs = [chosen_aggr_to_core.append((ar, cr)) for cr in crs]
+                # Compute the missing ones
+                existing = set(aggr_to_core[index])
+                missing = set(range((self.k / 2) * index, (index + 1) * (self.k / 2))).difference(existing)
+                for mi in missing:
+                    # Get the core router
+                    mcore = self.get_router_from_position(type='core', index=mi)
 
-        # Check for uplinks that should not be there and remove them
-        remove1 = [self.remove_edge(source, arx) for arx in self.successors(source) if (source, arx) not in chosen_edge_to_aggr]
-        if not same_sink_pod:
-            # Check also for the core routers
-            remove2 = [self.remove_edge(arx, crx) for arx in self.successors(source) for crx in self.successors(arx) if (arx, crx) not in chosen_aggr_to_core]
+                    # Delete edge
+                    if self.has_edge(ar, mcore): self.remove_edge(ar, mcore)
 
-    def set_ecmp_uplinks(self, source):
+    def set_ecmp_uplinks(self, src_pod):
         """
-        Sets the original subdag from source to destination
+        Sets the original subdag from source pod to destination
         :param source:
         :return:
         """
-        # Get source pod
-        src_pod = self.get_router_pod(source)
-
         same_sink_pod = False
         if src_pod == self.get_sink_pod():
             same_sink_pod = True
 
-        # Add edge->aggregation default edges
-        action = [self.add_uplink(source, ar) for ar in self.successors(source)]
+        # Iterate pod routers
+        for e in range(0, self.k/2):
+            er = self.get_router_from_position(type='edge', index=e, pod=src_pod)
+            for a in range(0, self.k/2):
+                ar = self.get_router_from_position(type='aggregation', index=a, pod=src_pod)
+                if not self.has_edge(er, ar):
+                    self.add_uplink(er, ar)
 
-        # If not in same pod as sink
-        if not same_sink_pod:
-            # Add aggr->core too
-            action = [self.add_uplink(ar, cr) for ar in self.successors(source) for cr in self.successors(ar)]
+            if not same_sink_pod:
+                ar = self.get_router_from_position(type='aggregation', index=e, pod=src_pod)
+                for c in range((self.k / 2) * e, (e + 1) * (self.k / 2)):
+                    cr = self.get_router_from_position(type='core', index=c)
+                    if not self.has_edge(ar, cr):
+                        self.add_uplink(ar, cr)
 
     def _get_random_uplink_choice(self):
         """
-        Assume you are in an edge node
+        Get random uplink DAG for a whole pod.
         :return:
         """
-        random_choice = {}
+        edges_to_aggr = {}
+        aggr_to_core = {}
 
-        # Draw how many aggregations from same pod
-        n_agg = random.randint(1, self.k/2)
+        # Iterate edge/aggr indexes - make a choice for each of them
+        for index in range(0, self.k/2):
+            # Draw how many aggregations each edge is using
+            n_agg = random.randint(1, self.k / 2)
+            n_core = random.randint(1, self.k / 2)
 
-        # Draw which ones
-        indexes = range(0, self.k/2)
-        random.shuffle(indexes)
-        chosen = indexes[:n_agg]
+            # Draw which aggregation ones
+            aggr_indexes = range(0, self.k/2)
+            random.shuffle(aggr_indexes)
+            edges_to_aggr[index] = aggr_indexes[:n_agg]
 
-        # Append aggregation choices
-        append_aggregation_choices = [random_choice.setdefault(c, []) for c in chosen]
-        for i in chosen:
-            # Compute valid core_indexes
-            core_indexes = range((self.k/2)*i, (i+1)*(self.k/2))
-
-            # Compute how many
-            n_cr = random.randint(1, self.k/2)
-
+            # Draw which core ones
+            core_indexes = range((self.k / 2) * index, (index + 1) * (self.k / 2))
             random.shuffle(core_indexes)
+            aggr_to_core[index] = core_indexes[:n_core]
 
-            # Choose which of them
-            random_choice[i] = core_indexes[:n_cr]
-
-        return random_choice
+        return (edges_to_aggr, aggr_to_core)
 
     def all_paths_to_sink(self, source):
         #TODO
