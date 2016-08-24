@@ -34,8 +34,11 @@ def collectCounters(name='h_0_0', interval=1.5):
         # Checks if its a edge router
         isEdge = "e" in name
 
+        # Check if it's an aggregation router
+        isAggr = "a" in name
+
         # We use /proc/net/dev
-        counters = CountersDev(interfaces=IfDescr().getIfMapping(), isEdge=isEdge)
+        counters = CountersDev(interfaces=IfDescr().getIfMapping(), isEdge=isEdge, isAggr=isAggr)
 
         # Pid of each collectCounters process is written in a different file - to be able to stop them gracefully
         with open("{1}load_{0}.pid".format(name, tmp_files),"w") as f:

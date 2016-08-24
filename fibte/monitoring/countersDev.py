@@ -75,7 +75,7 @@ class IfDescr(object):
 
 class CountersDev(object):
 
-    def __init__(self,interfaces = [],isEdge = True):
+    def __init__(self,interfaces = [], isEdge = True, isAggr = True):
 
         # Interfaces for which we want to keep track of the counters
         self.interfaces = interfaces
@@ -85,8 +85,9 @@ class CountersDev(object):
 
         # Marks if interface is connecting the host to the edge routers
         self.isEdge = isEdge
+        self.isAggr = isAggr
 
-        if self.isEdge:
+        if self.isEdge or self.isAggr:
             self.counters = {"in": {x: 0 for x in interfaces}, "out": {x: 0 for x in interfaces}}
             self.totalBytes = {"out": 0, "in": 0}
         else:
@@ -111,7 +112,7 @@ class CountersDev(object):
         self.countersTimeStamp = now
 
         # Parse counters
-        if self.isEdge:
+        if self.isEdge or self.isAggr:
             counters = {"in": {}, "out": {}}
             for interface in values:
                 if interface[0][:-1] in self.interfaces:
@@ -136,7 +137,7 @@ class CountersDev(object):
         self.counters = counters
 
     def link_capacity(self):
-        if self.isEdge:
+        if self.isEdge or self.isAggr:
             return {"in": {x: self.countersDiff["in"][x]/(link_capacity*self.timeDiff) for x in self.countersDiff["in"]},
                     "out": {x:self.countersDiff["out"][x]/(link_capacity*self.timeDiff) for x in self.countersDiff["out"]}}
         else:
