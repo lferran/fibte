@@ -22,7 +22,7 @@ import os
 results_folder = os.path.join(os.path.dirname(__file__), 'results/')
 
 class GetLoads(object):
-    def __init__(self, k=4, time_interval=1):
+    def __init__(self, k=4, time_interval=1, algorithm=None):
 
         # Config logging to dedicated file for this thread
         handler = logging.FileHandler(filename='{0}getLoads_thread.log'.format(tmp_files))
@@ -46,6 +46,9 @@ class GetLoads(object):
 
         # Fat-Tree parameter
         self.k = k
+
+        # Algorithm that the LB is using
+        self.lb_algorithm = algorithm
 
         # Load read-outs intervalt
         self.time_interval = time_interval
@@ -157,13 +160,13 @@ class GetLoads(object):
         interval = self.time_interval
 
         # File for the in/out traffic
-        in_out_file = open("{1}in_out_file_{0}.txt".format(self.k, results_folder), "w")
+        in_out_file = open("{1}in_out_file_{0}_{2}.txt".format(self.k, results_folder,  self.lb_algorithm), "w")
 
         # File for bisection bandwidth
-        bb_file = open("{1}bisection_bw_file_{0}.txt".format(self.k, results_folder), "w")
+        bb_file = open("{1}bisection_bw_file_{0}_{2}.txt".format(self.k, results_folder, self.lb_algorithm), "w")
 
         # File for aggregation traffic
-        agg_file = open("{1}aggregation_traffic_{0}.txt".format(self.k, results_folder), "w")
+        agg_file = open("{1}aggregation_traffic_{0}_{2}.txt".format(self.k, results_folder, self.lb_algorithm), "w")
 
         while True:
             try:
@@ -222,9 +225,11 @@ if __name__ == "__main__":
 
     parser.add_argument('-k', '--k', help='Fat-Tree parameter', type=int, default=4)
 
+    parser.add_argument('-a', '--algorithm', help='Algorithm of the loadbalancer - used to save results file by algorithm name', type=str, default=None)
+
     parser.add_argument('-i', '--time_interval', help='Polling interval', type=float, default=1.5)
 
     args = parser.parse_args()
 
-    gl = GetLoads(k=args.k, time_interval=args.time_interval)
+    gl = GetLoads(k=args.k, time_interval=args.time_interval, algorithm=args.algorithm)
     gl.run()

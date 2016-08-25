@@ -155,8 +155,8 @@ def sendFlowNotifyController(**flow):
             # Notify controller that an elephant flow started
             client.send(json.dumps({"type": "startingFlow", "flow": flow}), "")
 
-        except socket.error, v:
-            log.error("[Connectoin refused] Controller cound not be informed about: startingFlow")
+        except Exception as e:
+            log.error("Controller cound not be informed about startingFlow event. Error {0}".format(e))
 
     # Close the socket
     client.sock.close()
@@ -174,8 +174,8 @@ def stopFlowNotifyController(**flow):
     try:
         # Notify controller that elephant flow finished
         client.send(json.dumps({"type": "stoppingFlow", "flow": flow}), "")
-    except socket.error, v:
-        log.error("[Connectoin refused] Controller cound not be informed about: stoppingFlow")
+    except Exception as e:
+        log.error("Controller cound not be informed about stoppingFlow event. Error: {0}".format(e))
 
     # Close socket
     client.close()    

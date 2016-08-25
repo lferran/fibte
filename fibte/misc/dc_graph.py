@@ -636,7 +636,7 @@ class DCDag(DCDiGraph):
                     # Delete edge
                     if self.has_edge(ar, mcore): self.remove_edge(ar, mcore)
 
-    def set_ecmp_uplinks(self, src_pod):
+    def set_ecmp_uplinks_from_pod(self, src_pod):
         """
         Sets the original subdag from source pod to destination
         :param source:
@@ -657,6 +657,30 @@ class DCDag(DCDiGraph):
             if not same_sink_pod:
                 ar = self.get_router_from_position(type='aggregation', index=e, pod=src_pod)
                 for c in range((self.k / 2) * e, (e + 1) * (self.k / 2)):
+                    cr = self.get_router_from_position(type='core', index=c)
+                    if not self.has_edge(ar, cr):
+                        self.add_uplink(ar, cr)
+
+    def set_ecmp_uplinks_from_source(self, src, previous_path):
+        if self.is_edge(src):
+            src_pod = self.get_router_pod(src)
+            src_index = self.get_router_index(src)
+
+            same_sink_pod = False
+            if src_pod == self.get_sink_pod():
+                same_sink_pod = True
+
+            for a in range(0, self.k / 2):
+                ar = self.get_router_from_position(type='aggregation', index=a, pod=src_pod)
+                if not self.has_edge(src, ar):
+                    self.add_uplink(src, ar)
+
+            previous_agg = previous_path[1]
+            previous_agg_index = self.get_router_index(previous_agg)
+            e = previous_agg_index
+            if not same_sink_pod:
+                ar = self.get_router_from_position(type='aggregation', index=e, pod=src_pod)
+                for c in range((self.k / 2) *e, (e + 1) * (self.k / 2)):
                     cr = self.get_router_from_position(type='core', index=c)
                     if not self.has_edge(ar, cr):
                         self.add_uplink(ar, cr)
@@ -690,6 +714,34 @@ class DCDag(DCDiGraph):
     def all_paths_to_sink(self, source):
         #TODO
         pass
+
+    def apply_path_to_core(self, source, core):
+        src_pod = self.get_router_pod(source)
+
+        same_sink_pod = False
+        if src_pod == self.get_sink_pod():
+            same_sink_pod = True
+
+        # Get core index
+        core_index = self.get_router_index(core)
+
+        # Get source pod
+        src_pod = self.get_router_pod(source)
+
+        # Get the aggregation index valid with core index
+        agg_index = [index for index in range(self.k/2) if self._valid_aggregation_core_indexes(index, core_index)][0]
+
+        # Get aggregation router
+        ar = self.get_router_from_position(type='aggregation', index=agg_index, pod=src_pod)
+
+        #Add source -> ar edge and remove the others
+        if not self.has_edge(source, ar): self.add_uplink(source, ar)
+        removal = [self.remove_edge(source, a) for a in self.successors(source) if a != ar]
+
+        if not same_sink_pod:
+            # Add ar->cr and remove others
+            if not self.has_edge(ar, core): self.add_uplink(ar, core)
+            removal = [self.remove_edge(ar, c) for c in self.successors(ar) if c != core]
 
 if __name__ == "__main__":
 

@@ -23,38 +23,40 @@ def signal_term_handler(signal, frame):
     import sys
     sys.exit(0)
 
+
 def launch_network(k = 4, bw=10):
     signal.signal(signal.SIGTERM, signal_term_handler)
 
     # Cleanup the network
     cleanup()
-    sh("killall snmpd ospfd zebra pmacctd")
+    sh("killall snmpd ospfd zebra pmacctd getLoads.py")
 
     # Topology
     topo = FatTreeOOB(k=4, sflow=False, extraSwitch=False, bw=bw)
 
     # Interfaces
-    intf = custom(TCIntf, bw=bw)#, max_queue_size=1000)
+    intf = custom(TCIntf, bw=bw)  # , max_queue_size=1000)
 
     # Network
-    net = IPNet(topo = topo, debug = _lib.DEBUG_FLAG, intf = intf, host = MyCustomHost)
+    net = IPNet(topo=topo, debug=_lib.DEBUG_FLAG, intf=intf, host=MyCustomHost)
 
     # Save the TopoDB object
     TopologyDB(net=net).save(cfg.DB_path)
-    
+
     # Start the network
     net.start()
 
     print('*** Starting Flow Servers in virtualized hosts')
-    #import ipdb; ipdb.set_trace()
     for h in net.hosts:
-        # start flowServer
+        # Start flowServers
         h.cmd(flowServer_path + " {0} &".format(h.name))
-
+        print(h.name)
+            
     # Start the Fibbing CLI
     FibbingCLI(net)
 
     net.stop()
+
 
 def launch_controller():
     CFG.read(cfg.C1_cfg)

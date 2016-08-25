@@ -225,6 +225,7 @@ class FlowServer(object):
                 # While traffic stil ongoing
                 while self.scheduler_process.is_alive():
                     log.debug("Scheduler process is still alive -- Traffic ongoing")
+                    log.info("Processes: {0}".format(len(self.processes)))
 
                     # Check if new event in the queue
                     try:
@@ -246,7 +247,6 @@ class FlowServer(object):
                 # Stop traffic immediately
                 log.debug("Scheduling finished - terminate received ...")
                 self.terminateTraffic()
-
 
 if __name__ == "__main__":
     import os

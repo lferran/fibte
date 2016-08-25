@@ -50,7 +50,7 @@ class MyGraphProvider(SouthboundManager):
         HAS_INITIAL_GRAPH.set()
 
 class LBController(object):
-    def __init__(self, doBalance = True, k=4, load_variables=True):
+    def __init__(self, doBalance = True, k=4, algorithm=None, load_variables=True):
 
         # Config logging to dedicated file for this thread
         handler = logging.FileHandler(filename='{0}loadbalancer.log'.format(tmp_files))
@@ -65,6 +65,9 @@ class LBController(object):
 
         # Either we load balance or not
         self.doBalance = doBalance
+
+        # Loadbalancing strategy/algorithm
+        self.algorithm = algorithm
 
         # Lock for accessing link loads
         self.link_loads_lock = threading.Lock()
@@ -106,7 +109,7 @@ class LBController(object):
 
         # Start getLoads thread that reads from counters
         #os.system(getLoads_path + ' -k {0} &'.format(self.k))
-        self.p_getLoads = subprocess.Popen([getLoads_path, '-k', str(self.k)], shell=False)
+        self.p_getLoads = subprocess.Popen([getLoads_path, '-k', str(self.k), '-a', self.algorithm], shell=False)
 
         # Start getLoads thread reads from link usage
         thread = threading.Thread(target=self._getLoads, args=([1]))
@@ -197,6 +200,16 @@ class LBController(object):
             if hostip in prefix and prefix_len > longest_match[1]:
                 longest_match = (prefix, prefix_len)
         return longest_match[0].compressed
+
+    def getDestinationPrefixFromFlow(self, flow):
+        dst_ip = flow['dst']
+        dst_prefix = self.getMatchingPrefix(dst_ip)
+        return dst_prefix
+
+    def getSourcePrefixFromFlow(self, flow):
+        src_ip = flow['src']
+        src_prefix = self.getMatchingPrefix(src_ip)
+        return src_prefix
 
     def getConnectedPrefixes(self, edgeRouter):
         """
@@ -356,11 +369,11 @@ class LBController(object):
 
 class ECMPController(LBController):
     def __init__(self, doBalance=True, k=4):
-        super(ECMPController, self).__init__(doBalance, k)
+        super(ECMPController, self).__init__(doBalance, k, algorithm='ecmp')
 
 class RandomUplinksController(LBController):
     def __init__(self, doBalance=True, k=4):
-        super(RandomUplinksController, self).__init__(doBalance, k)
+        super(RandomUplinksController, self).__init__(doBalance, k, algorithm='random')
         # Keeps track of elephant flows from each pod to every destination
         self.flows_per_pod = {px: {pod: [] for pod in range(0, self.k)} for px in self.network_graph.prefixes}
 
@@ -496,7 +509,7 @@ class RandomUplinksController(LBController):
             current_dag = self.dags[dst_prefix]['dag']
 
             # Modify DAG -- set uplinks from source pod to default ECMP
-            current_dag.set_ecmp_uplinks(src_pod=src_pod)
+            current_dag.set_ecmp_uplinks_from_pod(src_pod=src_pod)
 
             # Apply DAG
             self.sbmanager.add_dag_requirement(prefix=dst_prefix, dag=current_dag)
@@ -513,6 +526,248 @@ class RandomUplinksController(LBController):
         super(RandomUplinksController, self).reset()
         # Reset the flows_per_pod too
         self.flows_per_pod = {px: {pod: [] for pod in range(0, self.k)} for px in self.network_graph.prefixes}
+
+class FirstFitController(LBController):
+    def __init__(self, doBalance=True, k=4, threshold=0.9):
+        super(FirstFitController, self).__init__(doBalance, k, algorithm='firstfit')
+
+        # Create structure where we store the ongoing elephant  flows in the graph
+        self.elephants_in_paths = self._createElephantInPathsDict()
+
+        # We consider congested a link more than threshold % of its capacity
+        self.capacity_threshold = threshold
+
+        # Store all paths --for performance reasons
+        self.edge_to_core_paths = self._generateEdgeToCorePaths()
+
+        # Keeps track to which core is each flow directed to
+        self.flow_to_core = {c:[] for c in self.dc_graph.core_routers_iter()}
+
+    def _generateEdgeToCorePaths(self):
+        d = {}
+        for edge in self.dc_graph.edge_routers_iter():
+            for core in self.dc_graph.core_routers_iter():
+                d[edge][core] = self._getPathFromEdgeToCore(edge, core)
+
+        return d
+
+    def _createElephantInPathsDict(self):
+        elephant_in_paths = self.dc_graph.copy()
+        for (u, v, data) in elephant_in_paths.edges_iter():
+            data['flows'] = []
+            data['capacity'] = LINK_BANDWIDTH
+
+        return elephant_in_paths
+
+    def addFlowToPath(self, flow, path):
+        edges = self.getEdgesFromPath(path)
+        core = path[-1]
+        for (u, v) in edges:
+            self.elephants_in_paths[u][v]['flows'].append(flow)
+            self.elephants_in_paths[u][v]['capacity'] -= flow['size']
+
+        # Add it to flow_to_core datastructure too
+        self.flow_to_core[core].append(flow)
+
+    def removeFlowFromPath(self, flow, path):
+        edges = self.getEdgesFromPath(path)
+        core = path[-1]
+        for (u, v) in edges:
+            if flow in self.elephants_in_paths[u][v]['flows']: self.elephants_in_paths[u][v]['flows'].remove(flow)
+            self.elephants_in_paths[u][v]['capacity'] += flow['size']
+
+        # Remove it from flow_to_core
+        if flow in self.flow_to_core[core]: self.flow_to_core[core].remove(flow)
+
+    def getPathFromEdgeToCore(self, edge, core):
+        return self.edge_to_core_paths[edge][core]
+
+    def _getPathFromEdgeToCore(self, edge, core):
+        return nx.dijkstra_path(self.dc_graph, edge, core)
+
+    def getEdgesFromPath(self, path):
+        return zip(path[:-1], path[1:])
+
+    def flowFitsInPath(self, flow, path):
+        """
+        Returns a bool indicating if flow fits in path
+        :param flow:
+        :param path:
+        :return: bool
+        """
+        path_edges = self.getEdgesFromPath(path)
+        return all([True if flow.size <= self.elephants_in_paths[u][v]['capacity'] else False for (u,v) in path_edges])
+
+    def getAvailableCorePaths(self, src_gw, flow):
+        """
+        Returns the list of available core router together with
+        their path from source gw.
+
+        It checks if flow fits in path and also
+        :param src_gw:
+        :param flow:
+        :return:
+        """
+        core_paths = []
+        for core in self.dc_graph.core_routers():
+            path = self.getPathFromEdgeToCore(src_gw, core)
+            if self.flowFitsInPath(flow, path):
+                if not self.collidesWithPreviousFlows(src_gw, core, flow):
+                    core_paths.append((core, path))
+
+        # No available core was found... so rank them!
+        if core_paths == []:
+            log.error("No available core paths found... We do nothing for now")
+            pass
+        else:
+            return core_paths
+
+    def areOngoingFlowsFromPod(self, src_pod, core, dst_prefix):
+        """
+        Checks if
+        :param src_pod:
+        :param core:
+        :param dst_prefix:
+        :return:
+        """
+        # Get ongoing flows
+        ongoing_flows = self.flow_to_core[core]
+
+        # Filter only those to the same dst_prefix
+        flows_same_dst = [f for f in ongoing_flows if self.getDestinationPrefixFromFlow(f) == dst_prefix]
+
+        # Filters only those with the same source pod
+        for flow in flows_same_dst:
+            f_src_px = self.getSourcePrefixFromFlow(flow)
+            f_s_gw = self.getGatewayRouter(f_src_px)
+            if self.dc_graph.get_router_pod(f_s_gw) == src_pod:
+                return True
+        return False
+
+    def collidesWithPreviousFlows(self, src_gw, core, flow):
+        """
+        Checks if already ongoing flows to that destination
+        :param src_gw:
+        :param core:
+        :return:
+        """
+        dst_prefix = self.getDestinationPrefixFromFlow(flow)
+
+        src_pod = self.dc_graph.get_router_pod(src_gw)
+        flows = self.flow_to_core[core]
+
+        # Filter only those with the destiantion as flow
+        flows_same_dst = [f for f in flows if self.getDestinationPrefixFromFlow(f) == dst_prefix]
+        for f in flows_same_dst:
+            src_f = f['src']
+            src_f_prefix = self.getMatchingPrefix(src_f)
+            src_f_gw = self.getGatewayRouter(src_f_prefix)
+
+            if self.dc_graph.get_router_pod(src_f_gw) == src_pod:
+                return True
+
+        return False
+
+    def getCoreFromFlow(self, flow):
+        """
+        Given a flow that was already in the network, returns
+        the core router that was assigned to
+        :param flow:
+        :return:
+        """
+        cores = [c for c, flows in self.flow_to_core.iteritems() if flow in flows]
+        if len(cores) == 1:
+            return cores[0]
+        else:
+            raise ValueError("Flow is not assigned to any core - that's weird")
+
+    def firstFitCore(self, flow):
+        # Check for which cores I can send (must remove those
+        # ones that would collide with already ongoing flows
+
+        # Get prefix from host ip
+        src_ip = flow['src']
+        dst_ip = flow['dst']
+        src_prefix = self.getMatchingPrefix(src_ip)
+        dst_prefix = self.getMatchingPrefix(dst_ip)
+
+        # Get gateway router
+        src_gw = self.getGatewayRouter(src_prefix)
+
+        # Compute the available cores
+        available_cores = self.getAvailableCorePaths(src_gw, flow)
+
+        # Take the first one
+        (chosen_core, path) = available_cores[0]
+
+        # Retrieve current DAG for destination prefix
+        current_dag = self.dags[dst_prefix]['dag']
+
+        # Apply path
+        current_dag.apply_path_to_core(src_gw, chosen_core)
+
+        # Apply DAG
+        self.sbmanager.add_dag_requirement(prefix=dst_prefix, dag=current_dag)
+        log.info("A new path was forced from {0} -> {1} for prefix {2}".format(self.dc_graph.get_router_name(src_gw), self.dc_graph.get_router_name(chosen_core), dst_prefix))
+
+        # Append flow to state variables
+        self.addFlowToPath(flow, path)
+
+    def undoFirstFitCore(self, flow):
+        # Get prefix from host ip
+        src_ip = flow['src']
+        dst_ip = flow['dst']
+        src_prefix = self.getMatchingPrefix(src_ip)
+        dst_prefix = self.getMatchingPrefix(dst_ip)
+
+        # Get gateway router
+        src_gw = self.getGatewayRouter(src_prefix)
+        src_pod = self.dc_graph.get_router_pod(src_gw)
+
+        # Get to which core the flow was directed to
+        core = self.getCoreFromFlow(flow)
+
+        # Compute its current path
+        current_path = self.getPathFromEdgeToCore(src_gw, core)
+
+        # Restore the DAG too!
+        if not self.areOngoingFlowsFromPod(src_pod, core, dst_prefix):
+            # Retrieve current DAG for destination prefix
+            current_dag = self.dags[dst_prefix]['dag']
+
+            # Restore the DAG
+            current_dag.set_ecmp_uplinks_from_source(src_gw, current_path)
+
+            # Apply DAG
+            self.sbmanager.add_dag_requirement(prefix=dst_prefix, dag=current_dag)
+            log.info("A new DAG was forced restoring the default ECMP DAG from source {0} -> {1}".format(
+                self.dc_graph.get_router_name(src_gw), dst_prefix))
+        else:
+             log.info("There are ongoing flows from same pod to same destination, throught the same core! We can't restore original the DAG yet")
+
+        # Remove it from the path
+        self.removeFlowFromPath(flow, current_path)
+
+    def handleFlow(self, event):
+        log.info("Event to handle received: {0}".format(event["type"]))
+        if event["type"] == 'startingFlow':
+            flow = event['flow']
+            self.firstFitCore(flow)
+        elif event["type"] == 'stoppingFlow':
+            flow = event['flow']
+            self.undoFirstFitCore(flow)
+        else:
+            log.error("Unknown event type: {0}".format(event['type']))
+
+    def reset(self):
+        # Create structure where we store the ongoing elephant  flows in the graph
+        self.elephants_in_paths = self._createElephantInPathsDict()
+
+        # Store all paths --for performance reasons
+        self.edge_to_core_paths = self._generateEdgeToCorePaths()
+
+        # Keeps track to which core is each flow directed to
+        self.flow_to_core = {c: [] for c in self.dc_graph.core_routers_iter()}
 
 if __name__ == '__main__':
     from fibte.logger import log
@@ -540,7 +795,8 @@ if __name__ == '__main__':
         lb = ECMPController(doBalance = args.doBalance, k=args.k)
 
     elif args.algorithm == 'random':
-        lb = RandomUplinksController(doBalance= args.doBalance, k=args.k)
-
+        lb = RandomUplinksController(doBalance=args.doBalance, k=args.k)
+    elif args.algorithm == 'firstfit':
+        lb = FirstFitController(doBalance=args.doBalance, k=args.k)
     lb.run()
     #import ipdb; ipdb.set_trace()

@@ -503,34 +503,46 @@ class TrafficGenerator(Base):
         return traffic_per_host
 
     def schedule(self, traffic_per_host):
+        """
+        Sends the flowlists to their respective senders, together with the
+        scheduling starting time.
 
+        :param traffic_per_host:
+        :return:
+        """
         try:
-            # Reset controller
-            #self.ControllerClient.send(json.dumps({"type":"reset"}),"")
-            pass
+            # Reset controller first
+            self.ControllerClient.send(json.dumps({"type":"reset"}),"")
         except:
-            # log.debug("Controller is not connected/present")
-            pass
+            log.error("Controller is not connected/present")
+
+        # Wait a bit
+        time.sleep(1)
 
         # Set sync. delay
         SYNC_DELAY = 5
 
-        # Set traffic start time
-        traffic_start_time = time.time() + SYNC_DELAY
-
         # Schedule all the flows
         try:
             for sender, flowlist in traffic_per_host.iteritems():
-
                 # Sends flowlist to the sender's server
                 self.unixClient.send(json.dumps({"type": "flowlist", "data": flowlist}), sender)
 
+        except Exception as e:
+            log.info("Host {0} could not be informed about flowlist. Error: {1}".format(sender, e))
+            #raise Exception("Host {0} could not be informed about flowlist.\n\tException: {1}".format(sender, e))
+
+        try:
+            # Set traffic start time -- same time for everyone!
+            traffic_start_time = time.time() + SYNC_DELAY
+            for sender in traffic_per_host.keys():
                 # Send traffic starting time
                 self.unixClient.send(json.dumps({"type": "starttime", "data": traffic_start_time}), sender)
 
         except Exception as e:
-            #log.info("Host {0} could not be informed about flowlist/starttime".format(sender))
-            raise Exception("Host {0} could not be informed about flowlist/starttime.\n\tException: {1}".format(sender, e))
+
+            log.info("Host {0} could not be informed about starttime. Error: {1}".format(sender, e))
+            #raise Exception("Host {0} could not be informed about flowlist.\n\tException: {1}".format(sender, e))
 
     def terminateTraffic(self):
         """
@@ -690,10 +702,10 @@ if __name__ == "__main__":
                                                                                   args.time, args.time_step)
 
                 # Convert current ip's to hostnames
-                traffic = tg.changeTrafficIpsToHostnames(traffic)
+                traffic_to_save = tg.changeTrafficIpsToHostnames(traffic)
                 print msg.format(filename)
                 with open(filename,"w") as f:
-                    pickle.dump(traffic,f)
+                    pickle.dump(traffic_to_save,f)
 
         # Orchestrate the traffic (either loaded or generated)
         print "Scheduling traffic..."
