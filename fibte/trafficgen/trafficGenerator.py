@@ -150,7 +150,7 @@ class TrafficGenerator(Base):
         else:
             raise ValueError("Unknown flow type: {0}".format(flow_type))
 
-    def get_flow_destination(self, receivers):
+    def get_flow_destination(self, sender, receivers):
         """
         This method abstracts the choice of a receiver. It chooses a
         receiver uniformly at random from the list of receivers.
@@ -161,6 +161,10 @@ class TrafficGenerator(Base):
         :param receivers: list of possible receivers
         :return: chosen receiver
         """
+        # Exclude receivers with the same edge router
+        receivers = [r for r in receivers if not self.topology.inSameSubnetwork(sender, r)]
+
+        # Pick one at random
         return random.choice(receivers)
 
     def choose_correct_ports(self, flowlist_tmp):
@@ -389,8 +393,11 @@ class TrafficGenerator(Base):
                 # Get flow size
                 flow_size = self.get_flow_size(flow_type)
 
+                # Sender
+                snd = flow['srcHost']
+
                 # Choose receiver
-                receiver = self.get_flow_destination(receivers)
+                receiver = self.get_flow_destination(snd, receivers)
 
                 # Update flow
                 all_flows[f_id] = {'srcHost': flow['srcHost'],
