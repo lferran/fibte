@@ -92,11 +92,13 @@ class FlowServer(object):
         process = Process(target = flowGenerator.sendFlowNotifyController, kwargs = (flow))
         process.daemon = True
         process.start()
+        return
 
     def stopFlow(self, flow):
         process = Process(target = flowGenerator.stopFlowNotifyController, kwargs = (flow))
         process.daemon = True
         process.start()
+        return
 
     def terminateTraffic(self):
         # No need to terminate startFlow processes, since they are killed when
@@ -126,6 +128,7 @@ class FlowServer(object):
         """
         log.info("Waiting a bit for last flows to finish...")
         time.sleep(2)
+        log.info("Re-setting flowServer!")
         self.terminateTraffic()
 
     def run(self):
@@ -213,7 +216,6 @@ class FlowServer(object):
                             self.terminateTraffic()
 
                 # Stop traffic immediately
-                log.debug("Scheduling finished - terminate received ...")
                 self.waitForTrafficToFinish()
 
 if __name__ == "__main__":
