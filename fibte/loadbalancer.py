@@ -175,11 +175,17 @@ class LBController(object):
         :param prefix:
         :return:
         """
-        if prefix in self.dags.keys() and self.dags[prefix].has_key('gateway'):
-            return self.dags[prefix]['gateway']
+        if '/' in prefix:
+            if prefix in self.dags.keys() and self.dags[prefix].has_key('gateway'):
+                return self.dags[prefix]['gateway']
+            else:
+                # Maybe it's a newly created prefix -- so check in the network graph
+                return self._getGatewayRouter(prefix)
         else:
-            # Maybe it's a newly created prefix -- so check in the network graph
-            return self._getGatewayRouter(prefix)
+            # Must be an ip then
+            ipe = prefix
+            ipe_prefix = self.getMatchingPrefix(ipe)
+            return self.getGatewayRouter(ipe_prefix)
 
     def getMatchingPrefix(self, hostip):
         """
@@ -200,6 +206,9 @@ class LBController(object):
             if hostip in prefix and prefix_len > longest_match[1]:
                 longest_match = (prefix, prefix_len)
         return longest_match[0].compressed
+
+    def getPrefixesFromFlow(self, flow):
+        return (self.getSourcePrefixFromFlow(flow), self.getDestinationPrefixFromFlow(flow))
 
     def getDestinationPrefixFromFlow(self, flow):
         dst_ip = flow['dst']
@@ -442,10 +451,7 @@ class RandomUplinksController(LBController):
         :return:
         """
         # Get prefix from host ip
-        src_ip = flow['src']
-        dst_ip = flow['dst']
-        src_prefix = self.getMatchingPrefix(src_ip)
-        dst_prefix = self.getMatchingPrefix(dst_ip)
+        (src_prefix, dst_prefix) = self.getPrefixesFromFlow(flow)
 
         # Get gateway router
         src_gw = self.getGatewayRouter(src_prefix)
@@ -546,18 +552,20 @@ class FirstFitController(LBController):
     def _generateEdgeToCorePaths(self):
         d = {}
         for edge in self.dc_graph.edge_routers_iter():
+            d[edge] = {}
             for core in self.dc_graph.core_routers_iter():
                 d[edge][core] = self._getPathFromEdgeToCore(edge, core)
-
         return d
 
     def _createElephantInPathsDict(self):
         elephant_in_paths = self.dc_graph.copy()
-        for (u, v, data) in elephant_in_paths.edges_iter():
+        for (u, v, data) in elephant_in_paths.edges_iter(data=True):
             data['flows'] = []
             data['capacity'] = LINK_BANDWIDTH
-
         return elephant_in_paths
+
+    def getEdgesFromPath(self, path):
+        return zip(path[:-1], path[1:])
 
     def addFlowToPath(self, flow, path):
         edges = self.getEdgesFromPath(path)
@@ -580,13 +588,18 @@ class FirstFitController(LBController):
         if flow in self.flow_to_core[core]: self.flow_to_core[core].remove(flow)
 
     def getPathFromEdgeToCore(self, edge, core):
+        """
+        Return single path from edge router to core router
+        :param edge:
+        :param core:
+        :return:
+        """
         return self.edge_to_core_paths[edge][core]
 
     def _getPathFromEdgeToCore(self, edge, core):
+        """Used to construct the edge_to_core data structure
+        """
         return nx.dijkstra_path(self.dc_graph, edge, core)
-
-    def getEdgesFromPath(self, path):
-        return zip(path[:-1], path[1:])
 
     def flowFitsInPath(self, flow, path):
         """
@@ -596,7 +609,7 @@ class FirstFitController(LBController):
         :return: bool
         """
         path_edges = self.getEdgesFromPath(path)
-        return all([True if flow.size <= self.elephants_in_paths[u][v]['capacity'] else False for (u,v) in path_edges])
+        return all([True if flow['size'] <= self.elephants_in_paths[u][v]['capacity'] else False for (u,v) in path_edges])
 
     def getAvailableCorePaths(self, src_gw, flow):
         """
@@ -642,6 +655,7 @@ class FirstFitController(LBController):
             f_s_gw = self.getGatewayRouter(f_src_px)
             if self.dc_graph.get_router_pod(f_s_gw) == src_pod:
                 return True
+
         return False
 
     def collidesWithPreviousFlows(self, src_gw, core, flow):
@@ -686,13 +700,8 @@ class FirstFitController(LBController):
         # ones that would collide with already ongoing flows
 
         # Get prefix from host ip
-        src_ip = flow['src']
-        dst_ip = flow['dst']
-        src_prefix = self.getMatchingPrefix(src_ip)
-        dst_prefix = self.getMatchingPrefix(dst_ip)
-
-        # Get gateway router
-        src_gw = self.getGatewayRouter(src_prefix)
+        src_gw = self.getGatewayRouter(flow['src'])
+        dst_prefix = self.getMatchingPrefix(flow['dst'])
 
         # Compute the available cores
         available_cores = self.getAvailableCorePaths(src_gw, flow)
@@ -708,7 +717,9 @@ class FirstFitController(LBController):
 
         # Apply DAG
         self.sbmanager.add_dag_requirement(prefix=dst_prefix, dag=current_dag)
-        log.info("A new path was forced from {0} -> {1} for prefix {2}".format(self.dc_graph.get_router_name(src_gw), self.dc_graph.get_router_name(chosen_core), dst_prefix))
+        src_gw_name = self.dc_graph.get_router_name(src_gw)
+        chosen_core_name = self.dc_graph.get_router_name(chosen_core)
+        log.info("A new path was forced from {0} -> {1} for prefix {2}".format(src_gw_name, chosen_core_name, dst_prefix))
 
         # Append flow to state variables
         self.addFlowToPath(flow, path)
