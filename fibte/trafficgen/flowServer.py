@@ -21,20 +21,6 @@ import select
 def my_sleep(seconds):
     select.select([], [], [], seconds)
 
-class Joiner(Thread):
-    def __init__(self, q, scheduler_pid=-1):
-        super(Joiner,self).__init__()
-        # Queue of pids of processes
-        self.__q = q
-
-    def run(self):
-        while True:
-            child = self.__q.get()
-            if child == None:
-                return
-            # Wait for child to finish
-            child.join()
-
 class FlowServer(object):
 
     def __init__(self, name):
@@ -65,12 +51,6 @@ class FlowServer(object):
         self.parentPid = os.getpid()
         log.debug("First time p:{0},{1}".format(os.getppid(), os.getpid()))
 
-        # Start process Joiner
-        self.queue = Queue.Queue(maxsize=0)
-        self.joiner = Joiner(self.queue)
-        self.joiner.setDaemon(True)
-        self.joiner.start()
-
         # Flow generation start time
         self.startime = 0
 
@@ -80,7 +60,6 @@ class FlowServer(object):
         # Indicators
         self.received_starttime = False
         self.received_flowlist = False
-        self.received_terminate = False
 
         # Schedules own flows
         self.scheduler = sched.scheduler(time.time, my_sleep)
@@ -88,6 +67,9 @@ class FlowServer(object):
         # Start the Scheduler Thread
         self.scheduler_process = Process(target=self.scheduler.run)
         self.scheduler_process.daemon = False
+
+        # Max scheduler waiting time
+        self.max_waiting_time = 0
 
     def signal_term_handler(self, signal, frame):
         # Only parent will do this
@@ -97,19 +79,6 @@ class FlowServer(object):
             sys.exit(0)
         else:
             sys.exit(0)
-
-    def terminateALL(self):
-        """TODO: this should be a thread. When reading self.processes we
-        should use a lock.
-        """
-        for process in self.processes:
-            if process.is_alive():
-                try:
-                    process.terminate()
-                    process.join()
-                except OSError:
-                    pass
-        self.processes = []
 
     def setStartTime(self, starttime):
         if time.time() < starttime:
@@ -125,19 +94,15 @@ class FlowServer(object):
         process = Process(target = flowGenerator.sendFlowNotifyController, kwargs = (flow))
         process.daemon = True
         process.start()
-        self.processes.append(process)
-        self.queue.put(process)
 
     def stopFlow(self, flow):
         process = Process(target = flowGenerator.stopFlowNotifyController, kwargs = (flow))
         process.daemon = True
         process.start()
-        self.processes.append(process)
-        self.queue.put(process)
-        
+
     def terminateTraffic(self):
-        # Terminate all flow start processes
-        self.terminateALL()
+        # No need to terminate startFlow processes, since they are killed when
+        # the scheduler process is terminated!
 
         # Cancel all upcoming scheduler events
         action = [self.scheduler.cancel(e) for e in self.scheduler.queue]
@@ -151,13 +116,19 @@ class FlowServer(object):
         # Reset everything
         self.received_flowlist = False
         self.received_starttime = False
-        self.received_terminate = False
         self.starttime = 0
         self.flowlist = []
+        self.max_waiting_time = 0
 
-        # Flush the receiving queue
-        with self.q_server.mutex:
-            self.q_server.queue.clear()
+    def waitForTrafficToFinish(self):
+        """
+        Scheduler waits for flows to finish and then terminates the run of
+        the traffic
+        :return:
+        """
+        log.info("Waiting a bit for last flows to finish...")
+        time.sleep(2)
+        self.terminateTraffic()
 
     def run(self):
         # Start thread that reads from the server TCP socket
@@ -224,12 +195,12 @@ class FlowServer(object):
                 
                 # While traffic stil ongoing
                 while self.scheduler_process.is_alive():
-                    log.debug("Scheduler process is still alive -- Traffic ongoing")
-                    log.info("Processes: {0}".format(len(self.processes)))
+                    #log.debug("Scheduler process is still alive -- Traffic ongoing")
+                    #log.info("Processes: {0}".format(len(self.processes)))
 
                     # Check if new event in the queue
                     try:
-                        data = self.q_server.get(timeout=3)#block=False)
+                        data = self.q_server.get(timeout=2)#block=False)
                     except Queue.Empty:
                         #log.debug("Timeout occurred reading from server event queue")
                         pass
@@ -246,7 +217,7 @@ class FlowServer(object):
 
                 # Stop traffic immediately
                 log.debug("Scheduling finished - terminate received ...")
-                self.terminateTraffic()
+                self.waitForTrafficToFinish()
 
 if __name__ == "__main__":
     import os
