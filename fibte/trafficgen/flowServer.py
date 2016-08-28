@@ -43,8 +43,6 @@ class FlowServer(object):
         self.q_server = Queue.Queue(0)
         self.server = UnixServerTCP(self.address, self.q_server)
 
-        self.processes = []
-
         signal.signal(signal.SIGTERM, self.signal_term_handler)
         # signal.signal(signal.SIGCHLD,signal.SIG_IGN)
 
@@ -192,7 +190,6 @@ class FlowServer(object):
 
             # Simulation ongoing -- only terminate event allowed
             else:
-                
                 # While traffic stil ongoing
                 while self.scheduler_process.is_alive():
                     #log.debug("Scheduler process is still alive -- Traffic ongoing")
