@@ -168,9 +168,7 @@ def sendFlowNotifyController(**flow):
 def stopFlowNotifyController(**flow):
     # Open socket with controller
     client = UnixClient("/tmp/controllerServer")
-
     log.debug("New ELEPHANT is STOPPING: to {0} {1}(bps) during {2}".format(flow['dst'], flow['size'], flow['duration']))
-
     try:
         # Notify controller that elephant flow finished
         client.send(json.dumps({"type": "stoppingFlow", "flow": flow}), "")
