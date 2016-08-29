@@ -112,6 +112,25 @@ class TrafficGenerator(Base):
             upto += w
         assert False, "Shouldn't get here"
 
+    def get_host_traffic_type(self, host_name):
+        """This simulates the fact that each host has 2 ip ranges: one for mice
+        and one for elephants.
+
+        Instead, what we do, is we split all hosts/prefixes of the topology such that
+        half of them only receive elephant flows, and the other half only mice"""
+        host_pod = int(host_name.split('_')[1])
+        host_index = int(host_name.split('_')[-1])
+        if (host_pod % 2) == 0:
+            if (host_index % 2) == 0:
+                return 'e'
+            else:
+                return 'm'
+        else:
+            if (host_index % 2) == 0:
+                return 'm'
+            else:
+                return 'e'
+
     def get_flow_type(self):
         return  self.weighted_choice(self.pMice, self.pElephant)
 
@@ -154,7 +173,7 @@ class TrafficGenerator(Base):
         else:
             raise ValueError("Unknown flow type: {0}".format(flow_type))
 
-    def get_flow_destination(self, sender, receivers):
+    def get_flow_destination(self, sender, receivers, flow_type):
         """
         This method abstracts the choice of a receiver. It chooses a
         receiver uniformly at random from the list of receivers.
@@ -167,6 +186,9 @@ class TrafficGenerator(Base):
         """
         # Exclude receivers with the same edge router
         receivers = [r for r in receivers if not self.topology.inSameSubnetwork(sender, r)]
+
+        # Exclude those receviers that do not match flow's type
+        receivers = [r for r in receivers if self.get_host_traffic_type(r) == flow_type]
 
         # Pick one at random
         return random.choice(receivers)
@@ -401,7 +423,7 @@ class TrafficGenerator(Base):
                 snd = flow['srcHost']
 
                 # Choose receiver
-                receiver = self.get_flow_destination(snd, receivers)
+                receiver = self.get_flow_destination(snd, receivers, flow_type)
 
                 # Update flow
                 all_flows[f_id] = {'srcHost': flow['srcHost'],
