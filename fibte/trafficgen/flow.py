@@ -84,8 +84,8 @@ class Flow(Base):
         super(Flow, self).__init__(*args, **kwargs)
         self.src = src
         self.dst = dst
-        self.sport = sport
-        self.dport = dport
+        self.sport = self.setPort(sport)
+        self.dport = self.setPort(dport)
         self.tos = tos
         self.proto = proto
 
@@ -147,6 +147,15 @@ class Flow(Base):
     def __ne__(self, other):
         return not self.__eq__(other)
 
+    def setPort(self, port):
+        if isinstance(port, int):
+            return port
+
+        elif isinstance(port, str):
+            return int(port)
+
+        else:
+            raise TypeError("port must either be a string or a int: {0}".format(port))
 
     def toDICT(self):
 
