@@ -137,17 +137,21 @@ class GetLoads(object):
         return bisectionBandwidth
 
     def getAggregationTraffic(self):
+        # Make a copy
+        aggregationTraffic = self.aggregation_loads.copy()
+
         # Get aggregation routers
         aggregationRouters = set(self.topology.getAgreggationRouters())
 
+        # Take time
         readout_time = time.time()
-        for (a, b), load in self.link_loads.iteritems():
+        for ((a, b), load) in self.link_loads.iteritems():
             if a in aggregationRouters:
                 self.aggregation_loads[a][b]['out'] = load
             elif b in aggregationRouters:
                 self.aggregation_loads[b][a]['in'] = load
 
-        aggregationTraffic = self.aggregation_loads.copy()
+        # Append time
         aggregationTraffic['time'] = readout_time
         return aggregationTraffic
 
@@ -160,10 +164,10 @@ class GetLoads(object):
         interval = self.time_interval
 
         # File for the in/out traffic
-        in_out_file = open("{1}in_out_file_{0}_{2}.txt".format(self.k, results_folder,  self.lb_algorithm), "w")
+        #in_out_file = open("{1}in_out_file_{0}_{2}.txt".format(self.k, results_folder,  self.lb_algorithm), "w")
 
         # File for bisection bandwidth
-        bb_file = open("{1}bisection_bw_file_{0}_{2}.txt".format(self.k, results_folder, self.lb_algorithm), "w")
+        #bb_file = open("{1}bisection_bw_file_{0}_{2}.txt".format(self.k, results_folder, self.lb_algorithm), "w")
 
         # File for aggregation traffic
         agg_file = open("{1}aggregation_traffic_{0}_{2}.txt".format(self.k, results_folder, self.lb_algorithm), "w")
@@ -174,9 +178,13 @@ class GetLoads(object):
                 time.sleep(max(0, start_time + i * interval - time.time()))
                 now = time.time()
 
+                reading_time = time.time()
+
                 # Fill loads of the router edges into link_loads
                 self.topology.routerUsageToLinksLoad(self.readLoads(), self.link_loads)
                 # print {x:y for x,y in self.link_loads.items() if any("sw" in e for e in x)}
+
+                #log.debug("It took {0}ms to READ the link loads".format(round(time.time() - reading_time, 5)*1e3))
 
                 # Print
                 try:
@@ -185,34 +193,45 @@ class GetLoads(object):
                         pickle.dump(self.link_loads, f)
 
                     # Get In&Out traffic
-                    in_traffic, out_traffic = self.getInOutTraffic()
+                    #in_traffic, out_traffic = self.getInOutTraffic()
 
                     # Get bisection BW
-                    bisecBW = self.getBisectionTraffic()
+                    #bisecBW = self.getBisectionTraffic()
 
-                    max_bisecBW = ((self.k**3)/4.0)#*LINK_BANDWIDTH
-                    bisecBw_ratio = round((bisecBW / max_bisecBW)*100.0, 3)
+                    #max_bisecBW = ((self.k**3)/4.0)#*LINK_BANDWIDTH
+                    #bisecBw_ratio = round((bisecBW / max_bisecBW)*100.0, 3)
 
                     # Get aggreagation traffic
                     aggTraffic = self.getAggregationTraffic()
 
+                    #total_out = 0
+                    #total_out += aggTraffic['r_0_a0']['r_0_e0']['in']
+                    #total_out += aggTraffic['r_0_a1']['r_0_e0']['in']
+
+                    #log.info("Total traffic starting at r_0_e0: {0}".format(total_out))
+
+                    #import ipdb; ipdb.set_trace()
                     # Save in_out traffic in a file
-                    in_out_file.write("{0},{1}\n".format(in_traffic, out_traffic))
-                    in_out_file.flush()
+                    #in_out_file.write("{0},{1}\n".format(in_traffic, out_traffic))
+                    #in_out_file.flush()
 
                     # Save bisection bw in a file
-                    bb_file.write("{0},{1}\n".format(bisecBW, bisecBw_ratio))
-                    bb_file.flush()
+                    #bb_file.write("{0},{1}\n".format(bisecBW, bisecBw_ratio))
+                    #bb_file.flush()
 
                     # Save aggregation traffic in a file
                     agg_file.write("{0}\n".format(json.dumps(aggTraffic)))
+                    agg_file.flush()
 
                 except Exception as e:
                     log.error("Error in run(): {0}".format(e))
                     break
 
+                #log.debug("It took {0}ms to READ and WRITE the metrics".format(round(time.time() - reading_time, 5)*1e3))
+
             except KeyboardInterrupt:
-                #log.info("KeyboardInterrupt catched! Shutting down...")
+                log.info("KeyboardInterrupt catched! Shutting down...")
+                agg_file.flush()
                 break
 
             i += 1
@@ -227,7 +246,7 @@ if __name__ == "__main__":
 
     parser.add_argument('-a', '--algorithm', help='Algorithm of the loadbalancer - used to save results file by algorithm name', type=str, default=None)
 
-    parser.add_argument('-i', '--time_interval', help='Polling interval', type=float, default=1.5)
+    parser.add_argument('-i', '--time_interval', help='Polling interval', type=float, default=1.1)
 
     args = parser.parse_args()
 
