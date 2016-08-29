@@ -53,7 +53,7 @@ class LBController(object):
     def __init__(self, doBalance = True, k=4, algorithm=None, load_variables=True):
 
         # Config logging to dedicated file for this thread
-        handler = logging.FileHandler(filename='{0}loadbalancer.log'.format(tmp_files))
+        handler = logging.FileHandler(filename='{0}loadbalancer_{1}.log'.format(tmp_files, algorithm))
         fmt = logging.Formatter('[%(levelname)20s] %(asctime)s %(funcName)s: %(message)s ')
 
         handler.setFormatter(fmt)
@@ -68,9 +68,6 @@ class LBController(object):
 
         # Loadbalancing strategy/algorithm
         self.algorithm = algorithm
-
-        # Lock for accessing link loads
-        self.link_loads_lock = threading.Lock()
 
         # Unix domain server to make things faster and possibility to communicate with hosts
         self.server = UnixServer(os.path.join(tmp_files, UDS_server_name))
@@ -90,6 +87,9 @@ class LBController(object):
 
         # Load the topology
         self.topology = TopologyGraph(getIfindexes=True, db=os.path.join(tmp_files, db_topo))
+
+        # Lock for accessing link loads
+        self.link_loads_lock = threading.Lock()
 
         # Get dictionary where loads are stored
         self.link_loads = self.topology.getEdgesUsageDictionary()
@@ -359,7 +359,6 @@ class LBController(object):
         # Receive events and handle them
         while True:
             try:
-
                 if not(self.doBalance):
                     while True:
                         event = self.server.receive()
@@ -371,7 +370,6 @@ class LBController(object):
                         continue
                     else:
                         self.handleFlow(event)
-
             except KeyboardInterrupt:
                 # Exit load balancer
                 self.exitGracefully()
