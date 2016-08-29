@@ -11,8 +11,8 @@ tmp_files = CFG.get("DEFAULT", "tmp_files")
 db_topo = CFG.get("DEFAULT", "db_topo")
 
 algo_styles = {'ecmp':{'color': 'r', 'linestyle':'-'},
-               'random':{'color':'b', 'linestyle':'--'},
-               'firstfit':{'color':'g', 'linestyle':'-.-'},
+               'random':{'color':'b', 'linestyle':'-'},
+               'firstfit':{'color':'g', 'linestyle':'-'},
                }
 
 class AlgorithmsComparator(object):
@@ -42,7 +42,6 @@ class AlgorithmsComparator(object):
         for filename in self.file_list:
             # Extract algorithm name
             algo = filename.strip('txt').strip('.').split('_')[-1]
-            print algo
             if algo == '': algo = 'None'
 
             # Extract measurements
@@ -62,21 +61,17 @@ class AlgorithmsComparator(object):
         lines = f.readlines()
 
         # Dict: measurement time -> link loads
-        samples = {}
+        samples = []
         for line in lines:
             measurement = json.loads(line.strip('\n'))
+
             # Extract measurement time
             m_time = measurement.pop('time')
 
             # Insert it in samples
-            samples[m_time] = measurement
+            samples.append((m_time, measurement))
 
-        # Convert it to an ordered list of tuples
-        times = sorted(samples, key=samples.get)
-
-        final = [(t, samples[t]) for t in times]
-
-        return final
+        return samples
 
     def _get_core_positions(self):
         n_cores = (self.k**2)/4
@@ -306,7 +301,7 @@ class AlgorithmsComparator(object):
             # Fetch load per each neighbor
             for neighbor in neighborNodes:
                 # Initialize load
-                load = -1
+                load = 0
 
                 if isEdge or isCore:
                     if upwards == True:
@@ -330,8 +325,9 @@ class AlgorithmsComparator(object):
                 edge_loads_over_time[neighbor].append(load)
 
         # Convert it to np array
-        for (neighbor, loads) in edge_loads_over_time.iteritems():
-            loads = np.asarray(loads)
+        for neighbor in edge_loads_over_time.keys():
+            loads = np.asarray(edge_loads_over_time[neighbor])
+            edge_loads_over_time[neighbor] = loads
 
         return edge_loads_over_time
 
@@ -449,6 +445,7 @@ class AlgorithmsComparator(object):
             if index == 1:
                 sub.set_title("Upward traffic average load", fontsize=16)
                 for algo in data_to_plot.keys():
+                    #import ipdb; ipdb.set_trace()
                     color = algo_styles[algo]['color']
                     linestyle = algo_styles[algo]['linestyle']
                     # plot
