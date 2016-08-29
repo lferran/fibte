@@ -266,6 +266,10 @@ class DCDiGraph(DiGraph):
         if self.is_valid_uplink(lower_rid, upper_rid):
             # Add uplink
             self.add_edge(lower_rid, upper_rid, {'direction': 'uplink'})
+        else:
+            lr_name = self.get_router_name(lower_rid)
+            ur_name = self.get_router_name(upper_rid)
+            raise ValueError("This uplink is not valid: {0} -> {1}".format(lr_name, ur_name))
 
     def add_downlink(self, upper_rid, lower_rid):
         """
@@ -277,6 +281,10 @@ class DCDiGraph(DiGraph):
         if self.is_valid_downlink(upper_rid, lower_rid):
             # Add downlink
             self.add_edge(upper_rid, lower_rid, {'direction': 'downlink'})
+        else:
+            lr_name = self.get_router_name(lower_rid)
+            ur_name = self.get_router_name(upper_rid)
+            raise ValueError("This downlink is not valid: {0} -> {1}".format(ur_name, lr_name))
 
 class DCGraph(DCDiGraph):
     """
@@ -340,17 +348,18 @@ class DCGraph(DCDiGraph):
         :param sink: router id of the sink's router
         :return: DCDAg
         """
+        sink_pod = self.get_router_pod(sinkid)
         if self.is_edge(sinkid):
             # Create empty-links dag from self DCGraph
             dc_dag = DCDag(sinkid, k=self.k, dc_graph=self)
 
             # Add uplinks
-            add_uplinks1 = [dc_dag.add_uplink(er, ar) for er in self.edge_routers_iter() for ar in self.get_upper_tier(er)]
-            add_uplinks2 = [dc_dag.add_uplink(ar, cr) for ar in self.aggregation_routers_iter() for cr in self.get_upper_tier(ar)]
+            add_uplinks1 = [dc_dag.add_uplink(er, ar) for er in self.edge_routers_iter() for ar in self.get_upper_tier(er) if er != sinkid]
+            add_uplinks2 = [dc_dag.add_uplink(ar, cr) for ar in self.aggregation_routers_iter() for cr in self.get_upper_tier(ar) if self.get_router_pod(ar) != sink_pod]
 
             # Add downlinks
-            add_downlinks1 = [dc_dag.add_downlink(cr, ar) for cr in self.core_routers_iter() for ar in self.get_lower_tier(cr) if self.is_valid_downlink(cr, ar)]
-            add_downlinks2 = [dc_dag.add_downlink(ar, er) for ar in self.aggregation_routers_iter() for er in self.get_lower_tier(ar) if self.is_valid_downlink(ar, er)]
+            add_downlinks1 = [dc_dag.add_downlink(cr, ar) for cr in self.core_routers_iter() for ar in self.get_lower_tier(cr) if self.get_router_pod(ar) == sink_pod and dc_dag.is_valid_downlink(cr, ar)]
+            add_downlinks2 = [dc_dag.add_downlink(ar, er) for ar in self.aggregation_routers_iter() for er in self.get_lower_tier(ar) if self.get_router_pod(ar) == sink_pod and dc_dag.is_valid_downlink(ar, er)]
 
             # Return the DCDag object
             return dc_dag
@@ -567,6 +576,35 @@ class DCDag(DCDiGraph):
                         return True
         return False
 
+    def add_uplink(self, lower_rid, upper_rid):
+        """
+        Adds a DC uplink by checking the corresponding constrains.
+        Assumes lower_rid and upper_rid already in the graph.
+        """
+        if self.is_valid_uplink(lower_rid, upper_rid):
+            # Add uplink
+            self.add_edge(lower_rid, upper_rid, {'direction': 'uplink'})
+
+        else:
+            lr_name = self.get_router_name(lower_rid)
+            ur_name = self.get_router_name(upper_rid)
+            sink_name = self.get_sink_name()
+            raise ValueError("This uplink ({0} -> {1}) is not valid for DAG to {2}".format(lr_name, ur_name, sink_name))
+
+    def add_downlink(self, upper_rid, lower_rid):
+        """
+        Adds a DC downlink by checking the corresponding constrains
+        Assumes lower_rid and upper_rid already in the graph.
+        """
+        if self.is_valid_downlink(upper_rid, lower_rid):
+            # Add downlink
+            self.add_edge(upper_rid, lower_rid, {'direction': 'downlink'})
+        else:
+            lr_name = self.get_router_name(lower_rid)
+            ur_name = self.get_router_name(upper_rid)
+            sink_name = self.get_sink_name()
+            raise ValueError("This downlink ({0} -> {1}) is not valid for DAG to {2}".format(ur_name, lr_name, sink_name))
+
     def get_next_hops(self, routerid):
         """
         Returns the list of next hop routers of routerid in the direction
@@ -594,30 +632,31 @@ class DCDag(DCDiGraph):
         if src_pod == self.get_sink_pod():
             same_sink_pod = True
 
-        # Iterate choice for edges and aggr uplinks
-        for index in edge_to_aggr.keys():
-            # Get edge router
-            er = self.get_router_from_position(type='edge', index=index, pod=src_pod)
+        # We are not in sink's pod
+        if not same_sink_pod:
+            # Iterate choice for edges and aggr uplinks
+            for index in edge_to_aggr.keys():
+                # Get edge router
+                er = self.get_router_from_position(type='edge', index=index, pod=src_pod)
 
-            # Add edge->aggr uplinks
-            for aggr_index in edge_to_aggr[index]:
-                # Get chosen aggr
-                aggr = self.get_router_from_position(type='aggregation', index=aggr_index, pod=src_pod)
-                # Make uplink
-                self.add_uplink(er, aggr)
+                # Add edge->aggr uplinks
+                for aggr_index in edge_to_aggr[index]:
+                    # Get chosen aggr
+                    aggr = self.get_router_from_position(type='aggregation', index=aggr_index, pod=src_pod)
+                    # Make uplink
+                    self.add_uplink(er, aggr)
 
-            # Compute the missing ones and delete them
-            existing = set(edge_to_aggr[index])
-            missing = set(range(0, self.k/2)).difference(existing)
-            for mi in missing:
-                # Get aggr router
-                m_aggr = self.get_router_from_position(type='aggregation', index=mi, pod=src_pod)
+                # Compute the missing ones and delete them
+                existing = set(edge_to_aggr[index])
+                missing = set(range(0, self.k / 2)).difference(existing)
+                for mi in missing:
+                    # Get aggr router
+                    m_aggr = self.get_router_from_position(type='aggregation', index=mi, pod=src_pod)
 
-                # Delete edge
-                if self.has_edge(er, m_aggr): self.remove_edge(er, m_aggr)
+                    # Delete edge
+                    if self.has_edge(er, m_aggr): self.remove_edge(er, m_aggr)
 
-            # Make also the aggr->core ulinks
-            if not same_sink_pod:
+                # Make also the aggr->core ulinks
                 # Get aggregation router
                 ar = self.get_router_from_position(type='aggregation', index=index, pod=src_pod)
                 for core_index in aggr_to_core[index]:
@@ -636,6 +675,33 @@ class DCDag(DCDiGraph):
                     # Delete edge
                     if self.has_edge(ar, mcore): self.remove_edge(ar, mcore)
 
+        # We are in sink's pod
+        else:
+            # Iterate choice for edges and aggr uplinks
+            for index in edge_to_aggr.keys():
+                if index == self.get_sink_index():
+                    continue
+                else:
+                    # Get edge router
+                    er = self.get_router_from_position(type='edge', index=index, pod=src_pod)
+
+                    # Add edge->aggr uplinks
+                    for aggr_index in edge_to_aggr[index]:
+                        # Get chosen aggr
+                        aggr = self.get_router_from_position(type='aggregation', index=aggr_index, pod=src_pod)
+                        # Make uplink
+                        self.add_uplink(er, aggr)
+
+                    # Compute the missing ones and delete them
+                    existing = set(edge_to_aggr[index])
+                    missing = set(range(0, self.k / 2)).difference(existing)
+                    for mi in missing:
+                        # Get aggr router
+                        m_aggr = self.get_router_from_position(type='aggregation', index=mi, pod=src_pod)
+
+                        # Delete edge
+                        if self.has_edge(er, m_aggr): self.remove_edge(er, m_aggr)
+
     def set_ecmp_uplinks_from_pod(self, src_pod):
         """
         Sets the original subdag from source pod to destination
@@ -646,9 +712,14 @@ class DCDag(DCDiGraph):
         if src_pod == self.get_sink_pod():
             same_sink_pod = True
 
+        sink_id = self.get_sink_id()
+
         # Iterate pod routers
         for e in range(0, self.k/2):
             er = self.get_router_from_position(type='edge', index=e, pod=src_pod)
+            if er == sink_id:
+                continue
+
             for a in range(0, self.k/2):
                 ar = self.get_router_from_position(type='aggregation', index=a, pod=src_pod)
                 if not self.has_edge(er, ar):
@@ -716,32 +787,42 @@ class DCDag(DCDiGraph):
         pass
 
     def apply_path_to_core(self, source, core):
-        src_pod = self.get_router_pod(source)
+        """Force the patch from source to core router, by removing side edges
+         that woudl create ECMP"""
 
-        same_sink_pod = False
-        if src_pod == self.get_sink_pod():
-            same_sink_pod = True
+        if source != self.get_sink_id():
+            # Get source pod
+            src_pod = self.get_router_pod(source)
 
-        # Get core index
-        core_index = self.get_router_index(core)
+            # Check if we are in the same pod as sink
+            same_sink_pod = False
+            if src_pod == self.get_sink_pod():
+                same_sink_pod = True
 
-        # Get source pod
-        src_pod = self.get_router_pod(source)
+            # Get core index
+            core_index = self.get_router_index(core)
 
-        # Get the aggregation index valid with core index
-        agg_index = [index for index in range(self.k/2) if self._valid_aggregation_core_indexes(index, core_index)][0]
+            # Get the aggregation index valid with core index
+            agg_index = [index for index in range(self.k/2) if self._valid_aggregation_core_indexes(index, core_index)]
+            if len(agg_index) == 1: agg_index = agg_index[0]
+            else: raise ValueError("Something wrong in the topology")
 
-        # Get aggregation router
-        ar = self.get_router_from_position(type='aggregation', index=agg_index, pod=src_pod)
+            # Get aggregation router
+            ar = self.get_router_from_position(type='aggregation', index=agg_index, pod=src_pod)
 
-        #Add source -> ar edge and remove the others
-        if not self.has_edge(source, ar): self.add_uplink(source, ar)
-        removal = [self.remove_edge(source, a) for a in self.successors(source) if a != ar]
+            #Add source -> ar edge
+            if not self.has_edge(source, ar): self.add_uplink(source, ar)
 
-        if not same_sink_pod:
-            # Add ar->cr and remove others
-            if not self.has_edge(ar, core): self.add_uplink(ar, core)
-            removal = [self.remove_edge(ar, c) for c in self.successors(ar) if c != core]
+            # Remove side edges
+            removal = [self.remove_edge(source, a) for a in self.successors(source) if a != ar]
+
+            if not same_sink_pod:
+                # Add ar->cr and remove others
+                if not self.has_edge(ar, core): self.add_uplink(ar, core)
+                removal = [self.remove_edge(ar, c) for c in self.successors(ar) if c != core]
+        else:
+            import ipdb; ipdb.set_trace()
+            raise ValueError("Sink can't send flows to himself!")
 
 if __name__ == "__main__":
 
