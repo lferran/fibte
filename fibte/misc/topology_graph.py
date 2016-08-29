@@ -752,6 +752,9 @@ class TopologyGraph(TopologyDB):
     def isCoreRouter(self, router):
         return self.networkGraph.graph.node[router].has_key("core")
 
+    def isHost(self, node_name):
+        return self.network[node_name]['type'] == 'host'
+
 if __name__ == "__main__":
 
     topology = TopologyGraph(getIfindexes=True, db=os.path.join(tmp_files, db_topo))
