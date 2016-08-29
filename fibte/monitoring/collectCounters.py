@@ -20,7 +20,7 @@ in an isolated process. It either gathers snmp data or directly reads from the d
 credit: Edgar Costa - edgarcosta@hotmail.es
 """
 
-def collectCounters(name='h_0_0', interval=1.5):
+def collectCounters(name='h_0_0', interval=1.1):
     try:
         #topology = TopologyGraph(getIfindexes=False,db=os.path.join(tmp_files,db_topo))
 
@@ -99,7 +99,7 @@ if __name__ == "__main__":
 
     parser.add_argument('-n', '--name', help='Host name', default='h_0_0')
 
-    parser.add_argument('-t', '--time', help='Polling interval', type=float, default=1.5)
+    parser.add_argument('-t', '--time', help='Polling interval', type=float, default=1.1)
 
     args = parser.parse_args()
 
