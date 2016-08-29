@@ -16,6 +16,10 @@ from fibte.trafficgen.flowGenerator import isElephant
 from fibte.misc.unixSockets import UnixClient, UnixClientTCP
 from fibte import CFG, LINK_BANDWIDTH, MICE_SIZE_RANGE, ELEPHANT_SIZE_RANGE, MICE_SIZE_STEP, ELEPHANT_SIZE_STEP
 
+import logging
+from fibte.logger import log
+
+
 tmp_files = CFG.get("DEFAULT","tmp_files")
 db_topo = CFG.get("DEFAULT","db_topo")
 controllerServer = CFG.get("DEFAULT","controller_UDS_name")
@@ -24,9 +28,7 @@ MIN_PORT = 1
 MAX_PORT = 2**16 -1
 RangePorts = xrange(MIN_PORT,MAX_PORT)
 
-
 saved_traffic_folder = os.path.join(os.path.dirname(__file__), 'saved_traffic/')
-
 
 def read_pid(n):
     """
@@ -43,6 +45,8 @@ def del_file(f):
 class TrafficGenerator(Base):
     def __init__(self, pMice = 0.9, pElephant = 0.1, *args, **kwargs):
         super(TrafficGenerator, self).__init__(*args,**kwargs)
+        # Set debug level
+        log.setLevel(logging.DEBUG)
 
         # Set traffic mice/elephant flow percent
         self.pMice = pMice
@@ -536,7 +540,7 @@ class TrafficGenerator(Base):
                 self.unixClient.send(json.dumps({"type": "flowlist", "data": flowlist}), sender)
 
         except Exception as e:
-            log.info("Host {0} could not be informed about flowlist. Error: {1}".format(sender, e))
+            log.error("Host {0} could not be informed about flowlist. Error: {1}".format(sender, e))
             #raise Exception("Host {0} could not be informed about flowlist.\n\tException: {1}".format(sender, e))
 
         try:
@@ -548,8 +552,57 @@ class TrafficGenerator(Base):
 
         except Exception as e:
 
-            log.info("Host {0} could not be informed about starttime. Error: {1}".format(sender, e))
+            log.error("Host {0} could not be informed about starttime. Error: {1}".format(sender, e))
             #raise Exception("Host {0} could not be informed about flowlist.\n\tException: {1}".format(sender, e))
+
+    def plan_from_flows_file(self, flows_file):
+        """Opens the flows file and schedules the specified flows
+        """
+        # Open the file
+        ff = open(flows_file)
+
+        # One flow at each line
+        flow_lines = ff.readlines()
+
+        # Remove first explanatory line
+        flow_lines = flow_lines[1:]
+
+        # Flows to schedule
+        traffic_per_host = {}
+
+        # Parse file
+        for flowline in flow_lines:
+            # Try parsing flow data
+            fields = flowline.split('\t')
+            if len(fields) == 7:
+                # Remove the \n from the last element
+                fields[-1] = fields[-1].strip('\n')
+
+                # Extract fields
+                (src, sport, dst, dport, start_time, size, duration) = fields
+
+                # Add entry for source if it's not there
+                if src not in traffic_per_host.keys(): traffic_per_host[src] = []
+
+                try:
+                    # Get hosts ip addresses
+                    srcIp = self.topology.getHostIp(src)
+                    dstIp = self.topology.getHostIp(dst)
+
+                    # Create the flow object
+                    flow = Flow(src=srcIp, dst=dstIp, sport=sport, dport=dport,
+                                size=size, start_time=start_time, duration=duration)
+
+                    # Append it
+                    traffic_per_host[src].append(flow.toDICT())
+
+                except Exception as e:
+                    print("ERROR: Flow object could not be created: {0}".format(e))
+            else:
+                continue
+                #print("WARNING: Wrong flow format - line skipped: {0}".format(flowline))
+
+        return traffic_per_host
 
     def terminateTraffic(self):
         """
@@ -660,6 +713,10 @@ if __name__ == "__main__":
                         help='load traffic from a file so it can be repeated',
                            default="")
 
+    parser.add_argument('--flows_file',
+                        help="Schedule the flows specified in file",
+                        default=False)
+
     # Parse the arguments
     args = parser.parse_args()
 
@@ -677,46 +734,56 @@ if __name__ == "__main__":
         tg.terminateTraffic()
 
     else:
-        # If traffic must be loaded
-        if args.load_traffic:
-            msg = "Loading traffic from file <- {0}"
-            print msg.format(args.load_traffic)
 
-            # Fetch traffic from file
-            traffic = pickle.load(open(args.load_traffic,"r"))
+        # Check if flow file has been given (for testing purposes)
+        if not args.flows_file:
+            # If traffic must be loaded
+            if args.load_traffic:
+                msg = "Loading traffic from file <- {0}"
+                print msg.format(args.load_traffic)
 
-            # Convert hostnames to current ips
-            traffic = tg.changeTrafficHostnamesToIps(traffic)
+                # Fetch traffic from file
+                traffic = pickle.load(open(args.load_traffic,"r"))
 
+                # Convert hostnames to current ips
+                traffic = tg.changeTrafficHostnamesToIps(traffic)
+
+            else:
+                # Generate traffic
+                traffic = tg.trafficPlanner(senders=senders,receivers=receivers,
+                                            flowRate=args.flow_rate,totalTime=args.time,
+                                            timeStep=args.time_step)
+
+                msg = "Generating traffic:\n\tSenders: {0}\n\tReceivers: {1}\n\tFlow rate: {2}\n\t"
+                msg += "Total time: {3}\n\tTime step: {4}"
+                print msg.format(args.senders, args.receivers, args.flow_rate, args.time, args.time_step)
+
+                # If it must be saved
+                if args.save_traffic:
+                    msg = "Saving traffic file -> {0}"
+                    filename = '{0}'.format(saved_traffic_folder)
+                    filename += "{0}_to_{1}_m{2}e{3}_fr{4}_t{5}_ts{6}.traffic".format(','.join(senders), ','.join(receivers),
+                                                                                      str(args.mice).replace('.', ','),
+                                                                                      str(args.elephant).replace('.', ','),
+                                                                                      str(args.flow_rate).replace('.', ','),
+                                                                                      args.time, args.time_step)
+
+                    # Convert current ip's to hostnames
+                    traffic_to_save = tg.changeTrafficIpsToHostnames(traffic)
+                    print msg.format(filename)
+                    with open(filename,"w") as f:
+                        pickle.dump(traffic_to_save,f)
+
+            # Orchestrate the traffic (either loaded or generated)
+            print "Scheduling traffic..."
+            tg.schedule(traffic)
+
+        # Flow file has been given
         else:
-            # Generate traffic
-            traffic = tg.trafficPlanner(senders=senders,receivers=receivers,
-                                        flowRate=args.flow_rate,totalTime=args.time,
-                                        timeStep=args.time_step)
-
-            msg = "Generating traffic:\n\tSenders: {0}\n\tReceivers: {1}\n\tFlow rate: {2}\n\t"
-            msg += "Total time: {3}\n\tTime step: {4}"
-            print msg.format(args.senders, args.receivers, args.flow_rate, args.time, args.time_step)
-
-            # If it must be saved
-            if args.save_traffic:
-                msg = "Saving traffic file -> {0}"
-                filename = '{0}'.format(saved_traffic_folder)
-                filename += "{0}_to_{1}_m{2}e{3}_fr{4}_t{5}_ts{6}.traffic".format(','.join(senders), ','.join(receivers),
-                                                                                  str(args.mice).replace('.', ','),
-                                                                                  str(args.elephant).replace('.', ','),
-                                                                                  str(args.flow_rate).replace('.', ','),
-                                                                                  args.time, args.time_step)
-
-                # Convert current ip's to hostnames
-                traffic_to_save = tg.changeTrafficIpsToHostnames(traffic)
-                print msg.format(filename)
-                with open(filename,"w") as f:
-                    pickle.dump(traffic_to_save,f)
-
-        # Orchestrate the traffic (either loaded or generated)
-        print "Scheduling traffic..."
-        tg.schedule(traffic)
+            print "Scheduling flows specified in {0}".format(args.flows_file)
+            traffic = tg.plan_from_flows_file(args.flows_file)
+            #import ipdb; ipdb.set_trace()
+            tg.schedule(traffic)
 
     print "Elapsed time ", time.time()-t
 
