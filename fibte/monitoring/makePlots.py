@@ -10,9 +10,17 @@ import matplotlib.pyplot as plt
 tmp_files = CFG.get("DEFAULT", "tmp_files")
 db_topo = CFG.get("DEFAULT", "db_topo")
 
-algo_styles = {'ecmp':{'color': 'r', 'linestyle':'-'},
-               'random':{'color':'b', 'linestyle':'-'},
-               'firstfit':{'color':'g', 'linestyle':'-'},
+algo_styles = {'ecmp':
+                   {'color': 'r', 'linestyle':'-'},
+
+               'random-dags':
+                   {'color':'b', 'linestyle':'-'},
+
+               'best-ranked-core':
+                   {'color':'g', 'linestyle':'-'},
+
+               'random-core':
+                   {'color':'black', 'linestyle':'-'},
                }
 
 class AlgorithmsComparator(object):
@@ -49,6 +57,9 @@ class AlgorithmsComparator(object):
 
             # Add it to dict
             algo_to_measurements[algo] = measurements
+
+        # Align data so that they are comparable
+        algo_to_measurements = self.align_data(algo_to_measurements)
 
         return algo_to_measurements
 
@@ -87,48 +98,27 @@ class AlgorithmsComparator(object):
 
         return core_positions
 
-    def _get_first_change_index(self, load_array):
-        initial = load_array[0]
-        for i, v in enumerate(load_array):
-            if round(v, 2) != round(initial, 2):
-                return i
-            else:
-                initial = v
-        return 0
-
-    def _shift_earliest_flow_index(self, data_to_plot):
+    def _get_first_change_index(self, list_of_measurements):
         """
+
         """
-        algos = data_to_plot[data_to_plot.keys()[0]].keys()
+        try:
+            initial_index = 0
+            found = False
+            for (t, measurements) in list_of_measurements:
+                for a, others in measurements.iteritems():
+                    for o, load in others.iteritems():
+                        if load['in'] > 0.002 or load['out'] > 0.002:
+                            found = True
+                            return initial_index
 
-        earliest_flow_index = {}
+                # Increment index
+                initial_index = initial_index + 1
 
-        # Get the index of the earliest flow observed for each algo
-        for algo in algos:
-            # Get the index of the earliest change in load for any router
-            earliest_indexes = [self._get_first_change_index(data_to_plot[cr][algo]) for cr in data_to_plot.keys()]
-            earliest_index = min([i for i in earliest_indexes if i != 0])
-            earliest_flow_index[algo] = earliest_index
-
-        # Get the minimum
-        earliest_algo = min(earliest_flow_index, key=earliest_flow_index.get)
-        earliest_index = earliest_flow_index[earliest_algo]
-
-        # Shift the others
-        new_data_to_plot = {}
-        for cr, measurements in data_to_plot.iteritems():
-            new_data_to_plot[cr] = {}
-            for algo, loads in measurements.iteritems():
-                if algo != earliest_algo:
-                    #Calculate index difference
-                    index_diff = earliest_flow_index[algo] - earliest_index
-                    # Crop the loads
-                    new_loads = loads[index_diff:]
-                    new_data_to_plot[cr][algo] = new_loads
-                else:
-                    new_data_to_plot[cr][algo] = loads
-
-        return new_data_to_plot
+            if not found:
+                return 0
+        except Exception as e:
+            import ipdb; ipdb.set_trace()
 
     def plot_core_input_traffic(self):
         """
@@ -184,9 +174,6 @@ class AlgorithmsComparator(object):
 
                 # Put it into dict
                 data_to_plot[cr][algo] = loads_arr
-
-        # Tweak data so that x axis are aligned
-        data_to_plot = self._shift_earliest_flow_index(data_to_plot)
 
         algos = data_to_plot[data_to_plot.keys()[0]].keys()
 
@@ -417,6 +404,32 @@ class AlgorithmsComparator(object):
         downwards_std = [u.std() for u in downwards]
 
         return ({'avg': upwards_avg, 'std': upwards_std}, {'avg': downwards_avg, 'std': downwards_std})
+
+    def align_data(self, data_to_plot):
+        algos = data_to_plot.keys()
+
+        earliest_flow_index = {}
+
+        # Get the index of the earliest flow observed for each algo
+        for algo, measurements in data_to_plot.iteritems():
+            # Get the index of the earliest change in load for any router
+            earliest_index = self._get_first_change_index(measurements)
+            earliest_flow_index[algo] = earliest_index
+
+        # Get the minimum
+        earliest_algo = min(earliest_flow_index, key=earliest_flow_index.get)
+        earliest_index = earliest_flow_index[earliest_algo]
+
+        # Shift the others
+        new_data_to_plot = {}
+        for algo in algos:
+            if algo != earliest_algo:
+                measurements = data_to_plot[algo]
+                index_diff = earliest_flow_index[algo] - earliest_index
+                # Shift it by the difference
+                new_data_to_plot[algo] = measurements[index_diff:]
+
+        return new_data_to_plot
 
     def plot_average_core_loads(self):
         """
