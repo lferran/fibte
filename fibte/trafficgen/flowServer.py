@@ -84,6 +84,11 @@ class FlowServer(object):
         else:
             raise ValueError("starttime is older than the current time!")
 
+    def dummyWait(self):
+        log.info("Dummy wait...")
+        process = Process(target = time.sleep, kwargs=(3))
+        return
+
     def startFlow(self, flow):
         """
         Start flow calling the flow generation function
@@ -165,6 +170,9 @@ class FlowServer(object):
                 log.debug("Scheduling flows... ")
                 log.debug("DELTA time observed: {0}".format(self.starttime - time.time()))
 
+                # Keep times of last elephant scheduled for dummy wait
+                last_elephant = {}
+
                 # Initialize counters
                 flow_count = {'elephant': 0, 'mice': 0}
                 if self.received_flowlist and self.received_starttime:
@@ -181,12 +189,21 @@ class FlowServer(object):
                         if isElephant(flow):
                             flow_count['elephant'] += 1
                             log.debug("ELEPHANT flow to {0} with {1} (bps) will start in {2} and last for {3}".format(flow['dst'], flow['size'], flow['start_time'], flow["duration"]))
-                            self.scheduler.enterabs(self.starttime + flow["start_time"] + flow["duration"], 1, self.stopFlow, [flow])
+
+                            ending_time = self.starttime + flow["start_time"] + flow["duration"]
+                            self.scheduler.enterabs(ending_time, 1, self.stopFlow, [flow])
+
+                            # Take note of ending time
+                            last_elephant['ending_time'] = ending_time
+
                         else:
                             flow_count['mice'] += 1
                             
                     log.debug("All flows were scheduled! Let's run the scheduler (in a different thread)")
                     log.debug("A total of {0} flows will be started at host. {1} MICE | {2} ELEPHANT".format(sum(flow_count.values()), flow_count['mice'], flow_count['elephant']))
+
+                    # Schedule dummy wait
+                    self.scheduler.enterabs(last_elephant['ending_time']+2, 1, self.dummyWait, [])
 
                     # Run scheduler in another thread
                     self.scheduler_process.start()
