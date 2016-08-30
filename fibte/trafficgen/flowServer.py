@@ -202,8 +202,9 @@ class FlowServer(object):
                     log.debug("All flows were scheduled! Let's run the scheduler (in a different thread)")
                     log.debug("A total of {0} flows will be started at host. {1} MICE | {2} ELEPHANT".format(sum(flow_count.values()), flow_count['mice'], flow_count['elephant']))
 
-                    # Schedule dummy wait
-                    self.scheduler.enterabs(last_elephant['ending_time']+2, 1, self.dummyWait, [])
+                    # Schedule dummy waitif
+                    if last_elephant != {}:
+                        self.scheduler.enterabs(last_elephant['ending_time']+2, 1, self.dummyWait, [])
 
                     # Run scheduler in another thread
                     self.scheduler_process.start()
