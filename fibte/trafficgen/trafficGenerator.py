@@ -596,7 +596,7 @@ class TrafficGenerator(Base):
         for flowline in flow_lines:
             # Try parsing flow data
             fields = flowline.split('\t')
-            if len(fields) == 7:
+            if len(fields) == 7 and '#' not in fields[0]:
                 # Remove the \n from the last element
                 fields[-1] = fields[-1].strip('\n')
 
@@ -814,4 +814,5 @@ if __name__ == "__main__":
 # python trafficGenerator.py --senders pod_0,pod_1 --receivers pod_2,pod_3 --mice 0.8 --elephant 0.2 --flow_rate 0.25 --time 300 --save_traffic
 # python trafficGenerator.py --terminate
 # python trafficGenerator.py --load_traffic saved_traffic/
+# python trafficGenerator.py --flows_file file.txt
 
