@@ -58,8 +58,9 @@ class AlgorithmsComparator(object):
             # Add it to dict
             algo_to_measurements[algo] = measurements
 
-        # Align data so that they are comparable
+        # Align and crop data so that they are comparable
         algo_to_measurements = self.align_data(algo_to_measurements)
+        algo_to_measurements = self.crop_data(algo_to_measurements)
 
         return algo_to_measurements
 
@@ -119,6 +120,66 @@ class AlgorithmsComparator(object):
                 return 0
         except Exception as e:
             import ipdb; ipdb.set_trace()
+
+    def align_data(self, algo_to_measurements):
+        algos = algo_to_measurements.keys()
+
+        earliest_flow_index = {}
+
+        # Get the index of the earliest flow observed for each algo
+        for algo, measurements in algo_to_measurements.iteritems():
+            # Get the index of the earliest change in load for any router
+            earliest_index = self._get_first_change_index(measurements)
+            earliest_flow_index[algo] = earliest_index
+
+        # Get the minimum
+        earliest_algo = min(earliest_flow_index, key=earliest_flow_index.get)
+        earliest_index = earliest_flow_index[earliest_algo]
+
+        # Shift the others
+        new_data_to_plot = {}
+        for algo in algos:
+            measurements = algo_to_measurements[algo]
+            if algo != earliest_algo:
+                index_diff = earliest_flow_index[algo] - earliest_index
+                # Shift it by the difference
+                new_data_to_plot[algo] = measurements[index_diff:]
+            else:
+                new_data_to_plot[algo] = measurements
+
+        return new_data_to_plot
+
+    def _get_last_change_index(self, list_of_measurements):
+        found = False
+        r_list_of_measurements = list_of_measurements[:]
+        r_list_of_measurements.reverse()
+        initial_index = 0
+        for (t, measurements) in r_list_of_measurements:
+            for a, others in measurements.iteritems():
+                for o, load in others.iteritems():
+                    if load['in'] > 0.002 or load['out'] > 0.002:
+                        found = True
+                        return len(list_of_measurements) - initial_index - 1 + 10
+
+            # Increment index
+            initial_index = initial_index + 1
+
+        if not found:
+            return len(list_of_measurements) - 1
+
+    def crop_data(self, algo_to_measurements):
+        """Crops data from the end"""
+
+        new_algo_to_measurements = {}
+
+        # Get the index of the earliest flow observed for each algo
+        for algo, measurements in algo_to_measurements.iteritems():
+            # Get the index of the earliest change in load for any router
+            crop_index = self._get_last_change_index(measurements)
+            if crop_index < len(measurements):
+                new_algo_to_measurements[algo] = measurements[:crop_index]
+
+        return new_algo_to_measurements
 
     def plot_core_input_traffic(self):
         """
@@ -219,7 +280,7 @@ class AlgorithmsComparator(object):
         tin = np.asarray(tin)/(self.k**2)
         return tin, tout
 
-    def plot_in_out_traffic(self):
+    def plot_in_out_abs_traffic(self):
         """
         Plots the total input traffic leaving the hosts compared to the total traffic
         entering the hosts
@@ -254,6 +315,40 @@ class AlgorithmsComparator(object):
 
             # Increment subplot index
             i = i + 1
+
+        # Write legend and plot
+        plt.legend(loc='best')
+        plt.show()
+
+    def plot_in_out_traffic(self):
+        """
+        Plots the total input traffic leaving the hosts compared to the total traffic
+        entering the hosts
+
+        :return:
+        """
+        data_to_plot = {}
+
+        fig = plt.figure(figsize=(80, 20))
+        fig.suptitle("Output/Input traffic ratio at the edge for different LB strategies", fontsize=20)
+        plt.xlabel("Time (s)", fontsize=16)
+        plt.ylabel("OUT/IN ratio", fontsize=16)
+        plt.ylim([0, 1])
+
+        for algo, measurements in self.algo_to_measurements.iteritems():
+            (tin, tout) = self.get_in_out_metric(measurements)
+            data_to_plot[algo] = (tin, tout)
+
+        for algo, (tin, tout) in data_to_plot.iteritems():
+            # Compute ratio
+            ratio = np.asarray([min(1, tout[index]/value) for index, value in enumerate(tin)])
+
+            #Fetch colors
+            color = algo_styles[algo]['color']
+            linestyle = algo_styles[algo]['linestyle']
+
+            # Plot in and out traffic
+            plt.plot(ratio, color=color, linestyle=linestyle, label=algo, linewidth=2.0)
 
         # Write legend and plot
         plt.legend(loc='best')
@@ -405,32 +500,6 @@ class AlgorithmsComparator(object):
 
         return ({'avg': upwards_avg, 'std': upwards_std}, {'avg': downwards_avg, 'std': downwards_std})
 
-    def align_data(self, data_to_plot):
-        algos = data_to_plot.keys()
-
-        earliest_flow_index = {}
-
-        # Get the index of the earliest flow observed for each algo
-        for algo, measurements in data_to_plot.iteritems():
-            # Get the index of the earliest change in load for any router
-            earliest_index = self._get_first_change_index(measurements)
-            earliest_flow_index[algo] = earliest_index
-
-        # Get the minimum
-        earliest_algo = min(earliest_flow_index, key=earliest_flow_index.get)
-        earliest_index = earliest_flow_index[earliest_algo]
-
-        # Shift the others
-        new_data_to_plot = {}
-        for algo in algos:
-            if algo != earliest_algo:
-                measurements = data_to_plot[algo]
-                index_diff = earliest_flow_index[algo] - earliest_index
-                # Shift it by the difference
-                new_data_to_plot[algo] = measurements[index_diff:]
-
-        return new_data_to_plot
-
     def plot_average_core_loads(self):
         """
         Plots the average core load for upwards and downwards traffic
@@ -531,7 +600,8 @@ if __name__ == "__main__":
     parser.add_argument('--node', help="Plot traffic observed at node links only. e.g: h_0_0", type=str, default=None)
     parser.add_argument('--upwards', default=True)
 
-    parser.add_argument('--in_out', help="Plot input traffic against output traffic", action="store_true", default=False)
+    parser.add_argument('--in_out', help="Plot ratio input/output traffic", action="store_true", default=False)
+    parser.add_argument('--in_out_abs', help="Plot input traffic against output traffic", action="store_true", default=False)
 
     parser.add_argument('--core_input_traffic', help="Plot traffic arriving at core layer", action="store_true", default=False)
 
@@ -549,6 +619,9 @@ if __name__ == "__main__":
 
     if args.in_out:
         ac.plot_in_out_traffic()
+
+    if args.in_out_abs:
+        ac.plot_in_out_abs_traffic()
 
     if args.core_input_traffic:
         ac.plot_core_input_traffic()
