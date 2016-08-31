@@ -9,7 +9,7 @@ import signal
 import sched
 import time
 import sys
-
+import traceback
 import logging
 from fibte.logger import log
 from threading import Thread
@@ -211,30 +211,33 @@ class FlowServer(object):
 
             # Simulation ongoing -- only terminate event allowed
             else:
-                # While traffic stil ongoing
-                while self.scheduler_process.is_alive():
-                    #log.debug("Scheduler process is still alive -- Traffic ongoing")
-                    #log.info("Processes: {0}".format(len(self.processes)))
+                try:
+                    # While traffic stil ongoing
+                    while self.scheduler_process.is_alive():
+                        #log.debug("Scheduler process is still alive -- Traffic ongoing")
+                        #log.info("Processes: {0}".format(len(self.processes)))
 
-                    # Check if new event in the queue
-                    try:
-                        data = self.q_server.get(timeout=2)#block=False)
-                    except Queue.Empty:
-                        #log.debug("Timeout occurred reading from server event queue")
-                        pass
+                        # Check if new event in the queue
+                        try:
+                            data = self.q_server.get(timeout=2)#block=False)
+                        except Queue.Empty:
+                            #log.debug("Timeout occurred reading from server event queue")
+                            pass
 
-                    else:
-                        #log.debug("Timeout didn't occur: loading json object...")
-                        self.q_server.task_done()
-                        event = json.loads(data)
+                        else:
+                            #log.debug("Timeout didn't occur: loading json object...")
+                            self.q_server.task_done()
+                            event = json.loads(data)
 
-                        if event["type"] == "terminate":
-                            # Stop traffic during ongoing traffic
-                            log.debug("Terminate event received from trafficGenerator - terminating...")
-                            self.terminateTraffic()
+                            if event["type"] == "terminate":
+                                # Stop traffic during ongoing traffic
+                                log.debug("Terminate event received from trafficGenerator - terminating...")
+                                self.terminateTraffic()
 
-                # Stop traffic immediately
-                self.waitForTrafficToFinish()
+                    # Stop traffic immediately
+                    self.waitForTrafficToFinish()
+                except Exception as e:
+                    log.error("EXCEPTION OCCURRED: {0}".format(traceback.print_exc()))
 
 if __name__ == "__main__":
     import os
