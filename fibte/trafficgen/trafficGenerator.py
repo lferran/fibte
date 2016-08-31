@@ -10,7 +10,7 @@ except:
     import pickle
 
 import json
-
+import scipy.stats as stats
 from fibte.logger import log
 from fibte.trafficgen.flowGenerator import isElephant
 from fibte.misc.unixSockets import UnixClient, UnixClientTCP
@@ -161,13 +161,23 @@ class TrafficGenerator(Base):
         else:
             raise ValueError("Unknown flow type: {0}".format(flow_type))
 
-    def get_flow_size(self, flow_type):
+    def get_flow_size(self, flow_type, distribution='exponential'):
         """
         :param flow_type:
         :return:
         """
         if flow_type == 'e':
-            return random.randrange(ELEPHANT_SIZE_RANGE[0], ELEPHANT_SIZE_RANGE[1] + ELEPHANT_SIZE_STEP, ELEPHANT_SIZE_STEP)
+            if distribution == 'uniform':
+                return random.randrange(ELEPHANT_SIZE_RANGE[0], ELEPHANT_SIZE_RANGE[1] + ELEPHANT_SIZE_STEP, ELEPHANT_SIZE_STEP)
+            elif distribution == 'exponential':
+                size_range = range(int(ELEPHANT_SIZE_RANGE[0]), int(ELEPHANT_SIZE_RANGE[1] + ELEPHANT_SIZE_STEP), int(ELEPHANT_SIZE_STEP))
+                # Draw exponential sample
+                point = stats.expon.rvs(scale=2, size=1)
+                point_index = int(round(point))
+                point_index = max(0, point_index)
+                point_index = min(point_index, len(size_range) - 1)
+                return size_range[point_index]
+
         elif flow_type == 'm':
             return random.randrange(MICE_SIZE_RANGE[0], MICE_SIZE_RANGE[1]+MICE_SIZE_STEP, MICE_SIZE_STEP)
         else:
@@ -413,11 +423,15 @@ class TrafficGenerator(Base):
                 else:
                     flow_type = 'e'
 
+                # Set flow type
+                flow['type'] = flow_type
+
                 # Get flow duration
                 flow_duration = self.get_flow_duration(flow_type)
 
-                # Get flow size
-                flow_size = self.get_flow_size(flow_type)
+                # Put flow temporary size
+                #flow_size = self.get_flow_size(flow_type)
+                flow_size = -1
 
                 # Sender
                 snd = flow['srcHost']
@@ -429,16 +443,22 @@ class TrafficGenerator(Base):
                 all_flows[f_id] = {'srcHost': flow['srcHost'],
                                    'dstHost': receiver,
                                    'size': flow_size,
+                                   'type': flow_type,
                                    'startTime': flow['startTime'],
                                    'duration': flow_duration,
                                    'sport': -1, 'dport': -1}
+
+            # Restrict flow sizes so that any host sends more traffic than link capacity
+            all_flows = self.restrict_sizes(all_flows, starting_flows, active_flows)
+
 
         # Update the flows_per_sender dict
         new_flows_per_sender = {}
         for sender, flowlist in flows_per_sender.iteritems():
             new_flows_per_sender[sender] = []
             for flow in flowlist:
-                new_flows_per_sender[sender].append(all_flows[flow['id']])
+                if flow['id'] in all_flows.keys():
+                    new_flows_per_sender[sender].append(all_flows[flow['id']])
 
         # Re-write correct source and destination ports per each sender
         flows_per_sender = {}
@@ -447,6 +467,60 @@ class TrafficGenerator(Base):
             flows_per_sender[sender] = flowlist
 
         return flows_per_sender
+
+    def restrict_sizes(self, all_flows, starting_flows, active_flows):
+        """All flows: Dictionary of flows keyed by id"""
+        # Get new senders
+        senders = list({all_flows[id]['srcHost'] for id in starting_flows.keys()})
+
+        # Assign flows to senders
+        sender_starting_flows = {sender: {id: all_flows[id] for id in starting_flows.keys() if all_flows[id]['srcHost'] == sender} for sender in senders}
+
+        # Accumulate how much they are sending right now
+        current_traffic = {}
+        for sender in senders:
+            current_load = sum([all_flows[id]['size'] for id in active_flows.keys() if all_flows[id]['srcHost'] == sender])
+            current_traffic[sender] = current_load
+
+        # Make a copy that we iterate
+        sender_starting_flows_copy = sender_starting_flows.copy()
+
+        for sender, sfws in sender_starting_flows_copy.iteritems():
+
+            # Give initial sizes to mice flows first
+            initial_sizes = [(fid, self.get_flow_size(sflow['type'])) for (fid, sflow) in sender_starting_flows[sender].iteritems()]
+
+            # Update them in all_flows dict
+            for (fid, size) in initial_sizes:
+                all_flows[fid]['size'] = size
+
+            # Recompute current load of the sender
+            current_load = sum([all_flows[id]['size'] for id in active_flows.keys()+starting_flows.keys() if all_flows[id]['srcHost'] == sender])
+
+            # Fetch elephant id's from the starting ones
+            elephant_ids = [id for id in starting_flows.keys() if all_flows[id]['type'] == 'e' and all_flows[id]['srcHost'] == sender]
+
+            # While the sum of the elephants exceed...
+            while current_load > LINK_BANDWIDTH and elephant_ids != []:
+                # Decrease sizes for each elephant flow starting
+                for eid in elephant_ids:
+                    current_size = all_flows[eid]['size']
+                    new_size = current_size * 0.9
+                    # Check if it's still an elephant flow
+                    if new_size >= ELEPHANT_SIZE_RANGE[0] and new_size <= ELEPHANT_SIZE_RANGE[1]:
+                        all_flows[eid]['size'] = new_size
+                    else:
+                        print "Epa! We had to remove elephant!"
+                        # Need to remove elephant flow from starting flows and all flows
+                        all_flows.pop(eid)
+                        starting_flows.pop(eid)
+                        sender_starting_flows[sender].pop(eid)
+
+                # Recompute load and elephant ids
+                current_load = sum([all_flows[id]['size'] for id in active_flows.keys() + starting_flows.keys() if all_flows[id]['srcHost'] == sender])
+                elephant_ids = [id for id in starting_flows.keys() if all_flows[id]['type'] == 'e' and all_flows[id]['srcHost'] == sender]
+
+        return all_flows
 
     def parse_communication_parties(self, senders, receivers):
         """
