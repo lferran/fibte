@@ -554,6 +554,7 @@ class CoreChooserController(LBController):
 
         # Store all paths --for performance reasons
         self.edge_to_core_paths = self._generateEdgeToCorePaths()
+        self.core_to_edge_paths = self._generateCoreToEdgePaths()
 
         # Keeps track to which core is each flow directed to
         self.flow_to_core = self._generateFlowToCoreDict()
@@ -571,7 +572,15 @@ class CoreChooserController(LBController):
         for edge in self.dc_graph.edge_routers_iter():
             d[edge] = {}
             for core in self.dc_graph.core_routers_iter():
-                d[edge][core] = self._getPathFromEdgeToCore(edge, core)
+                d[edge][core] = self._getPathBetweenNodes(edge, core)
+        return d
+
+    def _generateCoreToEdgePaths(self):
+        d = {}
+        for core in self.dc_graph.core_routers_iter():
+            d[core] = {}
+            for edge in self.dc_graph.edge_routers_iter():
+                d[core][edge] = self._getPathBetweenNodes(core, edge)
         return d
 
     def _createElephantInPathsDict(self):
@@ -615,14 +624,18 @@ class CoreChooserController(LBController):
         """
         return self.edge_to_core_paths[edge][core]
 
-    def _getPathFromEdgeToCore(self, edge, core):
+    def getPathFromCoreToEdge(self, core, edge):
+        """Analogous to getPathFromEdgeToCore"""
+        return self.core_to_edge_paths[core][edge]
+
+    def _getPathBetweenNodes(self, node1, node2):
         """Used to construct the edge_to_core data structure
         """
-        return nx.dijkstra_path(self.dc_graph, edge, core)
+        return nx.dijkstra_path(self.dc_graph, node1, node2)
 
     def addFlowToPath(self, flow, path):
         edges = self.getEdgesFromPath(path)
-        core = path[-1]
+        core = path[2]
         for (u, v) in edges:
             self.elephants_in_paths[u][v]['flows'].append(flow)
             self.elephants_in_paths[u][v]['capacity'] -= flow['size']
@@ -636,7 +649,7 @@ class CoreChooserController(LBController):
 
     def removeFlowFromPath(self, flow, path):
         edges = self.getEdgesFromPath(path)
-        core = path[-1]
+        core = path[2]
         for (u, v) in edges:
             if flow in self.elephants_in_paths[u][v]['flows']: self.elephants_in_paths[u][v]['flows'].remove(flow)
             self.elephants_in_paths[u][v]['capacity'] += flow['size']
@@ -658,8 +671,11 @@ class CoreChooserController(LBController):
     def getPathMinCapacity(self, path):
         """Returns the minimum available capacity observed along the
         edges of the given path"""
+        return min(self.getPathCapacities(path))
+
+    def getPathCapacities(self, path):
         path_edges = self.getEdgesFromPath(path)
-        return min([self.elephants_in_paths[u][v]['capacity'] for (u,v) in path_edges])
+        return [self.elephants_in_paths[u][v]['capacity'] for (u, v) in path_edges]
 
     def getAvailableCorePaths(self, src_gw, flow):
         """
@@ -671,15 +687,22 @@ class CoreChooserController(LBController):
         :param flow:
         :return:
         """
-        #import ipdb; ipdb.set_trace()
-
         core_paths = []
+        dst_px = self.getDestinationPrefixFromFlow(flow)
+        dst_gw = self.getGatewayRouter(dst_px)
         for core in self.dc_graph.core_routers():
-            path = self.getPathFromEdgeToCore(src_gw, core)
-            if self.flowFitsInPath(flow, path):
+            # Get both parts of the path
+            pathSrcToCore = self.getPathFromEdgeToCore(src_gw, core)
+            pathCoreToDst = self.getPathFromCoreToEdge(core, dst_gw)
+
+            # Join complete path
+            completePath = pathSrcToCore + pathCoreToDst[1:]
+
+            # Check if it fits (in all path)
+            if self.flowFitsInPath(flow, completePath):
                 if not self.collidesWithPreviousFlows(src_gw, core, flow):
-                    capacity = self.getPathMinCapacity(path)
-                    core_paths.append({'core': core, 'path': path, 'capacity': capacity})
+                    capacities = self.getPathCapacities(completePath)
+                    core_paths.append({'core': core, 'path': completePath, 'capacities': capacities})
 
         # No available core was found... so rank them!
         if core_paths == []:
@@ -688,10 +711,15 @@ class CoreChooserController(LBController):
             log.error("No available core paths found!! Returning the non-colliding paths!")
             core_paths = []
             for core in self.dc_graph.core_routers():
-                path = self.getPathFromEdgeToCore(src_gw, core)
+                # Get both parts of the path
+                pathSrcToCore = self.getPathFromEdgeToCore(src_gw, core)
+                pathCoreToDst = self.getPathFromCoreToEdge(core, dst_gw)
+
+                # Join complete path
+                completePath = pathSrcToCore + pathCoreToDst[1:]
                 if not self.collidesWithPreviousFlows(src_gw, core, flow):
-                    capacity = self.getPathMinCapacity(path)
-                    core_paths.append({'core': core, 'path': path, 'capacity': capacity})
+                    capacities = self.getPathCapacities(completePath)
+                    core_paths.append({'core': core, 'path': completePath, 'capacity': capacities})
 
         return core_paths
 
@@ -788,8 +816,8 @@ class CoreChooserController(LBController):
             raise ValueError("Flow is not assigned to any core - that's weird")
 
     @abc.abstractmethod
-    def chooseCore(self, available_cores):
-        pass
+    def chooseCore(self, available_cores, flow):
+        """"""
 
     def allocateFlow(self, flow):
         # Check for which cores I can send (must remove those
@@ -822,16 +850,16 @@ class CoreChooserController(LBController):
             log.info("Available cores: {0}".format(ac))
 
             # Choose core
-            chosen = self.chooseCore(available_cores)
+            chosen = self.chooseCore(available_cores, flow)
 
             # Extract data
             chosen_core = chosen['core']
             chosen_core_name = self.dc_graph.get_router_name(chosen_core)
             chosen_path = chosen['path']
-            chosen_capacity = chosen['capacity']
+            chosen_overflow = chosen['overflow']
 
             # Log a bit
-            log.info("{0} was chosen with an available capacity of {1}".format(chosen_core_name, self.base.setSizeToStr(chosen_capacity)))
+            log.info("{0} was chosen with a final overflow of {1}".format(chosen_core_name, self.base.setSizeToStr(chosen_overflow)))
 
             # Retrieve current DAG for destination prefix
             current_dag = self.dags[dst_prefix]['dag']
@@ -858,13 +886,16 @@ class CoreChooserController(LBController):
 
         # Get gateway router and pod
         src_gw = self.getGatewayRouter(src_prefix)
+        dst_gw = self.getGatewayRouter(dst_prefix)
         src_pod = self.dc_graph.get_router_pod(src_gw)
 
         # Get to which core the flow was directed to
         core = self.getCoreFromFlow(flow)
 
         # Compute its current path
-        current_path = self.getPathFromEdgeToCore(src_gw, core)
+        current_edge_to_core = self.getPathFromEdgeToCore(src_gw, core)
+        current_core_to_edge = self.getPathFromCoreToEdge(core, dst_gw)
+        current_path = current_edge_to_core + current_core_to_edge[1:]
 
         # Remove it from the path!!!!!
         self.removeFlowFromPath(flow, current_path)
@@ -880,7 +911,7 @@ class CoreChooserController(LBController):
             current_dag = self.dags[dst_prefix]['dag']
 
             # Restore the DAG
-            current_dag.set_ecmp_uplinks_from_source(src_gw, current_path, all_layers=True)
+            current_dag.set_ecmp_uplinks_from_source(src_gw, current_edge_to_core, all_layers=True)
 
             # Apply DAG
             self.sbmanager.add_dag_requirement(prefix=dst_prefix, dag=current_dag)
@@ -904,7 +935,7 @@ class CoreChooserController(LBController):
                 current_dag = self.dags[dst_prefix]['dag']
 
                 # Restore the DAG
-                current_dag.set_ecmp_uplinks_from_source(src_gw, current_path, all_layers=False)
+                current_dag.set_ecmp_uplinks_from_source(src_gw, current_edge_to_core, all_layers=False)
 
                 # Apply DAG
                 self.sbmanager.add_dag_requirement(prefix=dst_prefix, dag=current_dag)
@@ -938,6 +969,7 @@ class CoreChooserController(LBController):
 
         # Store all paths --for performance reasons
         self.edge_to_core_paths = self._generateEdgeToCorePaths()
+        self.core_to_edge_paths = self._generateCoreToEdgePaths()
 
         # Keeps track to which core is each flow directed to
         self.flow_to_core = self._generateFlowToCoreDict()
@@ -948,14 +980,33 @@ class BestRankedCoreChooser(CoreChooserController):
     def __init__(self, doBalance=True, k=4, threshold=0.9):
         super(BestRankedCoreChooser, self).__init__(doBalance, k, threshold, algorithm="best-ranked-core")
 
-    def chooseCore(self, available_cores):
-        log.info("Choosing available core: HIGHEST AVAILABLE CAPACITY")
+    def chooseCore(self, available_cores, flow):
+        log.info("Choosing available core: BEST RANKED CORE")
+
+        virtual_capacities = []
+
+        # Substract flow size to capacities in edges of each available core path
+        for acore in available_cores:
+            virtual_capacities.append({'core': acore['core'], 'path': acore['path'], 'vcaps': map(lambda x: x - flow['size'], acore['capacities'])})
+
+        capacities_overflow = []
+        for vcore in virtual_capacities:
+            vcaps = vcore['vcaps']
+            overflow = 0
+            for vc in vcaps:
+                if vc < 0:
+                    overflow += vc
+            capacities_overflow.append({'core': vcore['core'], 'path': vcore['path'], 'overflow': overflow})
 
         # Sort available cores from more to less available capacity
-        sorted_available_cores = sorted(available_cores, key=lambda x: x['capacity'], reverse=True)
+        sorted_available_cores = sorted(capacities_overflow, key=lambda x: x['overflow'])
 
-        # Take the first one
-        chosen = sorted_available_cores[0]
+        # From the ones with the same maximum available capacity, take one at random
+        min_overflow = sorted_available_cores[0]['overflow']
+        cores_max_cap = [c for c in sorted_available_cores if c['overflow'] == min_overflow]
+        random.shuffle(cores_max_cap)
+        chosen = cores_max_cap[0]
+        #chosen = sorted_available_cores[0]
 
         return chosen
 
@@ -963,7 +1014,7 @@ class RandomCoreChooser(CoreChooserController):
     def __init__(self, doBalance=True, k=4, threshold=0.9):
         super(RandomCoreChooser, self).__init__(doBalance, k, threshold, algorithm="random-core")
 
-    def chooseCore(self, available_cores):
+    def chooseCore(self, available_cores, flow):
         log.info("Choosing available core: AT RANDOM")
 
         # Shuffle list of av.cores
