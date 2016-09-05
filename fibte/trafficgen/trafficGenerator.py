@@ -195,13 +195,16 @@ class TrafficGenerator(Base):
         :return: chosen receiver
         """
         # Exclude receivers with the same edge router
-        receivers = [r for r in receivers if not self.topology.inSameSubnetwork(sender, r)]
+        receivers = [r for r in receivers if not self.topology.inSameSubnetwork(sender, r) and r != sender]
 
         # Exclude those receviers that do not match flow's type
         receivers = [r for r in receivers if self.get_host_traffic_type(r) == flow_type]
 
-        # Pick one at random
-        return random.choice(receivers)
+        if receivers != []:
+            # Pick one at random
+            return random.choice(receivers)
+        else:
+            return None
 
     def choose_correct_ports(self, flowlist_tmp):
         """
@@ -451,6 +454,8 @@ class TrafficGenerator(Base):
             # Restrict flow sizes so that any host sends more traffic than link capacity
             all_flows = self.restrict_sizes(all_flows, starting_flows, active_flows)
 
+            # Restriction: any host receives more traffic than LINK_BANDWIDTH
+            all_flows = self.restrict_receiver_load(all_flows, starting_flows, active_flows, all_receivers=receivers)
 
         # Update the flows_per_sender dict
         new_flows_per_sender = {}
@@ -467,6 +472,110 @@ class TrafficGenerator(Base):
             flows_per_sender[sender] = flowlist
 
         return flows_per_sender
+
+    def restrict_receiver_load(self, all_flows, starting_flows, active_flows, all_receivers):
+
+        # Get receivers of starting flows
+        receivers = list({all_flows[id]['dstHost'] for id in starting_flows.keys()})
+
+        # Iterate receivers
+        for rcv in receivers:
+            # Get starting flows to receiver
+            receiver_starting_flows = {id: all_flows[id] for id in starting_flows.keys() if all_flows[id]['dstHost'] == rcv}
+
+            # Check how much are receiving rigth now
+            current_load = sum([all_flows[id]['size'] for id in active_flows.keys() if all_flows[id]['dstHost'] == rcv])
+
+            # Get new loads
+            new_load = sum([flow['size'] for (fid, flow) in receiver_starting_flows.iteritems()])
+
+            # Check if overload link
+            if new_load + current_load > LINK_BANDWIDTH:
+                #print "New loads don't fit to {0}".format(rcv)
+
+                # Starting flow ids
+                starting_flow_ids = receiver_starting_flows.keys()[:]
+                random.shuffle(starting_flow_ids)
+
+                while new_load + current_load > LINK_BANDWIDTH and starting_flow_ids != []:
+                    #print "New load + Current load to {0} still bigger than LINK BANDWIDTH".format(rcv)
+
+                    # Pick one of the flows at random
+                    flow_change_dst = starting_flow_ids[0]
+                    #print "Length of starting flows ids: {0} ".format(len(starting_flow_ids))
+                    #print "Changing destination for one flow {0}".format(flow_change_dst)
+
+                    starting_flow_ids.remove(flow_change_dst)
+
+                    # Compute all other possible receivers
+                    all_receivers_t = list(set(all_receivers) - {rcv})
+
+                    # Get new destination host
+                    new_dst = self.get_flow_destination(all_flows[flow_change_dst]['srcHost'], all_receivers_t, all_flows[flow_change_dst]['type'])
+                    #print "Picked new destination for flow {0}: {1}".format(flow_change_dst, new_dst)
+
+                    # Get loads of destination host
+                    loads_new_dst = sum([all_flows[id]['size'] for id in active_flows.keys() if all_flows[id]['dstHost'] == new_dst])
+
+                    # Check if it fits though
+                    if loads_new_dst + all_flows[flow_change_dst]['size'] > LINK_BANDWIDTH:
+                        #print "Flow doesn't fit in other destination either..."
+
+                        # Remove new chosen one from all possible receivers
+                        all_receivers_t = list(set(all_receivers_t) - {new_dst})
+
+                        while loads_new_dst + all_flows[flow_change_dst]['size'] > LINK_BANDWIDTH and all_receivers_t != [] and new_dst != None:
+                            # Pick another destination
+                            #print "Length of all_receivers_t: {0}".format(len(all_receivers_t))
+
+                            # Get new destination host
+                            new_dst = self.get_flow_destination(all_flows[flow_change_dst]['srcHost'], all_receivers_t, all_flows[flow_change_dst]['type'])
+
+                            #print "Choosing another one... {0}".format(new_dst)
+                            all_receivers_t = list(set(all_receivers_t) - {new_dst})
+
+                            # Get loads of destination host
+                            loads_new_dst = sum([all_flows[id]['size'] for id in active_flows.keys() if all_flows[id]['dstHost'] == new_dst])
+
+                        if all_receivers_t != [] and new_dst != None:
+                            # Found one receiver
+                            #print "A receiver was found for flow {0}: {1}".format(flow_change_dst, new_dst)
+                            # Change destination in all data structures
+                            all_flows[flow_change_dst]['dstHost'] = new_dst
+                            receiver_starting_flows.pop(flow_change_dst)
+
+                        else:
+                            # Receiver not found
+                            #print "Flow {0} could not be found any destination that would fit him, so we remove it".format(flow_change_dst)
+                            # Remove flow then
+                            all_flows.pop(flow_change_dst)
+                            starting_flows.pop(flow_change_dst)
+                            receiver_starting_flows.pop(flow_change_dst)
+
+                    else:
+                        #print "Flow fits in new chosen destination!"
+                        #print "A receiver was found for flow {0}: {1}".format(flow_change_dst, new_dst)
+                        # Change destination in all data structures
+                        all_flows[flow_change_dst]['dstHost'] = new_dst
+                        receiver_starting_flows.pop(flow_change_dst)
+
+                    # Re-compute starting flows to receiver
+                    receiver_starting_flows = {id: all_flows[id] for id in starting_flows.keys() if all_flows[id]['dstHost'] == rcv}
+                    new_load = sum([flow['size'] for (fid, flow) in receiver_starting_flows.iteritems()])
+
+                if starting_flow_ids != []:
+                    # Flows allocated so that the load for that receiver is ok
+                    #print "Some flows to {0} were re-allocated/removed! and now load restriction is preserved".format(rcv)
+                    pass
+                else:
+                    # Problem
+                    #print "Receiver can't hold any more flows: all were removed/reallocated"
+                    pass
+            else:
+                #print "Loads fit in - NOP"
+                pass
+
+        return all_flows
 
     def restrict_sizes(self, all_flows, starting_flows, active_flows):
         """All flows: Dictionary of flows keyed by id"""
@@ -510,7 +619,7 @@ class TrafficGenerator(Base):
                     if new_size >= ELEPHANT_SIZE_RANGE[0] and new_size <= ELEPHANT_SIZE_RANGE[1]:
                         all_flows[eid]['size'] = new_size
                     else:
-                        print "Epa! We had to remove elephant!"
+                        #print "Epa! We had to remove elephant!"
                         # Need to remove elephant flow from starting flows and all flows
                         all_flows.pop(eid)
                         starting_flows.pop(eid)
