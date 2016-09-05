@@ -732,7 +732,13 @@ class DCDag(DCDiGraph):
                     if not self.has_edge(ar, cr):
                         self.add_uplink(ar, cr)
 
-    def set_ecmp_uplinks_from_source(self, src, previous_path):
+    def set_ecmp_uplinks_from_source(self, src, previous_path, all_layers=True):
+        """Given a source edge, and the previous path taken by a flow, it returns the
+        dag to its original ecmp state.
+
+        all_layers determines if only the edge->aggregation layer is reset to ecmp, or if
+        also the aggregation->core layer.
+        """
         if self.is_edge(src):
             src_pod = self.get_router_pod(src)
             src_index = self.get_router_index(src)
@@ -746,15 +752,16 @@ class DCDag(DCDiGraph):
                 if not self.has_edge(src, ar):
                     self.add_uplink(src, ar)
 
-            previous_agg = previous_path[1]
-            previous_agg_index = self.get_router_index(previous_agg)
-            e = previous_agg_index
-            if not same_sink_pod:
-                ar = self.get_router_from_position(type='aggregation', index=e, pod=src_pod)
-                for c in range((self.k / 2) *e, (e + 1) * (self.k / 2)):
-                    cr = self.get_router_from_position(type='core', index=c)
-                    if not self.has_edge(ar, cr):
-                        self.add_uplink(ar, cr)
+            if all_layers == True:
+                previous_agg = previous_path[1]
+                previous_agg_index = self.get_router_index(previous_agg)
+                e = previous_agg_index
+                if not same_sink_pod:
+                    ar = self.get_router_from_position(type='aggregation', index=e, pod=src_pod)
+                    for c in range((self.k / 2) *e, (e + 1) * (self.k / 2)):
+                        cr = self.get_router_from_position(type='core', index=c)
+                        if not self.has_edge(ar, cr):
+                            self.add_uplink(ar, cr)
 
     def _get_random_uplink_choice(self):
         """
