@@ -35,18 +35,20 @@ class Base(object):
     def setSizeToStr(self, size):
         """Expects an integer representing number of bytes as input.
         """
-        units = [('G', 1e9), ('M', 1e6), ('K', 1e3), ('B', 1)]
-        string = "{0:.2f}"
-        for (unit, value) in units:
-            q, r = divmod(size, value)
-            if q > 0.0:
+        if size != 0:
+            units = [('G', 1e9), ('M', 1e6), ('K', 1e3), ('B', 1)]
+            string = "{0:.2f}"
+            for (unit, value) in units:
+                q, r = divmod(size, value)
+                if q > 0.0:
 
-                val = float((q*value + r)/value)
-                #print q,val
-                string = string.format(val)
-                string = string + unit
-                return string
-
+                    val = float((q*value + r)/value)
+                    #print q,val
+                    string = string.format(val)
+                    string = string + unit
+                    return string
+        else:
+            return '0.0B'
 
     def setTimeToInt(self, duration = '00:01:00'):
         """
@@ -63,8 +65,6 @@ class Base(object):
         ftr = [3600,60,1]
 
         return sum([a*b for a,b in zip(ftr, map(int,duration.split(':')))])
-
-
 
     def setTimeToStr(self, time =60):
         """Expects time in seconds as integer.
