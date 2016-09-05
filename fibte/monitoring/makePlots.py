@@ -11,16 +11,16 @@ tmp_files = CFG.get("DEFAULT", "tmp_files")
 db_topo = CFG.get("DEFAULT", "db_topo")
 
 algo_styles = {'ecmp':
-                   {'color': 'r', 'linestyle':'-'},
+                   {'color': 'red', 'linestyle':'-'},
 
                'random-dags':
-                   {'color':'b', 'linestyle':'-'},
+                   {'color':'orange', 'linestyle':'-'},
 
                'best-ranked-core':
-                   {'color':'g', 'linestyle':'-'},
+                   {'color':'green', 'linestyle':'-'},
 
                'random-core':
-                   {'color':'black', 'linestyle':'-'},
+                   {'color':'blue', 'linestyle':'-'},
                }
 
 class AlgorithmsComparator(object):
@@ -188,7 +188,8 @@ class AlgorithmsComparator(object):
 
         # Create the figure first
         fig = plt.figure(figsize=(80, 20))
-        fig.subplots_adjust(bottom=0.025, left=0.025, top=0.975, right=0.975)
+        #fig.subplots_adjust(bottom=0.025, left=0.025, top=0.975, right=0.975)
+        fig.suptitle("Core input traffic", fontsize=20)
 
         # Start the subplot posistions
         subplot_positions = []
@@ -237,13 +238,14 @@ class AlgorithmsComparator(object):
 
         for nrows, ncols, plot_number in subplot_positions:
             sub = fig.add_subplot(nrows, ncols, plot_number)
+            sub.grid(True)
             sub.set_ylim([0,1])
-            if plot_number != 4:
-                sub.set_xticks([])
+            #if plot_number != 4:
+            #    sub.set_xticks([])
 
             # Get core router with that position
             cr = [router for router, position in core_positions.iteritems() if position[2] == plot_number][0]
-            print "Current core router: {0}".format(cr)
+            #print "Current core router: {0}".format(cr)
 
             # Plot it
             for algo in algos:
@@ -254,6 +256,9 @@ class AlgorithmsComparator(object):
 
         # Locate the legend
         plt.legend(loc='best')
+
+        # Set grid on
+        plt.grid(True)
 
         #Show plot
         plt.show()
@@ -300,6 +305,7 @@ class AlgorithmsComparator(object):
             sub = fig.add_subplot(nrows, ncols, i)
             # Set the title
             sub.set_title("{0}".format(algo.upper()))
+            sub.grid(True)
 
             # Plot in and out traffic
             sub.plot(tin, color='g', linestyle='-', label='Input traffic', linewidth=2.0)
@@ -315,6 +321,8 @@ class AlgorithmsComparator(object):
 
         # Write legend and plot
         plt.legend(loc='best')
+        # Set grid on
+        plt.grid(True)
         plt.show()
 
     def plot_in_out_traffic(self):
@@ -349,6 +357,8 @@ class AlgorithmsComparator(object):
 
         # Write legend and plot
         plt.legend(loc='best')
+        # Set grid on
+        plt.grid(True)
         plt.show()
 
     def get_node_loads(self, node, measurements, upwards=True):
@@ -445,6 +455,7 @@ class AlgorithmsComparator(object):
         for neighbor in node_neigbors:
             # Create a new subplot
             sub = fig.add_subplot(nrows, ncols, i)
+            sub.grid(True)
 
             # Set title of subplot
             sub.set_title("Edge with {1}".format(node, neighbor))
@@ -468,6 +479,9 @@ class AlgorithmsComparator(object):
 
         # Set the legend
         plt.legend(loc='best')
+        # Set grid on
+        plt.grid(True)
+
         plt.show()
 
     def get_average_core_load(self, measurements):
@@ -521,6 +535,7 @@ class AlgorithmsComparator(object):
 
             # Create a new subplot
             sub = fig.add_subplot(row, col, index)
+            sub.grid(True)
 
             # Upper left corner
             if index == 1:
@@ -533,8 +548,8 @@ class AlgorithmsComparator(object):
                     sub.plot(data_to_plot[algo]['up']['avg'], color=color, linestyle=linestyle, label=algo, linewidth=2.0)
 
                     # set axis labels
-                    sub.set_ylabel("Average load")
-                    sub.set_xlabel("Time (s)")
+                    sub.set_ylabel("Average load", fontsize=16)
+                    sub.set_xlabel("Time (s)", fontsize=16)
 
                     # set limit
                     sub.set_ylim([0, 1])
@@ -548,8 +563,8 @@ class AlgorithmsComparator(object):
                     sub.plot(data_to_plot[algo]['down']['avg'], color=color, linestyle=linestyle, label=algo, linewidth=2.0)
 
                     # set axis labels
-                    sub.set_ylabel("Average load")
-                    sub.set_xlabel("Time (s)")
+                    sub.set_ylabel("Average load", fontsize=16)
+                    sub.set_xlabel("Time (s)", fontsize=16)
 
                     # set limit
                     sub.set_ylim([0, 1])
@@ -563,8 +578,8 @@ class AlgorithmsComparator(object):
                     sub.plot(data_to_plot[algo]['up']['std'], color=color, linestyle=linestyle, label=algo, linewidth=2.0)
 
                     # set axis labels
-                    sub.set_ylabel("Load Std.")
-                    sub.set_xlabel("Time (s)")
+                    sub.set_ylabel("Load Std.", fontsize=16)
+                    sub.set_xlabel("Time (s)", fontsize=16)
 
                     # set limit
                     sub.set_ylim([0, 1])
@@ -578,14 +593,16 @@ class AlgorithmsComparator(object):
                     sub.plot(data_to_plot[algo]['down']['std'], color=color, linestyle=linestyle, label=algo, linewidth=2.0)
 
                     # set axis labels
-                    sub.set_ylabel("Load Std.")
-                    sub.set_xlabel("Time (s)")
+                    sub.set_ylabel("Load Std.", fontsize=16)
+                    sub.set_xlabel("Time (s)", fontsize=16)
 
                     # set limit
                     sub.set_ylim([0, 1])
 
         # Write legend and plot
         plt.legend(loc='best')
+        # Set grid on
+        plt.grid(True)
         plt.show()
 
     def get_max_core_load_diff(self, measurements):
@@ -632,6 +649,7 @@ class AlgorithmsComparator(object):
 
             # Create a new subplot
             sub = fig.add_subplot(row, col, index)
+            sub.grid(True)
 
             # Upper left corner
             if index == 1:
@@ -668,6 +686,149 @@ class AlgorithmsComparator(object):
 
         # Write legend and plot
         plt.legend(loc='best')
+        # Set grid on
+        plt.grid(True)
+        plt.show()
+
+    def get_average_core_diff(self, measurements):
+        coreRouters = self.topology.getCoreRouters()
+
+        upwards_diff = []
+        downwards_diff = []
+
+        for t, link_loads in measurements:
+            # Fetch upward and downward load values for that time
+            core_upwards_loads = [link_loads[a][o]['out'] for a, other in link_loads.iteritems() for o in other if o in coreRouters]
+            core_downwards_loads = [link_loads[a][o]['in'] for a, other in link_loads.iteritems() for o in other if o in coreRouters]
+
+            # Convert it to an array
+            cul = np.asarray(core_upwards_loads)
+            cdl = np.asarray(core_downwards_loads)
+
+            # Compute average difference
+            cul_diff = []
+            cdl_diff = []
+
+            for index, cu in enumerate(cul):
+                for index2, cu2 in enumerate(cul):
+                    if index != index2:
+                        cul_diff.append(abs(cu - cu2))
+
+            for j, cd in enumerate(cdl):
+                for j2, cd2 in enumerate(cdl):
+                    if j != j2:
+                        cdl_diff.append(abs(cd - cd2))
+
+            # Convert to array
+            cul_diff = np.asarray(cul_diff)
+            cdl_diff = np.asarray(cdl_diff)
+
+            # Append if
+            upwards_diff.append(cul_diff)
+            downwards_diff.append(cdl_diff)
+
+        # Exctract mean and std
+        upwards_avg = [u.mean() for u in upwards_diff]
+        upwards_std = [u.std() for u in upwards_diff]
+        downwards_avg = [u.mean() for u in downwards_diff]
+        downwards_std = [u.std() for u in downwards_diff]
+
+        # Convert it to array
+        upwards_diff = np.asarray(upwards_diff)
+        downwards_diff = np.asarray(downwards_diff)
+
+        return ({'avg': upwards_avg, 'std': upwards_std}, {'avg': downwards_avg, 'std': downwards_std})
+
+    def plot_average_core_diff(self):
+        """
+        Plots the average core load for upwards and downwards traffic
+        :return:
+        """
+        # Fetch data to plot
+        data_to_plot = {}
+        for algo, measurements in self.algo_to_measurements.iteritems():
+            (upwards, downwards) = self.get_average_core_diff(measurements)
+            data_to_plot[algo] = {'up': upwards, 'down': downwards}
+
+        subplot_positions = [(2,2,1), (2,2,2), (2,2,3), (2,2,4)]
+
+        # Create figure
+        fig = plt.figure(figsize=(80, 20))
+        fig.suptitle("Average difference in load for core layer routers", fontsize=20)
+
+        # Iterate subplots
+        for (row, col, index) in subplot_positions:
+
+            # Create a new subplot
+            sub = fig.add_subplot(row, col, index)
+            sub.grid(True)
+
+            # Upper left corner
+            if index == 1:
+                sub.set_title("Upward traffic average load difference", fontsize=16)
+                for algo in data_to_plot.keys():
+                    #import ipdb; ipdb.set_trace()
+                    color = algo_styles[algo]['color']
+                    linestyle = algo_styles[algo]['linestyle']
+                    # plot
+                    sub.plot(data_to_plot[algo]['up']['avg'], color=color, linestyle=linestyle, label=algo, linewidth=2.0)
+
+                    # set axis labels
+                    sub.set_ylabel("Average load difference", fontsize=16)
+                    sub.set_xlabel("Time (s)", fontsize=16)
+
+                    # set limit
+                    sub.set_ylim([0, 1])
+
+            elif index == 2:
+                sub.set_title("Downward traffic average load difference", fontsize=16)
+                for algo in data_to_plot.keys():
+                    color = algo_styles[algo]['color']
+                    linestyle = algo_styles[algo]['linestyle']
+                    # plot
+                    sub.plot(data_to_plot[algo]['down']['avg'], color=color, linestyle=linestyle, label=algo, linewidth=2.0)
+
+                    # set axis labels
+                    sub.set_ylabel("Average load difference", fontsize=16)
+                    sub.set_xlabel("Time (s)", fontsize=16)
+
+                    # set limit
+                    sub.set_ylim([0, 1])
+
+            elif index == 3:
+                sub.set_title("Upward traffic load difference Std.", fontsize=16)
+                for algo in data_to_plot.keys():
+                    color = algo_styles[algo]['color']
+                    linestyle = algo_styles[algo]['linestyle']
+                    # plot
+                    sub.plot(data_to_plot[algo]['up']['std'], color=color, linestyle=linestyle, label=algo, linewidth=2.0)
+
+                    # set axis labels
+                    sub.set_ylabel("Load diff Std.", fontsize=16)
+                    sub.set_xlabel("Time (s)", fontsize=16)
+
+                    # set limit
+                    sub.set_ylim([0, 1])
+
+            elif index == 4:
+                sub.set_title("Downward traffic load difference Std.", fontsize=16)
+                for algo in data_to_plot.keys():
+                    color = algo_styles[algo]['color']
+                    linestyle = algo_styles[algo]['linestyle']
+                    # plot
+                    sub.plot(data_to_plot[algo]['down']['std'], color=color, linestyle=linestyle, label=algo, linewidth=2.0)
+
+                    # set axis labels
+                    sub.set_ylabel("Load diff Std.", fontsize=16)
+                    sub.set_xlabel("Time (s)", fontsize=16)
+
+                    # set limit
+                    sub.set_ylim([0, 1])
+
+        # Write legend and plot
+        plt.legend(loc='best')
+        # Set grid on
+        plt.grid(True)
         plt.show()
 
 
@@ -690,6 +851,9 @@ if __name__ == "__main__":
 
     parser.add_argument('--average_core_load', help="Plot average core layer load", action="store_true", default=False)
     parser.add_argument('--max_diff_core_load', help="Plot maximum difference between core loads", action="store_true", default=False)
+    parser.add_argument('--average_diff_core_load', help="Plot average difference between core loads", action="store_true", default=False)
+
+    parser.add_argument('--all', help="Plot all metrics", action="store_true", default=False)
 
     # Parse arguments
     args = parser.parse_args()
@@ -697,24 +861,36 @@ if __name__ == "__main__":
     # Start object and load measurement files
     ac = AlgorithmsComparator(k=args.k, file_list=args.file_list)
 
-    # Act according to presented arguments
-    if args.node:
-        if args.downwards:
-            ac.plot_node_traffic(args.node, upwards=not(args.downwards))
-        else:
-            ac.plot_node_traffic(args.node, upwards=args.upwards)
-
-    if args.in_out:
+    if args.all:
         ac.plot_in_out_traffic()
-
-    if args.in_out_abs:
         ac.plot_in_out_abs_traffic()
-
-    if args.core_input_traffic:
         ac.plot_core_input_traffic()
-
-    if args.average_core_load:
         ac.plot_average_core_loads()
-
-    if args.max_diff_core_load:
         ac.plot_max_core_load_diff()
+        ac.plot_average_core_diff()
+
+    else:
+        # Act according to presented arguments
+        if args.node:
+            if args.downwards:
+                ac.plot_node_traffic(args.node, upwards=not(args.downwards))
+            else:
+                ac.plot_node_traffic(args.node, upwards=args.upwards)
+
+        if args.in_out:
+            ac.plot_in_out_traffic()
+
+        if args.in_out_abs:
+            ac.plot_in_out_abs_traffic()
+
+        if args.core_input_traffic:
+            ac.plot_core_input_traffic()
+
+        if args.average_core_load:
+            ac.plot_average_core_loads()
+
+        if args.max_diff_core_load:
+            ac.plot_max_core_load_diff()
+
+        if args.average_diff_core_load:
+            ac.plot_average_core_diff()
