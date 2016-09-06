@@ -42,9 +42,9 @@ def read_pid(n):
 def del_file(f):
     os.remove(f)
 
-class TrafficGenerator(Base):
+class TrafficGeneratorBase(Base):
     def __init__(self, pMice = 0.9, pElephant = 0.1, *args, **kwargs):
-        super(TrafficGenerator, self).__init__(*args,**kwargs)
+        super(TrafficGeneratorBase, self).__init__(*args,**kwargs)
         # Set debug level
         log.setLevel(logging.DEBUG)
 
@@ -52,14 +52,13 @@ class TrafficGenerator(Base):
         self.pMice = pMice
         self.pElephant = pElephant
 
-        self.topology = TopologyGraph(getIfindexes=False,
-                                      interfaceToRouterName=False,
-                                      db=os.path.join(tmp_files,db_topo))
+        # Load topology
+        self.topology = TopologyGraph(getIfindexes=False, interfaceToRouterName=False, db=os.path.join(tmp_files,db_topo))
 
+        # Link bandwidth
         self.linkBandwidth = LINK_BANDWIDTH
 
         # Used to communicate with flowServers at the hosts.
-        # {0} is because it will be filled with whichever server we want to talk to!
         self.unixClient = UnixClientTCP(tmp_files+"flowServer_{0}")
 
         # Used to communicate with LoadBalancer Controller
@@ -297,6 +296,9 @@ class TrafficGenerator(Base):
         # Return the active flows for the period
         return active_flows
 
+    def _get_active_flows_2(self, all_flows, period):
+        return {fid: flow for fid, flow in all_flows.iteritems() if flow['startTime'] <= period and flow['startTime'] + flow['duration'] >= period}
+
     def _get_starting_flows(self, all_flows, period):
         """
         Returns a dictionary of all the flows that are starting in the current time period.
@@ -311,6 +313,9 @@ class TrafficGenerator(Base):
                           if flow.get('startTime') >= period and flow.get('startTime') < period + self.time_step}
 
         return starting_flows
+
+    def _get_starting_flows_2(self, all_flows, period):
+        return {f_id: flow for f_id, flow in all_flows.iteritems() if flow.get('startTime') >= period and flow.get('startTime') < period + self.time_step}
 
     def _get_best_mice_number(self, xm, n, x):
         results = []
@@ -455,7 +460,47 @@ class TrafficGenerator(Base):
             all_flows = self.restrict_sizes(all_flows, starting_flows, active_flows)
 
             # Restriction: any host receives more traffic than LINK_BANDWIDTH
-            all_flows = self.restrict_receiver_load(all_flows, starting_flows, active_flows, all_receivers=receivers)
+            #all_flows = self.restrict_receiver_load(all_flows, starting_flows, active_flows, all_receivers=receivers)
+
+        # Final check on receiving load restrictions
+        for period in range(0, totalTime, self.time_step):
+
+            # Get active flows in current period
+            active_flows = self._get_active_flows_2(all_flows, period)
+
+            # Get next starting flows
+            starting_flows = self._get_starting_flows_2(all_flows, period)
+
+            # Iterate hosts
+            for rcv in receivers:
+                # Compute current load of the link
+                rcv_current_load = sum([all_flows[id]['size'] for id in active_flows.keys() if all_flows[id]['dstHost'] == rcv])
+
+                # Compute new flows to receiver
+                rcv_new_flows = {id: all_flows[id] for id in starting_flows.keys() if all_flows[id]['dstHost'] == rcv}
+                rcv_new_flows_load = sum([flow['size'] for (fid, flow) in rcv_new_flows.iteritems()])
+
+                if rcv_current_load + rcv_new_flows_load > LINK_BANDWIDTH:
+                    rcv_new_em_flows = [fid for fid, flow in rcv_new_flows.iteritems()]
+                    random.shuffle(rcv_new_em_flows)
+
+                    while rcv_current_load + rcv_new_flows_load > LINK_BANDWIDTH and rcv_new_em_flows != []:
+                        # Pick one elephant flow
+                        flow_to_remove_id = rcv_new_em_flows[0]
+                        rcv_new_em_flows.remove(flow_to_remove_id)
+
+                        # Remove it from starting flows and all flows
+                        starting_flows.pop(flow_to_remove_id)
+                        all_flows.pop(flow_to_remove_id)
+
+                        # Recompute new flow load
+                        rcv_new_flows = {id: all_flows[id] for id in starting_flows.keys() if all_flows[id]['dstHost'] == rcv}
+                        rcv_new_flows_load = sum([flow['size'] for (fid, flow) in rcv_new_flows.iteritems()])
+
+                    if rcv_new_em_flows == []:
+                        print "All starting flows had to be removed!"
+                else:
+                    continue
 
         # Update the flows_per_sender dict
         new_flows_per_sender = {}
@@ -869,6 +914,7 @@ class TrafficGenerator(Base):
 
         return traffic_copy
 
+
 if __name__ == "__main__":
 
     import argparse
@@ -930,7 +976,7 @@ if __name__ == "__main__":
     receivers = args.receivers.split(",")
 
     # Start the TG object
-    tg = TrafficGenerator(pMice=args.mice, pElephant=args.elephant)
+    tg = TrafficGeneratorBase(pMice=args.mice, pElephant=args.elephant)
 
     # Start counting time
     t = time.time()
@@ -967,7 +1013,7 @@ if __name__ == "__main__":
                 if args.save_traffic:
                     msg = "Saving traffic file -> {0}"
                     filename = '{0}'.format(saved_traffic_folder)
-                    filename += "{0}_to_{1}_m{2}e{3}_fr{4}_t{5}_ts{6}.traffic".format(','.join(senders), ','.join(receivers),
+                    filename += "tg1_{0}_to_{1}_m{2}e{3}_fr{4}_t{5}_ts{6}.traffic".format(','.join(senders), ','.join(receivers),
                                                                                       str(args.mice).replace('.', ','),
                                                                                       str(args.elephant).replace('.', ','),
                                                                                       str(args.flow_rate).replace('.', ','),
