@@ -790,8 +790,8 @@ class DCDag(DCDiGraph):
         return (edges_to_aggr, aggr_to_core)
 
     def all_paths_to_sink(self, source):
-        #TODO
-        pass
+        """Returns all paths from source to sink in the DAG"""
+        return nx.all_simple_paths(self, source, self.sink['id'])
 
     def apply_path_to_core(self, source, core):
         """Force the patch from source to core router, by removing side edges
