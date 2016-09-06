@@ -8,6 +8,7 @@ from ipaddress import ip_interface
 import subprocess
 import copy
 import matplotlib
+import ipaddress
 
 #matplotlib.use('Qt4Agg')
 
@@ -345,12 +346,45 @@ class TopologyGraph(TopologyDB):
 
         # Populates self.hostsIpMapping dictionary
         self.hostsIpMapping()
+
         # Populataes self.routersIpMappin dictionary
         self.routersIdMapping()
+
+        # Fill gateway into host information
+        self.fillHostGateways()
+
+        # Fills a list of initial OSPF prefixes
+        self.initialPrefixes = self._getInitialNetworkPrefixes()
+
+        # Populates self.hostToNetworksMapping dictionary
+        self.hostsToNetworksMapping()
 
         # Populates self.interfaceIPToRouterName dict
         if interfaceToRouterName:
             self.loadInterfaceToRouterName()
+
+    def fillHostGateways(self):
+        self.hostToGatewayMapping = {}
+        self.hostToGatewayMapping['hostToGateway'] = {}
+        self.hostToGatewayMapping['gatewayToHosts'] = {}
+        hosts = self.getHosts()
+        for host, host_data in hosts.iteritems():
+            for iface, iface_data in host_data.iteritems():
+                if iface != 'type':
+                    connected_to = iface_data['connectedTo']
+                    # Case in which intermediate switch is not there
+                    if self.type(connected_to) == 'router':
+                        gw = connected_to
+                    elif self.type(connected_to) == 'switch':
+                        gw = [data['connectedTo'] for _, data in self.network[connected_to].iteritems()
+                              if type(data) == dict and self.type(data['connectedTo']) == 'router'][0]
+
+                    iface_data['gateway'] = gw
+                    self.hostToGatewayMapping['hostToGateway'][host] = gw
+                    if gw not in self.hostToGatewayMapping['gatewayToHosts']:
+                        self.hostToGatewayMapping['gatewayToHosts'][gw] = [host]
+                    else:
+                        self.hostToGatewayMapping['gatewayToHosts'][gw].append(host)
 
     def loadInterfaceToRouterName(self):
         """
@@ -411,7 +445,7 @@ class TopologyGraph(TopologyDB):
         if host not in self.network:
             raise ValueError("{0} does not exist".format(host))
 
-        return self.network[host]["gateway"]
+        return self.hostToGatewayMapping['hostToGateway'][host]
 
     def getHostsBehindRouter(self, router):
         """
@@ -547,7 +581,7 @@ class TopologyGraph(TopologyDB):
         self.hostsIpMapping["ipToName"] = {}
         self.hostsIpMapping["nameToIp"] = {}
         for host in hosts:
-            self.hostsIpMapping["ipToName"][(hosts[host]["%s-eth0" % (host)]["ip"]).split("/")[0]] = host
+            self.hostsIpMapping["ipToName"][(hosts[host]["%s-eth0"%(host)]["ip"]).split("/")[0]] = host
             self.hostsIpMapping["nameToIp"][host] = (hosts[host]["%s-eth0" % (host)]["ip"]).split("/")[0]
 
     def routersIdMapping(self):
@@ -559,6 +593,27 @@ class TopologyGraph(TopologyDB):
             routerid = data['routerid']
             self.routersIdMapping["idToName"][routerid] = name
             self.routersIdMapping["nameToId"][name] = routerid
+
+    def hostsToNetworksMapping(self):
+        self.hostsToNetworksMapping = {}
+        hosts = self.getHosts()
+        self.hostsToNetworksMapping['hostToNetwork'] = {}
+        self.hostsToNetworksMapping['networkToHost'] = {}
+#        import ipdb; ipdb.set_trace()
+        for host, host_data in hosts.iteritems():
+            self.hostsToNetworksMapping['hostToNetwork'][host] = {}
+            for iface, iface_data in host_data.iteritems():
+                if iface != 'type':
+                    iface_network = self.hostInterfaceNetwork(host, iface)
+                    self.hostsToNetworksMapping['hostToNetwork'][host][iface] = iface_network
+
+                    if iface_network not in self.hostsToNetworksMapping['networkToHost']:
+                        self.hostsToNetworksMapping['networkToHost'][iface_network] = {}
+
+                    if host not in self.hostsToNetworksMapping['networkToHost'][iface_network]:
+                        self.hostsToNetworksMapping['networkToHost'][iface_network][host] = [iface]
+                    else:
+                        self.hostsToNetworksMapping['networkToHost'][iface_network][host].append(iface)
 
     def getHostName(self, ip):
 
@@ -754,6 +809,30 @@ class TopologyGraph(TopologyDB):
 
     def isHost(self, node_name):
         return self.network[node_name]['type'] == 'host'
+
+    def hostInterfaceIP(self, host, interface):
+        return self._interface(host, interface)['ip'].split("/")[0]
+
+    def hostInterfaceNetwork(self, host, interface):
+        return ipaddress.ip_interface(self._interface(host, interface)['ip']).network.compressed
+
+    def _getInitialNetworkPrefixes(self):
+        initial_prefixes = []
+        hosts = self.getHosts()
+        for host, host_data in hosts.iteritems():
+            for iface, iface_data in host_data.iteritems():
+                if iface != 'type':
+                    iface_network = self.hostInterfaceNetwork(host, iface)
+                    initial_prefixes.append(iface_network)
+
+        return initial_prefixes
+
+    def getInitialNetworkPrefixes(self):
+        return self.initialPrefixes
+
+    def getGatewayRouterFromNetworkPrefix(self, prefix):
+        host = self.hostsToNetworksMapping['networkToHost'][prefix].keys()[0]
+        return self.getGatewayRouter(host)
 
 if __name__ == "__main__":
 
