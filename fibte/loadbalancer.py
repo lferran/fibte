@@ -167,8 +167,8 @@ class LBController(object):
                 if len(real_gw) == 1:
                     return real_gw[0]
                 else:
-                    import ipdb; ipdb.set_trace()
                     log.error("This prefix has several predecessors: {0}".format(prefix))
+                    import ipdb; ipdb.set_trace()
 
                     #raise ValueError("This prefix has several predecessors: {0}".format(prefix))
         else:
@@ -245,9 +245,8 @@ class LBController(object):
         dags = {}
 
         for prefix in self.network_graph.prefixes:
-
             # TODO: change this so that IP is read dynamically
-            if prefix != '192.168.255.0/24': #IP of the fibbing controller prefix...
+            if prefix != '192.255.255.0/24': #IP of the fibbing controller prefix...
 
                 # Get Edge router connected to prefix
                 gatewayRouter = self._getGatewayRouter(prefix)
@@ -979,6 +978,7 @@ class CoreChooserController(LBController):
 class BestRankedCoreChooser(CoreChooserController):
     def __init__(self, doBalance=True, k=4, threshold=0.9):
         super(BestRankedCoreChooser, self).__init__(doBalance, k, threshold, algorithm="best-ranked-core")
+        import ipdb; ipdb.set_trace()
 
     def chooseCore(self, available_cores, flow):
         log.info("Choosing available core: BEST RANKED CORE")
