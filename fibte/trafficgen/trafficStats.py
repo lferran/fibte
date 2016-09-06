@@ -24,24 +24,34 @@ class TrafficStats(object):
 
     @staticmethod
     def get_traffic_params(filename):
-        params = {'senders':[],'receivers':[],
-                  'pmice':-1,'pelephant': -1,
-                  'flow_rate': -1,
-                  'total_time': -1,
-                  'time_step': -1}
+        params = {'tg': ''}
         slash_index = filename.find('/')
         traffic_filename = filename[slash_index+1:]
         traffic_filename = traffic_filename.split('.')[0]
         traffic_filename = traffic_filename.replace('_to', '')
-        (senders, receivers, percents, rate, totaltime, timestep) = traffic_filename.split('_')
-        params['senders'] = senders.split(',')
-        params['receivers'] = receivers.split(',')
-        (pmice, pelephant) = percents.split('e')
-        params['pmice'] = float(pmice.replace('m', '').replace(',', '.'))
-        params['pelephant'] = float(pelephant.replace(',', '.'))
-        params['flow_rate'] = float(rate.strip('fr').replace(',', '.'))
-        params['total_time'] = int(totaltime.strip('t'))
-        params['time_step'] = int(timestep.strip('ts'))
+        tg =  traffic_filename.split('_')[0]
+        params['tg'] = tg
+        if tg == 'tg1':
+            (senders, receivers, percents, rate, totaltime, timestep) = traffic_filename.split('_')[1:]
+            params['senders'] = senders.split(',')
+            params['receivers'] = receivers.split(',')
+            (pmice, pelephant) = percents.split('e')
+            params['pmice'] = float(pmice.replace('m', '').replace(',', '.'))
+            params['pelephant'] = float(pelephant.replace(',', '.'))
+            params['flow_rate'] = float(rate.strip('fr').replace(',', '.'))
+            params['total_time'] = int(totaltime.strip('t'))
+            params['time_step'] = int(timestep.strip('ts'))
+        elif tg == 'tg2':
+            (senders, receivers, percents, elephant_rate, mice_rate, target_load, totaltime, timestep) = traffic_filename.split('_')[1:]
+            params['senders'] = senders.split(',')
+            params['receivers'] = receivers.split(',')
+            (pmice, pelephant) = percents.split('e')
+            params['pmice'] = float(pmice.replace('m', '').replace(',', '.'))
+            params['pelephant'] = float(pelephant.replace(',', '.'))
+            params['elephant_rate'] = float(elephant_rate.strip('fre').replace(',', '.'))
+            params['mice_time'] = float(mice_rate.strip('frm').replace(',', '.'))
+            params['total_time'] = int(totaltime.strip('t'))
+            params['time_step'] = int(timestep.strip('ts'))
         return params
 
     def load_traffic_file(self):
@@ -105,6 +115,13 @@ class TrafficStats(object):
             m_count = total_flows - e_count
             elephant.append(e_count)
             mice.append(m_count)
+
+        MAX_LOAD = len(self.hosts)*LINK_BANDWIDTH
+
+        flows = np.asarray(flows)/MAX_LOAD
+        mice = np.asarray(mice)/MAX_LOAD
+        elephant = np.asarray(elephant)/MAX_LOAD
+
         return (flows, mice, elephant)
 
     def plot_flows_over_time(self):
@@ -114,25 +131,27 @@ class TrafficStats(object):
         """
         # Get data to plot
         (flows, mice, elephant) = self.get_flows_over_time_and_ratio()
-        fig, ax1 = plt.subplots(figsize=(80, 20))
+        fig = plt.figure(figsize=(80, 20))
         fig.suptitle("Number of active flows over time", fontsize=20)
-        plt.xlabel("Time (s)", fontsize=16)
+
 
         # Plot total number
-        ax1.set_ylabel("Total number of flows", fontsize=16)
-        ax1.plot(flows, color='black', label="total", linewidth=2.0)
+        sub = fig.add_subplot(2, 1, 1)
+        sub.set_xlabel("Time (s)", fontsize=16)
+        sub.set_ylabel("Total number of flows", fontsize=16)
+        sub.plot(flows, color='black', label="total", linewidth=2.0)
+        sub.grid(True)
 
         # Plot ratios
-        ax2 = ax1.twinx()
-        ax2.plot(mice, color='green', label='mice', linewidth=2.0)
-        ax2.plot(elephant, color='blue', label='elephant', linewidth=2.0)
-
-        ax2.set_ylabel('Elephant and Mice ratio', fontsize=16)
+        sub = fig.add_subplot(2, 1 ,2)
+        sub.set_xlabel("Time (s)", fontsize=16)
+        sub.plot(mice, color='green', label='mice', linewidth=2.0)
+        sub.plot(elephant, color='blue', label='elephant', linewidth=2.0)
+        sub.set_ylabel('Elephant and Mice ratio', fontsize=16)
+        sub.grid(True)
 
         # Write legend and plot
-        plt.legend(loc='best')
-        # Set grid on
-        plt.grid(True)
+        #plt.legend(loc='best')
         plt.show()
 
     def plot_traffic_over_time(self):
@@ -160,6 +179,8 @@ class TrafficStats(object):
         """"""
         input_avg = []
         output_avg = []
+        input_std = []
+        output_std = []
         for (t, fws) in self.traffic_per_second.iteritems():
             host_traffic_in = {h: 0 for h in self.hosts}
             host_traffic_out = {h: 0 for h in self.hosts}
@@ -169,32 +190,42 @@ class TrafficStats(object):
                 host_traffic_out[f['dst']] += f['size']
 
             # Compute averages
-            out_avg = np.asarray(host_traffic_out.values())
-            in_avg = np.asarray(host_traffic_in.values())
-            out_avg = out_avg.mean()
-            in_avg = in_avg.mean()
+            outavg = np.asarray(host_traffic_out.values())/LINK_BANDWIDTH
+            inavg = np.asarray(host_traffic_in.values())/LINK_BANDWIDTH
+            out_avg = outavg.mean()
+            in_avg = inavg.mean()
+            in_std = inavg.std()
+            out_std = outavg.std()
 
             input_avg.append(in_avg)
             output_avg.append(out_avg)
+            input_std.append(in_std)
+            output_std.append(out_std)
 
-        return (input_avg, output_avg)
+        return ({'avg': input_avg, 'std': input_std},{'avg': output_avg, 'std': output_std})
 
     def plot_average_host_load(self):
         # Get data to plot
         (input, output) = self.get_average_host_load()
-        fig, ax1 = plt.subplots(figsize=(80, 20))
+        fig = plt.figure(figsize=(80, 20))
         fig.suptitle("Average host load over time", fontsize=20)
-        plt.xlabel("Time (s)", fontsize=16)
 
-        # Plot total number
-        ax1.set_ylabel("DC traffic", fontsize=16)
-        ax1.plot(input, color='black', label="Input", linewidth=2.0)
-        ax1.plot(output, color='green', label='Output', linewidth=2.0)
+        sub = fig.add_subplot(2, 1, 1)
+        sub.set_xlabel("Time (s)", fontsize=16)
+        sub.set_ylabel("Average host load", fontsize=16)
+        sub.plot(input['avg'], color='black', label="Average traffic", linewidth=2.0)
+        sub.grid(True)
+
+        sub = fig.add_subplot(2, 1, 2)
+        sub.set_xlabel("Time (s)", fontsize=16)
+        sub.set_ylabel("Std host load", fontsize=16)
+        sub.plot(input['std'], color='blue', label="std. host TX traffic", linewidth=2.0)
+        sub.plot(output['std'], color='red', label="std. host RX traffic", linewidth=2.0)
+        sub.grid(True)
 
         # Write legend and plot
         plt.legend(loc='best')
         # Set grid on
-        plt.grid(True)
         plt.show()
 
     def get_host_load(self, host):
@@ -224,11 +255,12 @@ class TrafficStats(object):
         fig, ax1 = plt.subplots(figsize=(80, 20))
         fig.suptitle("Host load over time", fontsize=20)
         plt.xlabel("Time (s)", fontsize=16)
+        plt.ylim([0, 1.2])
 
         # Plot total number
         ax1.set_ylabel("Host traffic", fontsize=16)
-        ax1.plot(input, color='red', label="Input", linewidth=2.0)
-        ax1.plot(output, color='green', label='Output', linewidth=2.0)
+        ax1.plot(input, color='green', label="Tx load", linewidth=2.0)
+        ax1.plot(output, color='red', label='Rx load', linewidth=2.0)
 
         # Write legend and plot
         plt.legend(loc='best')
@@ -254,5 +286,6 @@ if __name__ == '__main__':
         if args.node:
             ts.plot_host_load(host=args.node)
 
-#        ts.plot_flows_over_time()
-#        ts.plot_traffic_over_time()
+        ts.plot_flows_over_time()
+        ts.plot_traffic_over_time()
+        ts.plot_average_host_load()
