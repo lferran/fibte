@@ -47,6 +47,16 @@ class DCDiGraph(DiGraph):
         else:
             raise ValueError("Index number {0} out of range 0 <= i <= (k/2)**2 - 1".format(index))
 
+    def add_destination_prefix(self, prefix, gateway):
+        """Adds a destination prefix attached to gateway router"""
+        if self.is_edge(gateway):
+            pod = self.get_router_pod(gateway)
+            self.add_node(n=prefix, attr_dict={'type':'prefix', 'pod':pod, 'gateway':gateway})
+            self.add_edge(prefix, gateway, direction='uplink')
+            self.add_edge(gateway, prefix, direction='downlink')
+        else:
+            raise ValueError("Router {0} is not an edge router, so we can't set him a destination prefix".format(gateway))
+
     def is_edge(self, routerid):
         return self.node[routerid]['type'] == 'edge'
 
@@ -55,6 +65,9 @@ class DCDiGraph(DiGraph):
 
     def is_core(self, routerid):
         return self.node[routerid]['type'] == 'core'
+
+    def is_destination_prefix(self, node):
+        return self.node[node]['type'] == 'prefix'
 
     def edge_routers(self, data=False):
         if data:
@@ -92,6 +105,18 @@ class DCDiGraph(DiGraph):
         else:
             return iter([r for r in self.nodes_iter() if self.is_core(r)])
 
+    def destination_prefixes(self, data=False):
+        if data:
+            return [(r, d) for (r, d) in self.nodes_iter(data=True) if self.is_destination_prefix(r)]
+        else:
+            return [r for r in self.nodes_iter() if self.is_destination_prefix(r)]
+
+    def destination_prefixes_iter(self, data=False):
+        if data:
+            return iter([(r, d) for (r, d) in self.nodes_iter(data=True) if self.is_destination_prefix(r)])
+        else:
+            return iter([r for r in self.nodes_iter() if self.is_destination_prefix(r)])
+
     def get_router_name(self, routerid):
         return self.node[routerid]['name']
 
@@ -127,6 +152,18 @@ class DCDiGraph(DiGraph):
                 return [r for (r, data) in self.aggregation_routers_iter(data=True) if data['index'] == index and data['pod'] == pod][0]
         else:
             raise ValueError("Wrong router position")
+
+    def get_destination_prefix_gateway(self, prefix):
+        if self.is_destination_prefix(prefix):
+            return self.node[prefix]['gateway']
+        else:
+            raise ValueError("{0} is not a destiantion prefix".format(prefix))
+
+    def get_connected_destination_prefixes(self, routerid):
+        if self.is_edge(routerid):
+            return [n for n in self.neighbors(routerid) if self.is_destination_prefix(n)]
+        else:
+            raise ValueError("{0} is not an edge router".format(routerid))
 
     def have_same_pod(self, a, b):
         """
@@ -340,7 +377,14 @@ class DCGraph(DCDiGraph):
                     self.add_uplink(routerid, arid)
                     self.add_downlink(arid, routerid)
 
-    def get_default_ospf_dag(self, sinkid):
+        # Add the destination prefixes
+        prefixes = self.topo.getInitialNetworkPrefixes()
+        for prefix in prefixes:
+            gw = self.topo.getGatewayRouterFromNetworkPrefix(prefix)
+            gwid = self.topo.getRouterId(gw)
+            self.add_destination_prefix(prefix=prefix, gateway=gwid)
+
+    def get_default_ospf_dag(self, prefix):
         """
         Given a sink edge router, returns the default fat-tree dag from
         all other hosts to the sink.
@@ -348,104 +392,40 @@ class DCGraph(DCDiGraph):
         :param sink: router id of the sink's router
         :return: DCDAg
         """
-        sink_pod = self.get_router_pod(sinkid)
-        if self.is_edge(sinkid):
+        prefix_pod = self.get_router_pod(prefix)
+        gateway = self.get_destination_prefix_gateway(prefix)
+        if self.is_destination_prefix(prefix):
             # Create empty-links dag from self DCGraph
-            dc_dag = DCDag(sinkid, k=self.k, dc_graph=self)
+            dc_dag = DCDag(gateway, k=self.k, prefix=prefix, dc_graph=self)
 
             # Add uplinks
-            add_uplinks1 = [dc_dag.add_uplink(er, ar) for er in self.edge_routers_iter() for ar in self.get_upper_tier(er) if er != sinkid]
-            add_uplinks2 = [dc_dag.add_uplink(ar, cr) for ar in self.aggregation_routers_iter() for cr in self.get_upper_tier(ar) if self.get_router_pod(ar) != sink_pod]
+            add_uplinks1 = [dc_dag.add_uplink(er, ar) for er in self.edge_routers_iter() for ar in self.get_upper_tier(er) if er != gateway]
+            add_uplinks2 = [dc_dag.add_uplink(ar, cr) for ar in self.aggregation_routers_iter() for cr in self.get_upper_tier(ar) if self.get_router_pod(ar) != prefix_pod]
 
             # Add downlinks
-            add_downlinks1 = [dc_dag.add_downlink(cr, ar) for cr in self.core_routers_iter() for ar in self.get_lower_tier(cr) if self.get_router_pod(ar) == sink_pod and dc_dag.is_valid_downlink(cr, ar)]
-            add_downlinks2 = [dc_dag.add_downlink(ar, er) for ar in self.aggregation_routers_iter() for er in self.get_lower_tier(ar) if self.get_router_pod(ar) == sink_pod and dc_dag.is_valid_downlink(ar, er)]
+            add_downlinks1 = [dc_dag.add_downlink(cr, ar) for cr in self.core_routers_iter() for ar in self.get_lower_tier(cr) if self.get_router_pod(ar) == prefix_pod and dc_dag.is_valid_downlink(cr, ar)]
+            add_downlinks2 = [dc_dag.add_downlink(ar, er) for ar in self.aggregation_routers_iter() for er in self.get_lower_tier(ar) if self.get_router_pod(ar) == prefix_pod and dc_dag.is_valid_downlink(ar, er)]
+
+            # Add links to gateway
+            dc_dag.add_destination_prefix(prefix, gateway)
 
             # Return the DCDag object
             return dc_dag
         else:
-            raise ValueError("Sink must be an edge router. {0} isn't".format(sinkid))
-    # old getRandomDag code
-
-    # def getRandomDag(self, prefix):
-    #     """
-    #     Returns a random dag (upwards) from every
-    #     other prefix to specified target prefix.
-    #
-    #     :param prefix:
-    #     :return:
-    #     """
-    #     # Result is stored here
-    #     rdag = nx.DiGraph()
-    #
-    #     # Get first the gateway edge router of the prefix
-    #     gwRouter = self.getGatewayRouter(prefix)
-    #
-    #     # Get pod number
-    #     prefixPod = self.getRouterPod(gwRouter)
-    #
-    #     # Then starting at every other edge
-    #     for router in self.getEdgeRouters():
-    #
-    #         # Get pod of the router
-    #         rPod = self.getRouterPod(router)
-    #
-    #         # If they are in different pods
-    #         if rPod != prefixPod:
-    #
-    #             # Make uplink choices
-    #             choices = self.getRandomUpLinkChoice(max_depth=2)
-    #
-    #             # Add corresponding edges
-    #             for choice in choices:
-    #                 # Fetch aggregation router chosen
-    #                 aggChosen = self.getRouterFromIndex(type='aggregation', index=choice[0], pod=rPod)
-    #
-    #                 # Add the edge from edge router to randomly chosen aggregation router
-    #                 rdag.add_edge(router, aggChosen)
-    #
-    #                 # Traverse now the core router choices from each aggregation
-    #                 for subchoice in choice[1]:
-    #                     # Fetch core router
-    #                     coreRouter = self.getRouterFromIndex(type='core', index=subchoice[0])
-    #
-    #                     # Add edge aggregation -> core
-    #                     rdag.add_edge(aggChosen, coreRouter)
-    #
-    #                     # Add also here the downlink edge core -> aggregation
-    #                     corrAggr = self.getConnectedAggregation(coreRouter=coreRouter, pod=prefixPod)
-    #                     rdag.add_edge(coreRouter, corrAggr)
-    #
-    #         # Edge router in the same pod
-    #         else:
-    #             # Check that it's not himself
-    #             if router != gwRouter:
-    #                 # Draw also the used links (inside pod)
-    #                 choices = self.getRandomUpLinkChoice(max_depth=1)
-    #
-    #                 # Add corresponding edges
-    #                 for choice in choices:
-    #                     # Fetch aggregation router chosen
-    #                     aggChosen = self.getRouterFromIndex(type='aggregation', index=choice[0], pod=rPod)
-    #
-    #                     # Add the edge from edge router to randomly chosen aggregation router
-    #                     rdag.add_edge(router, aggChosen)
-    #
-    #                     # Add also the downlink fixed link: aggregation -> edge router
-    #                     rdag.add_edge(aggChosen, gwRouter)
-    #
-    #     return rdag
+            raise ValueError("Prefix must be an existing destination prefix. {0} isn't".format(prefix))
 
 class DCDag(DCDiGraph):
     """
     This class represents a Fat-Tree like Direct Acyclic Graph for a
     certain destination, which must be the single sink in the graph.
     """
-    def __init__(self, sink_id, k=4, *args, **kwargs):
+    def __init__(self, sink_id, k=4, prefix=None, *args, **kwargs):
         super(DCDag, self).__init__(k, *args, **kwargs)
 
         # Set DCDag's sink
         self.sink = sink_id
+
+        if prefix != None: self.prefix = prefix
 
         # Parse kwargs
         if 'dc_graph' in kwargs and isinstance(kwargs['dc_graph'], DCGraph):
@@ -604,6 +584,22 @@ class DCDag(DCDiGraph):
             ur_name = self.get_router_name(upper_rid)
             sink_name = self.get_sink_name()
             raise ValueError("This downlink ({0} -> {1}) is not valid for DAG to {2}".format(ur_name, lr_name, sink_name))
+
+    def add_destination_prefix(self, prefix, gateway):
+        """Adds a destination prefix attached to gateway router"""
+        if self.is_edge(gateway):
+            if self.get_sink_id() == gateway:
+                pod = self.get_router_pod(gateway)
+                self.add_node(n=prefix, attr_dict={'type':'prefix', 'pod':pod, 'gateway':gateway})
+                self.add_edge(prefix, gateway, direction='uplink')
+                self.add_edge(gateway, prefix, direction='downlink')
+            else:
+                raise ValueError("Gateway {0} is not the sink {1}!".format(gateway, self.sink['id']))
+        else:
+            raise ValueError("Router {0} is not an edge router, so we can't set him a destination prefix".format(gateway))
+
+    def get_gateway(self):
+        return self.get_sink_id()
 
     def get_next_hops(self, routerid):
         """
@@ -832,14 +828,14 @@ class DCDag(DCDiGraph):
             raise ValueError("Sink can't send flows to himself!")
 
 if __name__ == "__main__":
-
     dcGraph = DCGraph(k=4)
-    edgeRouters = dcGraph.edge_routers()
-    sink = edgeRouters[random.randint(3, 7)]
-    dcDag = dcGraph.get_default_ospf_dag(sinkid=sink)
-    source = edgeRouters[0]
+    prefixes = dcGraph.destination_prefixes()
+    prefix = prefixes[random.randint(3, 7)]
+    dcDag = dcGraph.get_default_ospf_dag(prefix=prefix)
+    source = dcDag.get_destination_prefix_gateway(prefix)
+    srcPod = dcDag.get_router_pod(source)
     for i in range(20000):
-        dcDag.modify_random_uplinks(source=source)
+        dcDag.modify_random_uplinks(src_pod=srcPod)
         if not dcDag.is_valid_dc_dag():
             import ipdb; ipdb.set_trace()
 
