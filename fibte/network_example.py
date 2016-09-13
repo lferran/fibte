@@ -13,18 +13,44 @@ from fibbingnode.algorithms.ospf_simple import OSPFSimple
 from mininet.clean import cleanup, sh
 from mininet.util import custom
 from mininet.link import TCIntf
-from fibte.res.mycustomhost import MyCustomHost
+from fibte.misc.DCTCInterface import DCTCIntf
 import fibte.res.config as cfg
 import signal
 
 from fibte import flowServer_path
+
+
+ALIAS_ADDRESS = '222'
 
 def signal_term_handler(signal, frame):
     import sys
     sys.exit(0)
 
 
-def launch_network(k = 4, bw=10):
+class TestTopo(IPTopo):
+    def build(self, *args, **kwargs):
+        """
+        """
+        r1 = self.addRouter('r1')
+        r2 = self.addRouter('r2')
+        r3 = self.addRouter('r3')
+        r4 = self.addRouter('r4')
+        self.addLink(r1, r2, cost=5)
+        self.addLink(r1, r3)
+        self.addLink(r2, r4)
+        self.addLink(r3, r4)
+
+        s1 = self.addHost('s1')
+        d1 = self.addHost('d1')
+        
+        self.addLink(s1, r1)
+        self.addLink(d1, r4)
+        
+        # Adding Fibbing Controller
+        c1 = self.addController(cfg.C1, cfg_path=cfg.C1_cfg)
+        self.addLink(c1, r1, cost = 1000)
+
+def launch_network(k=4, bw=10, ip_alias=True):
     signal.signal(signal.SIGTERM, signal_term_handler)
 
     # Cleanup the network
@@ -32,13 +58,17 @@ def launch_network(k = 4, bw=10):
     sh("killall snmpd ospfd zebra pmacctd getLoads.py")
 
     # Topology
-    topo = FatTreeOOB(k=4, sflow=False, extraSwitch=False, bw=bw)
+    topo = FatTree(k=k, sflow=False, extraSwitch=False, bw=bw)
 
+    #topo = FatTreeOOB(k=k, sflow=False, extraSwitch=False, bw=bw)
+    #topo = TestTopo()
+    
     # Interfaces
     intf = custom(TCIntf, bw=bw)  # , max_queue_size=1000)
+    #intf = custom(DCTCIntf, bw=bw, ip_alias=True)
 
     # Network
-    net = IPNet(topo=topo, debug=_lib.DEBUG_FLAG, intf=intf, host=MyCustomHost)
+    net = IPNet(topo=topo, debug=_lib.DEBUG_FLAG, intf=intf)
 
     # Save the TopoDB object
     TopologyDB(net=net).save(cfg.DB_path)
@@ -51,12 +81,25 @@ def launch_network(k = 4, bw=10):
         # Start flowServers
         h.cmd(flowServer_path + " {0} &".format(h.name))
         print(h.name)
+
+    if ip_alias == True:
+        print('*** Setting up ip alias for elephant traffic - alias identifier: .222')
+        for h in net.hosts:
+            # Get default interface
+            hintf = h.defaultIntf()
+            # Get assigned ip
+            hip = h.IP()
+            # Remove host side
+            alias_ip = hip.split('.')[:-1]+[ALIAS_ADDRESS]
+            alias_ip = '.'.join(alias_ip)
+            command = "ifconfig {0}:0 {1} netmask 255.255.255.0".format(hintf, alias_ip)
+            h.cmd(command)
+            print (h.name)
             
     # Start the Fibbing CLI
     FibbingCLI(net)
 
     net.stop()
-
 
 def launch_controller():
     CFG.read(cfg.C1_cfg)
@@ -65,7 +108,7 @@ def launch_controller():
     #manager.simple_path_requirement(db.subnet(R3, D1), [db.routerid(r)
     #                                                    for r in (R1, R2, R3)])
     #manager.simple_path_requirement(db.subnet(R3, D2), [db.routerid(r)
-    #                                                    for r in (R1, R4, R3)])
+    #                                                 for r in (R1, R4, R3)])
     try:
         manager.run()
     except KeyboardInterrupt:
@@ -86,6 +129,10 @@ if __name__ == '__main__':
                         help='Set log levels to debug',
                         action='store_true',
                         default=False)
+
+    parser.add_argument('-k', help='Launch k-ary fat-tree network',
+                        type=int, default=4)
+
     args = parser.parse_args()
     if args.debug:
         _lib.DEBUG_FLAG = True
@@ -97,4 +144,5 @@ if __name__ == '__main__':
     if args.controller:
         launch_controller()
     elif args.net:
-        launch_network()
+        launch_network(k=args.k)
+        
