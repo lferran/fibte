@@ -18,7 +18,7 @@ import subprocess
 import abc
 
 from fibte.misc.topology_graph import TopologyGraph
-
+from fibbingnode.misc.mininetlib.ipnet import TopologyDB
 
 from fibte.monitoring.getLoads import GetLoads
 
@@ -50,6 +50,30 @@ class MyGraphProvider(SouthboundManager):
     def received_initial_graph(self):
         super(MyGraphProvider, self).received_initial_graph()
         HAS_INITIAL_GRAPH.set()
+
+class TestController(object):
+    def __init__(self):
+        # Connects to the southbound controller. Must be called before
+        # creating the instance of SouthboundManager
+        CFG_fib.read(os.path.join(tmp_files, C1_cfg))
+
+        # Start the Southbound manager in a different thread
+        self.sbmanager = MyGraphProvider()
+        t = threading.Thread(target=self.sbmanager.run, name="Southbound Manager")
+        t.start()
+
+        # Blocks until initial graph received from SouthBound Manager
+        HAS_INITIAL_GRAPH.wait()
+        log.info("Initial graph received from SouthBound Controller")
+
+        self.topology = TopologyDB(db=os.path.join(tmp_files, db_topo))
+
+        d1mice = "192.223.255.0/24"
+        d1ele =  "192.223.255.222/32"
+        path1 = [self.topology.routerid(r) for r in ('r1', 'r2', 'r4')]
+        path2 = [self.topology.routerid(r) for r in ('r1', 'r3', 'r4')]
+
+        import ipdb; ipdb.set_trace()
 
 class LBController(object):
     def __init__(self, doBalance = True, k=4, algorithm=None, load_variables=False):
@@ -87,6 +111,8 @@ class LBController(object):
         HAS_INITIAL_GRAPH.wait()
         log.info("Initial graph received from SouthBound Controller")
 
+        import ipdb; ipdb.set_trace()
+
         # Load the topology
         self.topology = TopologyGraph(getIfindexes=True, db=os.path.join(tmp_files, db_topo))
 
@@ -112,6 +138,7 @@ class LBController(object):
         # Start getLoads thread that reads from counters
         #os.system(getLoads_path + ' -k {0} &'.format(self.k))
         self.p_getLoads = subprocess.Popen([getLoads_path, '-k', str(self.k), '-a', self.algorithm], shell=False)
+
 
         # Start getLoads thread reads from link usage
         thread = threading.Thread(target=self._getLoads, args=([1]))
@@ -1042,10 +1069,15 @@ if __name__ == '__main__':
 
     parser.add_argument('-k', '--k', help='Fat-Tree parameter', type=int, default=4)
 
+    parser.add_argument('-t', '--test', help='Test controller', action="store_true", default=False)
+
     args = parser.parse_args()
 
     log.setLevel(logging.DEBUG)
     log.info("Starting Controller - k = {0} , algorithm = {1}".format(args.k, args.algorithm))
+
+    if args.test == True:
+        lb = TestController()
 
     if args.algorithm == 'ecmp':
         lb = ECMPController(doBalance = args.doBalance, k=args.k)
