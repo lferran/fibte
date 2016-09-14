@@ -1,6 +1,6 @@
 import ConfigParser
 import os
-
+import pkgutil
 RES = os.path.join(os.path.dirname(__file__),'res')
 
 CFG = ConfigParser.ConfigParser()
@@ -27,3 +27,4 @@ ELEPHANT_SIZE_STEP = float(CFG.get("DEFAULT", "elephant_size_step"))*LINK_BANDWI
 import inspect
 import fibte.trafficgen.flowServer
 flowServer_path = inspect.getsourcefile(fibte.trafficgen.flowServer)
+iptables_path = pkgutil.get_loader("fibte.misc.iptables").filename

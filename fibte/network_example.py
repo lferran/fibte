@@ -19,13 +19,11 @@ import signal
 
 from fibte import flowServer_path
 
-
-ALIAS_ADDRESS = '222'
+from fibte.trafficgen import setup_alias
 
 def signal_term_handler(signal, frame):
     import sys
     sys.exit(0)
-
 
 class TestTopo(IPTopo):
     def build(self, *args, **kwargs):
@@ -35,16 +33,21 @@ class TestTopo(IPTopo):
         r2 = self.addRouter('r2')
         r3 = self.addRouter('r3')
         r4 = self.addRouter('r4')
-        self.addLink(r1, r2, cost=5)
+        r5 = self.addRouter('r5')
+
+        # Short path
         self.addLink(r1, r3)
+        self.addLink(r3, r5)
+        # Long path
+        self.addLink(r1, r2)
         self.addLink(r2, r4)
-        self.addLink(r3, r4)
+        self.addLink(r4, r5)
 
         s1 = self.addHost('s1')
         d1 = self.addHost('d1')
         
         self.addLink(s1, r1)
-        self.addLink(d1, r4)
+        self.addLink(d1, r5)
         
         # Adding Fibbing Controller
         c1 = self.addController(cfg.C1, cfg_path=cfg.C1_cfg)
@@ -58,10 +61,10 @@ def launch_network(k=4, bw=10, ip_alias=True):
     sh("killall snmpd ospfd zebra pmacctd getLoads.py")
 
     # Topology
-    topo = FatTree(k=k, sflow=False, extraSwitch=False, bw=bw)
+    #topo = FatTree(k=k, sflow=False, extraSwitch=False, bw=bw)
 
     #topo = FatTreeOOB(k=k, sflow=False, extraSwitch=False, bw=bw)
-    #topo = TestTopo()
+    topo = TestTopo()
     
     # Interfaces
     intf = custom(TCIntf, bw=bw)  # , max_queue_size=1000)
@@ -85,16 +88,8 @@ def launch_network(k=4, bw=10, ip_alias=True):
     if ip_alias == True:
         print('*** Setting up ip alias for elephant traffic - alias identifier: .222')
         for h in net.hosts:
-            # Get default interface
-            hintf = h.defaultIntf()
-            # Get assigned ip
-            hip = h.IP()
-            # Remove host side
-            alias_ip = hip.split('.')[:-1]+[ALIAS_ADDRESS]
-            alias_ip = '.'.join(alias_ip)
-            command = "ifconfig {0}:0 {1} netmask 255.255.255.0".format(hintf, alias_ip)
-            h.cmd(command)
-            print (h.name)
+            # Setup alias at host h
+            setup_alias(h)
             
     # Start the Fibbing CLI
     FibbingCLI(net)
