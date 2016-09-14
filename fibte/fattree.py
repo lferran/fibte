@@ -7,26 +7,18 @@ from mininet.link import TCIntf
 import fibte.res.config as cfg
 
 class FatTree(IPTopo):
-    def __init__(self, k=4, sflow=False, extraSwitch=False, bw = 10, *args, **kwargs):
+    def __init__(self, k=4, sflow=False, ovs_switches=True, *args, **kwargs):
         # k must be multiple of 2
         self.k = k
 
         # datapath-id for the switches, if you dont specify mininet assign them duplicated
         self.dpid = 1
-        self.extraSwitch = extraSwitch
+
+        # Using sflow?
         self.sflow = sflow
 
-        # Not used yet, when I do have time i should implement the part to choose the ips
-        self.ip_bindings = {}
-        self.ipBase = "10.0.0.0/8"
-        self.max_alloc_prefixlen=24
-
-        # For the switch bandwidth
-        self.bw = bw
-        if not(bw):
-            self.extraSwitchBandwidth = None
-        else:
-            self.extraSwitchBandwidth = bw * (k/2 + 1)
+        # Using host-edge intermediate switches?
+        self.ovs_switches = ovs_switches
 
         super(FatTree,self).__init__(*args,**kwargs)
 
@@ -40,9 +32,11 @@ class FatTree(IPTopo):
         # Build the topology
 
         # Create the pods first
-        aggregationRouters = self.addPods(self.extraSwitch)
+        aggregationRouters = self.addPods()
+
         # Create the core routers
         coreRouters = self.addCoreRouters()
+
         # Connect them together
         self.connectCoreAggregation(aggregationRouters, coreRouters)
 
@@ -58,7 +52,7 @@ class FatTree(IPTopo):
 
             # Connect with core routers
             for coreRouter in coreRouters[(position*(self.k/2)):((position+1)*(self.k/2))]:
-                self.addLink(aggregationRouter, coreRouter)#,bw = self.bw)
+                self.addLink(aggregationRouter, coreRouter)
 
     def addOVSHost(self, podNum, index):
         """
@@ -74,53 +68,40 @@ class FatTree(IPTopo):
         self.addLink(h, sw)#,bw=self.bw)
         return {"host": h, "ovs": sw}
 
-    def addHostsGrup(self, podNum, startIndex, extraSwitch=True):
+    def addNormalHost(self, podNum, index):
+        """Adds a host with the corresponding pod number and index"""
+        h = self.addHost("h_%d_%d" % (podNum,index))
+        self.dpid +=1
+        return h
+
+    def addHostsGrup(self, podNum, startIndex):
         """
-        :param podNum:
-        :param startIndex:
-        :param extraSwitch:
-        :return:
+        Given the pod number,
         """
-        # Contains the name of the switches. They will be used to connect the hosts to the higher layers
-        switches = []
+        # Contains the name of the switches or hosts, depending on wheather we use intermediate ovs switches or not
+        to_connect_to_edge = []
 
-        if extraSwitch:
-            # First a switch to grup all the hosts is created
-            switch_index = startIndex/(self.k/2)
-            sw = self.addSwitch("sw_%d_%d" % (podNum, switch_index),cls=LinuxBridge, dpid = self.dpidToStr())
-            #sw = self.addSwitch("sw_%d_%d" % (podNum, switch_index),cls=LinuxBridge)
-            self.dpid +=1
-
-            #creatres k/2 OVSHosts
-            for i in range(self.k/2):
+        for i in range(self.k/2):
+            if self.ovs_switches:
                 ovsHosts = self.addOVSHost(podNum, startIndex+i)
-                #add link between the ovs switch and the normal switch
-                self.addLink(ovsHosts["ovs"], sw)#,bw = self.bw)
-            #we add sw in switches list. Switches list is used as a return value,
-            #  and will be used later to know what needs to be connected with the edge router
-            switches.append(sw)
-        # Case in which all the hosts are directly connected to the edge router
-        else:
-            for i in range(self.k/2):
-                ovsHosts = self.addOVSHost(podNum, startIndex+i)
-                switches.append(ovsHosts["ovs"])
+                to_connect_to_edge.append(ovsHosts["ovs"])
+            else:
+                normalHosts = self.addNormalHost(podNum, startIndex+i)
+                to_connect_to_edge.append(normalHosts)
 
-        return switches
+        return to_connect_to_edge
 
     def addPods(self, extraSwitch=True):
         aggregationRouters = []
 
         # Add k pods and store the aggregation Routers in aggregationRouters
         for i in range(self.k):
-            aggregationRouters += (self.addPod(i, extraSwitch))
+            aggregationRouters += (self.addPod(i))
 
         return aggregationRouters
 
-    def addPod(self, podNum, extraSwitch=True):
-        """
-        :param podNum:
-        :param extraSwitch:
-        :return:
+    def addPod(self, podNum):
+        """Creates a pod and returns the corresponding aggregation routers
         """
         edgeRouters = []
         aggregationRouters = []
@@ -138,15 +119,13 @@ class FatTree(IPTopo):
         # Add hosts to the edge layer, each edge router should be connected to k/2 hosts
         startIndex  = 0
         for edge_router in edgeRouters:
-            # Create hosts and switches
-            switches = self.addHostsGrup(podNum, startIndex, extraSwitch)
+            # Create hosts and switches and connect them
+            to_connect_to_edge = self.addHostsGrup(podNum, startIndex)
 
             # Connect switch/switches with edge router
-            for switch in switches:
-                if extraSwitch:
-                    self.addLink(edge_router, switch, intf = custom(TCIntf, bw=self.extraSwitchBandwidth))
-                else:
-                    self.addLink(edge_router, switch)#,bw = self.bw)
+            for node in to_connect_to_edge:
+                self.addLink(edge_router, node)
+
             startIndex += self.k/2
 
         # Only aggregation Routers are needed to connect with the core layer

@@ -213,6 +213,7 @@ class NetworkGraph(object):
 
         x = host.split("_")[1]
         y = host.split("_")[2]
+
         ovs_switch = "ovs_%s_%s" % (x, y)
 
         ovs_adjacent_nodes = self.graph.adj[ovs_switch].keys()
@@ -241,7 +242,6 @@ class NetworkGraph(object):
         :param dstHost:
         :return:
         """
-
         # first we get the gateways
         srcEdge = self.getGatewayRouter(srcHost)
         dstEdge = self.getGatewayRouter(dstHost)
@@ -252,9 +252,9 @@ class NetworkGraph(object):
         return paths
 
     def getHostsBehindRouter(self, router):
-        # Returns all the hosts that have router as a gateway.
-        # !!! IMPORTANT: We make the assumption that the topology used here is a fat tree
-        # and that the edge router can face a switch or ovs switches
+        """Returns all the hosts that have router as a gateway.
+        We make the assumption that the topology used here is a fat tree
+        and that the edge router can face a switch, an ovs switch, or a router."""
 
         hosts = []
         if not (self.graph.has_node(router)):
@@ -289,7 +289,9 @@ class NetworkGraph(object):
 
         # the edge router has no switches next to it.
         else:
-            return None
+            for neighbor in router_neighbors:
+                if self.graph.node[neighbor]['type'] == 'host':
+                    hosts.append(neighbor)
 
         return hosts
 
@@ -324,7 +326,6 @@ class NetworkGraph(object):
 
         # Filter the edges and remove the ones that have switches connected
         return [x for x in allEdges if not (any("sw" in s for s in x) or any("ovs" in s for s in x))]
-
 
 class TopologyGraph(TopologyDB):
     def __init__(self, getIfindexes=True, interfaceToRouterName=False, *args,
@@ -434,6 +435,11 @@ class TopologyGraph(TopologyDB):
         if dstHost not in self.network:
             raise ValueError("{0} does not exist".format(dstHost))
 
+
+        srcEdge = self.getGatewayRouter(srcHost)
+        dstEdge = self.getGatewayRouter(dstHost)
+        import ipdb; ipdb.set_trace()
+
         return self.networkGraph.getPathsBetweenHosts(srcHost, dstHost)
 
     def getGatewayRouter(self, host):
@@ -456,6 +462,9 @@ class TopologyGraph(TopologyDB):
 
         if router not in self.network:
             raise ValueError("{0} does not exist".format(router))
+
+        if not self.isEdgeRouter(router):
+            raise ValueError("{0} is not an edge router".format(router))
 
         return self.networkGraph.getHostsBehindRouter(router)
 
@@ -480,47 +489,12 @@ class TopologyGraph(TopologyDB):
         host_set = {host for host_list in host_lists for host in host_list}
         return list(host_set)
 
-    def getHostsInOtherSubnetworks(self, host):
-        """
-        Returns all the hosts from other subnetworks. This is used to generate traffic only to "remote" hosts
-        :param host:
-        :return:
-        """
-        if host not in self.network:
-            raise ValueError("{0} does not exist".format(host))
-
-        # Returns all the hosts that are in other subnetworks
-        gatewayEdgeRouter = self.getGatewayRouter(host)
-        edgeRouters = self.getEdgeRouters()
-
-        otherHosts = []
-        for edgeRouter in edgeRouters:
-            if edgeRouter == gatewayEdgeRouter:
-                continue
-            otherHosts += self.getHostsBehindRouter(edgeRouter)
-
-        return otherHosts
-
-    def numberDevicesInPath(self, src, dst):
-        """
-        Returns the number of devices between two nodes in the network
-        :param src:
-        :param dst:
-        :return:
-        """
-        if src not in self.network:
-            raise ValueError("{0} does not exist".format(src))
-
-        if dst not in self.network:
-            raise ValueError("{0} does not exist".format(dst))
-        return len(nx.shortest_path(self.networkGraph.graph, src, dst))
-
     def getRouters(self):
         """
         Returns a dictionary with the routers from the topologyDB
         :return: router-only dict
         """
-        return {node: self.network[node] for node in self.network if self.network[node]["type"] == "router"}
+        return {node: data for node, data in self.network.iteritems() if data["type"] == "router"}
 
     def getEdgeRouters(self):
         """
@@ -549,7 +523,7 @@ class TopologyGraph(TopologyDB):
 
         :return: host-only dictionary
         """
-        return {node: self.network[node] for node in self.network if self.network[node]["type"] == "host"}
+        return {node: data for node, data in self.network.iteritems() if data["type"] == "host"}
 
     def getSwitches(self):
         """
@@ -675,7 +649,6 @@ class TopologyGraph(TopologyDB):
         to the dictionary so we can easliy do the mappings.
         :return:
         """
-
         # Holds the router interfaces names
         self.routersInterfaces = {}
 
@@ -835,9 +808,10 @@ class TopologyGraph(TopologyDB):
         return self.getGatewayRouter(host)
 
 if __name__ == "__main__":
-
     topology = TopologyGraph(getIfindexes=True, db=os.path.join(tmp_files, db_topo))
-#    import ipdb; ipdb.set_trace()
+    import ipdb;ipdb.set_trace()
+    topology.getHostsBehindRouter('r_0_e0')
+
     g = topology.networkGraph
 
     # topology.loadIfNames()
