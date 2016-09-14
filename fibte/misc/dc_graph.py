@@ -22,6 +22,8 @@ class DCDiGraph(DiGraph):
         super(DCDiGraph, self).__init__(*args, **kwargs)
         # DC parameter
         self.k = k
+        # We store prefix-gateway here
+        self.prefix_gateway_bindings = {'prefixToGateway':{}, 'gatewayToPrefix': {}}
 
     def add_edge_router(self, routerid, routername, index, pod):
         if pod >= 0 and pod <= self.k - 1:
@@ -52,10 +54,18 @@ class DCDiGraph(DiGraph):
         if self.is_edge(gateway):
             pod = self.get_router_pod(gateway)
             self.add_node(n=prefix, attr_dict={'type':'prefix', 'pod':pod, 'gateway':gateway})
-            self.add_edge(prefix, gateway, direction='uplink')
-            self.add_edge(gateway, prefix, direction='downlink')
+
+            # Add prefix in structure
+            if prefix not in self.prefix_gateway_bindings['prefixToGateway'].keys():
+                self.prefix_gateway_bindings['prefixToGateway'][prefix] = gateway
+            if gateway not in self.prefix_gateway_bindings['gatewayToPrefix'].keys():
+                self.prefix_gateway_bindings['gatewayToPrefix'][gateway] = [prefix]
+            else:
+                if prefix not in self.prefix_gateway_bindings['gatewayToPrefix'][gateway]:
+                    self.prefix_gateway_bindings['gatewayToPrefix'][gateway] += [prefix]
         else:
-            raise ValueError("Router {0} is not an edge router, so we can't set him a destination prefix".format(gateway))
+            raise ValueError(
+                "Router {0} is not an edge router, so we can't set him a destination prefix".format(gateway))
 
     def is_edge(self, routerid):
         return self.node[routerid]['type'] == 'edge'
@@ -161,7 +171,10 @@ class DCDiGraph(DiGraph):
 
     def get_connected_destination_prefixes(self, routerid):
         if self.is_edge(routerid):
-            return [n for n in self.neighbors(routerid) if self.is_destination_prefix(n)]
+            if routerid in self.prefix_gateway_bindings['gatewayToPrefix'].keys():
+                return self.prefix_gateway_bindings['gatewayToPrefix'][routerid]
+            else:
+                return []
         else:
             raise ValueError("{0} is not an edge router".format(routerid))
 
@@ -396,7 +409,7 @@ class DCGraph(DCDiGraph):
         gateway = self.get_destination_prefix_gateway(prefix)
         if self.is_destination_prefix(prefix):
             # Create empty-links dag from self DCGraph
-            dc_dag = DCDag(gateway, k=self.k, prefix=prefix, dc_graph=self)
+            dc_dag = DCDag(sink_id=gateway, dst_prefix=prefix, k=self.k, dc_graph=self)
 
             # Add uplinks
             add_uplinks1 = [dc_dag.add_uplink(er, ar) for er in self.edge_routers_iter() for ar in self.get_upper_tier(er) if er != gateway]
@@ -419,13 +432,14 @@ class DCDag(DCDiGraph):
     This class represents a Fat-Tree like Direct Acyclic Graph for a
     certain destination, which must be the single sink in the graph.
     """
-    def __init__(self, sink_id, k=4, prefix=None, *args, **kwargs):
+    def __init__(self, sink_id, dst_prefix, k=4, *args, **kwargs):
         super(DCDag, self).__init__(k, *args, **kwargs)
 
         # Set DCDag's sink
-        self.sink = sink_id
+        self.sink_id = sink_id
 
-        if prefix != None: self.prefix = prefix
+        # Set DCDag's destination prefix
+        self.dst_prefix = dst_prefix
 
         # Parse kwargs
         if 'dc_graph' in kwargs and isinstance(kwargs['dc_graph'], DCGraph):
@@ -437,7 +451,7 @@ class DCDag(DCDiGraph):
         Helper function that returns a DCDag with router names instead.
         :return:
         """
-        other = DCDag(self.sink, self.k)
+        other = DCDag(self.sink, self.dst_prefix, self.k)
         for (u, v, data) in self.edges_iter(data=True):
             other.add_edge(self.get_router_name(u), self.get_router_name(v))
         return other
@@ -458,21 +472,24 @@ class DCDag(DCDiGraph):
         # Copy all nodes from dc_graph
         self.add_nodes_from(dc_graph.nodes(data=True))
 
-        # Set sink data
-        sink_name = self.get_router_name(self.sink)
-        sink_pos = self.get_router_position(self.sink)
-        self._set_sink(self.sink, sink_name, sink_pos['index'], sink_pos['pod'])
+        # Copy all px - gw bindings
+        self.prefix_gateway_bindings = dc_graph.prefix_gateway_bindings
 
-    def _set_sink(self, routerid, routername, index, pod):
+        # Set sink data
+        sink_name = self.get_router_name(self.sink_id)
+        sink_pos = self.get_router_position(self.sink_id)
+
+        # Set the sink
+        self._set_sink(self.sink_id, sink_name, sink_pos['index'], sink_pos['pod'], prefix=self.dst_prefix)
+
+    def _set_sink(self, routerid, routername, index, pod, prefix):
         """
         Sets the sink of the DAG to the corresponding edge router
-        :param routerid:
-        :param routername:
-        :param index:
-        :param pod:
         """
+        self.sink_id = routerid
         self.sink = {'id': routerid, 'name': routername, 'index': index, 'pod': pod}
         self.add_edge_router(routerid, routername, index, pod)
+        self.add_destination_prefix(prefix, routerid)
 
     def is_valid_dc_dag(self):
         # Check that number of nodes is complete
@@ -587,14 +604,8 @@ class DCDag(DCDiGraph):
 
     def add_destination_prefix(self, prefix, gateway):
         """Adds a destination prefix attached to gateway router"""
-        if self.is_edge(gateway):
-            if self.get_sink_id() == gateway:
-                pod = self.get_router_pod(gateway)
-                self.add_node(n=prefix, attr_dict={'type':'prefix', 'pod':pod, 'gateway':gateway})
-                self.add_edge(prefix, gateway, direction='uplink')
-                self.add_edge(gateway, prefix, direction='downlink')
-            else:
-                raise ValueError("Gateway {0} is not the sink {1}!".format(gateway, self.sink['id']))
+        if self.get_sink_id() == gateway:
+            super(DCDag, self).add_destination_prefix(prefix, gateway)
         else:
             raise ValueError("Router {0} is not an edge router, so we can't set him a destination prefix".format(gateway))
 
@@ -829,6 +840,7 @@ class DCDag(DCDiGraph):
 
 if __name__ == "__main__":
     dcGraph = DCGraph(k=4)
+    import ipdb; ipdb.set_trace()
     prefixes = dcGraph.destination_prefixes()
     prefix = prefixes[random.randint(3, 7)]
     dcDag = dcGraph.get_default_ospf_dag(prefix=prefix)

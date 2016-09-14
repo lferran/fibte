@@ -39,6 +39,7 @@ class MiceEstimator(object):
         network_prefixes = self.dc_graph.topo.getInitialNetworkPrefixes()
         for nwpx in network_prefixes:
             dag = self.dc_graph.get_default_ospf_dag(prefix=nwpx)
+            #TODO: We should add the prefix - edge router links here!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
             gw = dag.get_gateway()
             dags[nwpx] = {'gateway': gw, 'dag': dag}
 
@@ -46,7 +47,6 @@ class MiceEstimator(object):
 
     def _createFakeNoiseDistributions(self):
         """{receiver :-> {sender: [loads], sender:[]} """
-
         mice_pdfs = {px: {} for px in self.prefixes}
         for px in self.prefixes:
             for px2 in self.prefixes:
@@ -59,6 +59,7 @@ class MiceEstimator(object):
         the network graph"""
         # Fetch current prefix dag
         dag = self.dags[prefix]['dag']
+
         # Get gw
         gw = dag.get_gateway()
 
@@ -70,7 +71,7 @@ class MiceEstimator(object):
                 er_load = sum([self.micepdfs[prefix][px][i] for px in pxs])
 
                 # Propagate it
-                edges = self.propagate_sample(dag=dag, source=er, target=prefix, load=er_load)
+                edges = self.propagate_sample(dag=dag, source=er, target=gw, load=er_load)
 
                 # Iterate edges and sum pertinent load
                 for (u, v, load) in edges:
