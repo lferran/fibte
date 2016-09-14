@@ -37,6 +37,7 @@ getLoads_path = inspect.getsourcefile(fibte.monitoring.getLoads)
 
 import logging
 from fibte.logger import log
+from fibte.trafficgen import convert_to_elephant_ip
 
 class MyGraphProvider(SouthboundManager):
     """This class overrwides the received_initial_graph abstract method of
@@ -53,6 +54,8 @@ class MyGraphProvider(SouthboundManager):
 
 class TestController(object):
     def __init__(self):
+        log.setLevel(logging.DEBUG)
+
         # Connects to the southbound controller. Must be called before
         # creating the instance of SouthboundManager
         CFG_fib.read(os.path.join(tmp_files, C1_cfg))
@@ -62,18 +65,61 @@ class TestController(object):
         t = threading.Thread(target=self.sbmanager.run, name="Southbound Manager")
         t.start()
 
+        # Unix domain server to make things faster and possibility to communicate with hosts
+        self.server = UnixServer(os.path.join(tmp_files, UDS_server_name))
+
         # Blocks until initial graph received from SouthBound Manager
         HAS_INITIAL_GRAPH.wait()
         log.info("Initial graph received from SouthBound Controller")
 
         self.topology = TopologyDB(db=os.path.join(tmp_files, db_topo))
 
-        d1mice = "192.223.255.0/24"
-        d1ele =  "192.223.255.222/32"
-        path1 = [self.topology.routerid(r) for r in ('r1', 'r2', 'r4')]
-        path2 = [self.topology.routerid(r) for r in ('r1', 'r3', 'r4')]
+        d1_mice_tmp = [v['ip'] for i, v in self.topology.network['d1'].iteritems() if type(v) == dict][0]
+        d1_mice_tmp = d1_mice_tmp.strip('/24')
+        d1_elephant_tmp = convert_to_elephant_ip(d1_mice_tmp)
+
+        print("*** Router name-ip bindings")
+        for r in ('r1', 'r2','r3','r4', 'r5'):
+            print(r, '-->', self.topology.routerid(r))
+
+        d1_mice_px = d1_mice_tmp.split('.')[:-1]+['0']
+        d1_mice_px = '.'.join(d1_mice_px)+'/24'
+        d1_elephant_px = d1_elephant_tmp + '/32'
+
+        print ("D1 -- mice ip: {0}\t mice prefix: {1}".format(d1_mice_tmp, d1_mice_px))
+        print ("D1 -- elephant ip: {0}\t elephant prefix: {1}".format(d1_elephant_tmp, d1_elephant_px))
+
+        long_path = [self.topology.routerid(r) for r in ('r1', 'r2', 'r4', 'r5')]
+        short_path = [self.topology.routerid(r) for r in ('r1', 'r3', 'r5')]
 
         import ipdb; ipdb.set_trace()
+
+        self.sbmanager.simple_path_requirement(d1_elephant_px, short_path)
+        self.sbmanager.simple_path_requirement(d1_mice_px,long_path)
+
+
+
+    def run(self):
+        log.info("Looping for new events!")
+        while True:
+            try:
+                while True:
+                    event = self.server.receive()
+                    log.info("LB not active - event received: {0}".format(json.loads(event)))
+            except KeyboardInterrupt:
+                # Exit load balancer
+                self.exitGracefully()
+
+
+    def exitGracefully(self):
+        """
+        Exit load balancer gracefully
+        :return:
+        """
+        log.info("Keyboad Interrupt catched!")
+
+        # Finally exit
+        os._exit(0)
 
 class LBController(object):
     def __init__(self, doBalance = True, k=4, algorithm=None, load_variables=False):
@@ -110,8 +156,6 @@ class LBController(object):
         # Blocks until initial graph received from SouthBound Manager
         HAS_INITIAL_GRAPH.wait()
         log.info("Initial graph received from SouthBound Controller")
-
-        import ipdb; ipdb.set_trace()
 
         # Load the topology
         self.topology = TopologyGraph(getIfindexes=True, db=os.path.join(tmp_files, db_topo))
@@ -279,8 +323,9 @@ class LBController(object):
                 gatewayRouter = self._getGatewayRouter(prefix)
 
                 # Create a new dag
-                dc_dag = self.dc_graph.get_default_ospf_dag(sinkid=gatewayRouter)
+                dc_dag = self.dc_graph.get_default_ospf_dag(prefix)
 
+                import ipdb;ipdb.set_trace()
                 # Add dag
                 dags[prefix] = {'gateway': gatewayRouter, 'dag': dc_dag}
 
@@ -1005,7 +1050,6 @@ class CoreChooserController(LBController):
 class BestRankedCoreChooser(CoreChooserController):
     def __init__(self, doBalance=True, k=4, threshold=0.9):
         super(BestRankedCoreChooser, self).__init__(doBalance, k, threshold, algorithm="best-ranked-core")
-        import ipdb; ipdb.set_trace()
 
     def chooseCore(self, available_cores, flow):
         log.info("Choosing available core: BEST RANKED CORE")
@@ -1079,7 +1123,7 @@ if __name__ == '__main__':
     if args.test == True:
         lb = TestController()
 
-    if args.algorithm == 'ecmp':
+    elif args.algorithm == 'ecmp':
         lb = ECMPController(doBalance = args.doBalance, k=args.k)
 
     elif args.algorithm == 'random_dags':
