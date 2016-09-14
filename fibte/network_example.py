@@ -61,14 +61,11 @@ def launch_network(k=4, bw=10, ip_alias=True):
     sh("killall snmpd ospfd zebra pmacctd getLoads.py")
 
     # Topology
-    #topo = FatTree(k=k, sflow=False, extraSwitch=False, bw=bw)
+    # topo = TestTopo()
+    topo = FatTree(k=k, sflow=False, ovs_switches=False)
 
-    #topo = FatTreeOOB(k=k, sflow=False, extraSwitch=False, bw=bw)
-    topo = TestTopo()
-    
     # Interfaces
     intf = custom(TCIntf, bw=bw)  # , max_queue_size=1000)
-    #intf = custom(DCTCIntf, bw=bw, ip_alias=True)
 
     # Network
     net = IPNet(topo=topo, debug=_lib.DEBUG_FLAG, intf=intf)
@@ -116,10 +113,12 @@ if __name__ == '__main__':
                        help='Start the controller',
                        action='store_true',
                        default=False)
+
     group.add_argument('-n', '--net',
                        help='Start the Mininet topology',
                        action='store_true',
                        default=True)
+
     parser.add_argument('-d', '--debug',
                         help='Set log levels to debug',
                         action='store_true',
@@ -136,8 +135,10 @@ if __name__ == '__main__':
         import logging
         log.setLevel(logging.DEBUG)
         lg.setLogLevel('debug')
+
     if args.controller:
         launch_controller()
+
     elif args.net:
         launch_network(k=args.k)
         
