@@ -7,13 +7,12 @@ import sys
 #in theory it should be 54
 minSizeUDP = 42
 #maxUDPSize = 1500
-maxUDPSize = 65000
+maxUDPSize = 10000
 import math
 
 from fibte import ELEPHANT_SIZE_RANGE
 
 from fibte.misc.unixSockets import UnixClient
-
 import json
 
 import logging
@@ -149,7 +148,8 @@ def sendFlowNotifyController(**flow):
     client = UnixClient("/tmp/controllerServer")
 
     # Tell controller that flow will start
-    if isElephant(flow):
+    iselephant = isElephant(flow)
+    if iselephant:
         try:
             log.debug("New ELEPHANT is STARTING: to {0} {1}(bps) during {2}".format(flow['dst'], flow['size'], flow['duration']))
             # Notify controller that an elephant flow started
@@ -163,15 +163,16 @@ def sendFlowNotifyController(**flow):
 
     # Start sending flow
     sendFlow(**flow)
-
     
 def stopFlowNotifyController(**flow):
     # Open socket with controller
     client = UnixClient("/tmp/controllerServer")
+
     log.debug("New ELEPHANT is STOPPING: to {0} {1}(bps) during {2}".format(flow['dst'], flow['size'], flow['duration']))
     try:
         # Notify controller that elephant flow finished
         client.send(json.dumps({"type": "stoppingFlow", "flow": flow}), "")
+
     except Exception as e:
         log.error("Controller cound not be informed about stoppingFlow event. Error: {0}".format(e))
 
