@@ -16,6 +16,7 @@ from mininet.link import TCIntf
 from fibte.misc.DCTCInterface import DCTCIntf
 import fibte.res.config as cfg
 import signal
+import subprocess
 
 from fibte import flowServer_path
 
@@ -25,7 +26,7 @@ def signal_term_handler(signal, frame):
     import sys
     sys.exit(0)
 
-class TestTopo(IPTopo):
+class TestTopo1(IPTopo):
     def build(self, *args, **kwargs):
         """
         """
@@ -53,6 +54,29 @@ class TestTopo(IPTopo):
         c1 = self.addController(cfg.C1, cfg_path=cfg.C1_cfg)
         self.addLink(c1, r1, cost = 1000)
 
+class TestTopo2(IPTopo):
+    def build(self, *args, **kwargs):
+        """
+        """
+        r1 = self.addRouter('r1')
+        r2 = self.addRouter('r2')
+
+        # Short path
+        self.addLink(r1, r2)
+
+        s1 = self.addHost('s1')
+        s2 = self.addHost('s2')
+        d1 = self.addHost('d1')
+
+        self.addLink(s1, r1)
+        self.addLink(s2, r1)
+
+        self.addLink(d1, r2)
+
+        # Adding Fibbing Controller
+        c1 = self.addController(cfg.C1, cfg_path=cfg.C1_cfg)
+        self.addLink(c1, r1, cost=1000)
+
 def launch_network(k=4, bw=10, ip_alias=True):
     signal.signal(signal.SIGTERM, signal_term_handler)
 
@@ -60,12 +84,18 @@ def launch_network(k=4, bw=10, ip_alias=True):
     cleanup()
     sh("killall snmpd ospfd zebra pmacctd getLoads.py")
 
+    # Flush root namespace mangle table
+    subprocess.call(["iptables", "-t", "mangle" ,"-F"])
+    subprocess.call(["iptables", "-t", "mangle" ,"-X"])
+
     # Topology
-    # topo = TestTopo()
-    topo = FatTree(k=k, sflow=False, ovs_switches=False)
+    # topo = TestTopo1()
+    topo = TestTopo2()
+    #topo = FatTree(k=k, sflow=False, ovs_switches=False)
 
     # Interfaces
-    intf = custom(TCIntf, bw=bw)  # , max_queue_size=1000)
+    #intf = custom(TCIntf, bw=bw)
+    intf = custom(DCTCIntf, bw=bw, max_queue_size=10)
 
     # Network
     net = IPNet(topo=topo, debug=_lib.DEBUG_FLAG, intf=intf)
@@ -141,4 +171,3 @@ if __name__ == '__main__':
 
     elif args.net:
         launch_network(k=args.k)
-        
