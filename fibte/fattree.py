@@ -7,7 +7,7 @@ from mininet.link import TCIntf
 import fibte.res.config as cfg
 
 class FatTree(IPTopo):
-    def __init__(self, k=4, sflow=False, ovs_switches=True, *args, **kwargs):
+    def __init__(self, k=4, sflow=False, ovs_switches=False, *args, **kwargs):
         # k must be multiple of 2
         self.k = k
 
@@ -141,7 +141,6 @@ class FatTree(IPTopo):
         for i in range((self.k/2)**2):
             coreRouters.append(self.addRouter("r_c%d" % i))
         return coreRouters
-
 
 class FatTreeOOB(FatTree):
     """
