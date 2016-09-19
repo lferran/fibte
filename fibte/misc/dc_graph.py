@@ -22,8 +22,12 @@ class DCDiGraph(DiGraph):
         super(DCDiGraph, self).__init__(*args, **kwargs)
         # DC parameter
         self.k = k
+
         # We store prefix-gateway here
         self.prefix_gateway_bindings = {'prefixToGateway':{}, 'gatewayToPrefix': {}}
+
+        # Prefixes are not stored as nodes
+        self.prefixes = {}
 
     def add_edge_router(self, routerid, routername, index, pod):
         if pod >= 0 and pod <= self.k - 1:
@@ -53,7 +57,7 @@ class DCDiGraph(DiGraph):
         """Adds a destination prefix attached to gateway router"""
         if self.is_edge(gateway):
             pod = self.get_router_pod(gateway)
-            self.add_node(n=prefix, attr_dict={'type':'prefix', 'pod':pod, 'gateway':gateway})
+            self.prefixes[prefix] = {'pod':pod, 'gateway':gateway}
 
             # Add prefix in structure
             if prefix not in self.prefix_gateway_bindings['prefixToGateway'].keys():
@@ -77,7 +81,7 @@ class DCDiGraph(DiGraph):
         return self.node[routerid]['type'] == 'core'
 
     def is_destination_prefix(self, node):
-        return self.node[node]['type'] == 'prefix'
+        return node in self.prefixes.keys()
 
     def edge_routers(self, data=False):
         if data:
@@ -117,15 +121,15 @@ class DCDiGraph(DiGraph):
 
     def destination_prefixes(self, data=False):
         if data:
-            return [(r, d) for (r, d) in self.nodes_iter(data=True) if self.is_destination_prefix(r)]
+            return [(r, d) for (r, d) in self.prefixes.iteritems()]
         else:
-            return [r for r in self.nodes_iter() if self.is_destination_prefix(r)]
+            return [r for r in self.prefixes.keys()]
 
     def destination_prefixes_iter(self, data=False):
         if data:
-            return iter([(r, d) for (r, d) in self.nodes_iter(data=True) if self.is_destination_prefix(r)])
+            return iter([(r, d) for (r, d) in self.prefixes.iteritems()])
         else:
-            return iter([r for r in self.nodes_iter() if self.is_destination_prefix(r)])
+            return iter([r for r in self.prefixes.keys()])
 
     def get_router_name(self, routerid):
         return self.node[routerid]['name']
@@ -141,6 +145,12 @@ class DCDiGraph(DiGraph):
             return self.node[routerid]['pod']
         else:
             raise ValueError("Router {0} is a core router - it has no pod number".format(routerid))
+
+    def get_destination_prefix_pod(self, dest):
+        if dest in self.prefixes.keys():
+            return self.prefixes[dest]['pod']
+        else:
+            raise ValueError("{0} is not a destination prefix".format(dest))
 
     def get_router_position(self, routerid):
         if self.is_core(routerid):
@@ -165,7 +175,7 @@ class DCDiGraph(DiGraph):
 
     def get_destination_prefix_gateway(self, prefix):
         if self.is_destination_prefix(prefix):
-            return self.node[prefix]['gateway']
+            return self.prefix_gateway_bindings['prefixToGateway'][prefix]
         else:
             raise ValueError("{0} is not a destiantion prefix".format(prefix))
 
@@ -361,7 +371,7 @@ class DCGraph(DCDiGraph):
             self.add_core_router(routerid=routerid, routername=router, index=index)
 
         # Add the aggregation
-        aggrRouters = self.topo.getAgreggationRouters()
+        aggrRouters = self.topo.getAggregationRouters()
         for router in aggrRouters:
             routerid = self.topo.getRouterId(router)
             index = self.topo.getRouterIndex(router)
@@ -405,7 +415,7 @@ class DCGraph(DCDiGraph):
         :param sink: router id of the sink's router
         :return: DCDAg
         """
-        prefix_pod = self.get_router_pod(prefix)
+        prefix_pod = self.get_destination_prefix_pod(prefix)
         gateway = self.get_destination_prefix_gateway(prefix)
         if self.is_destination_prefix(prefix):
             # Create empty-links dag from self DCGraph
