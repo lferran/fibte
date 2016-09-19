@@ -1,6 +1,8 @@
 import ConfigParser
 import os
 import pkgutil
+import time
+
 RES = os.path.join(os.path.dirname(__file__),'res')
 
 CFG = ConfigParser.ConfigParser()
@@ -28,3 +30,16 @@ import inspect
 import fibte.trafficgen.flowServer
 flowServer_path = inspect.getsourcefile(fibte.trafficgen.flowServer)
 iptables_path = pkgutil.get_loader("fibte.misc.iptables").filename
+
+
+import logging
+from fibte.logger import log
+
+# Define decorator
+def time_func(function):
+    def wrapper(*args,**kwargs):
+        t = time.time()
+        res = function(*args,**kwargs)
+        log.debug("{0} took {1}s to execute".format(function.func_name, time.time()-t))
+        return res
+    return wrapper
