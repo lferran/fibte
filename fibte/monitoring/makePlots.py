@@ -198,7 +198,7 @@ class AlgorithmsComparator(object):
 
         coreRouters = self.topology.getCoreRouters()
         core_positions = self._get_core_positions()
-        aggrRouters = self.topology.getAgreggationRouters()
+        aggrRouters = self.topology.getAggregationRouters()
 
         # Accumulate data to plot here
         data_to_plot = {}
@@ -266,7 +266,7 @@ class AlgorithmsComparator(object):
     def get_in_out_metric(self, measurement):
         coreRouters = self.topology.getCoreRouters()
         edgeRouters = self.topology.getEdgeRouters()
-        aggrRouters = self.topology.getAgreggationRouters()
+        aggrRouters = self.topology.getAggregationRouters()
 
         tin = []
         tout = []
@@ -838,7 +838,7 @@ if __name__ == "__main__":
 
     # Declare expected arguments
     parser.add_argument('-k', help='Fat Tree parameter', type=int, default=4)
-    parser.add_argument('--file_list', nargs='+', help='List of measurement files to compare', type=str)
+    parser.add_argument('--file_list', nargs='+', help='List of measurement files to compare', type=str, required=True)
 
     parser.add_argument('--node', help="Plot traffic observed at node links only. e.g: h_0_0", type=str, default=None)
     parser.add_argument('--downwards', action="store_true", default=False)

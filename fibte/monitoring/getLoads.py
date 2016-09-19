@@ -61,7 +61,7 @@ class GetLoads(object):
         edgeRouters = self.topology.getEdgeRouters()
         coreRouters = self.topology.getCoreRouters()
         others = edgeRouters + coreRouters
-        for u in self.topology.getAgreggationRouters():
+        for u in self.topology.getAggregationRouters():
             u_i = self.topology.getRouterIndex(u)
             u_pod = self.topology.getRouterPod(u)
             d[u] = {}
@@ -122,7 +122,7 @@ class GetLoads(object):
         Calculates average bisection bandwidth
         """
         # Get aggregation routers
-        aggregationRouters = set(self.topology.getAgreggationRouters())
+        aggregationRouters = set(self.topology.getAggregationRouters())
 
         # Get core routers
         coreRouters = set(self.topology.getCoreRouters())
@@ -141,7 +141,7 @@ class GetLoads(object):
         aggregationTraffic = self.aggregation_loads.copy()
 
         # Get aggregation routers
-        aggregationRouters = set(self.topology.getAgreggationRouters())
+        aggregationRouters = set(self.topology.getAggregationRouters())
 
         # Take time
         readout_time = time.time()
