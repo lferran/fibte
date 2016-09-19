@@ -110,9 +110,14 @@ def launch_network(k=4, bw=10, ip_alias=False):
     net.start()
 
     print('*** Starting Flow Servers in virtualized hosts')
+
+    # Check first if ip_alias is active
+    if ip_alias: command = flowServer_path + " {0} --ip_alias &"
+    else: command = flowServer_path + " {0} &"
+
     for h in net.hosts:
         # Start flowServers
-        h.cmd(flowServer_path + " {0} &".format(h.name))
+        h.cmd(command.format(h.name))
         print(h.name)
 
     if ip_alias == True:
@@ -160,6 +165,8 @@ if __name__ == '__main__':
     parser.add_argument('-k', help='Launch k-ary fat-tree network',
                         type=int, default=4)
 
+    parser.add_argument('--ip_alias', help='Configure ip alias if argument is present',
+                        action="store_true", default=False)
     args = parser.parse_args()
     if args.debug:
         _lib.DEBUG_FLAG = True
@@ -173,4 +180,4 @@ if __name__ == '__main__':
         launch_controller()
 
     elif args.net:
-        launch_network(k=args.k)
+        launch_network(k=args.k, ip_alias=args.ip_alias)

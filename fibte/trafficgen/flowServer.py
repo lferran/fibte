@@ -24,7 +24,7 @@ def my_sleep(seconds):
 
 class FlowServer(object):
 
-    def __init__(self, name):
+    def __init__(self, name, ip_alias=False):
 
         mlog = multiprocessing.get_logger()
 
@@ -69,6 +69,10 @@ class FlowServer(object):
 
         # Max scheduler waiting time
         self.max_waiting_time = 0
+
+        # Ip alias?
+        self.ip_alias = ip_alias
+        log.debug("Is ip alias for elephants is active? {0}".format(str(self.ip_alias)))
 
     def signal_term_handler(self, signal, frame):
         # Only parent will do this
@@ -184,7 +188,7 @@ class FlowServer(object):
                             log.error("We neet do wait a bit more in the TrafficGenerator!! Delta is negative!")
 
                         # Rewrite destination address if it is elephant to send to elephant ip
-                        if isElephant(flow):
+                        if isElephant(flow) and self.ip_alias == True:
                             flow['dst'] = convert_to_elephant_ip(flow['dst'])
 
                         # Schedule the flow start
@@ -247,10 +251,15 @@ class FlowServer(object):
 if __name__ == "__main__":
     import os
     # Name of the flowServer is passed when called
-    name = sys.argv[1]
+    if len(sys.argv) == 3 and sys.argv[2] == '--ip_alias':
+        name = sys.argv[1]
+        ip_alias = True
+    elif len(sys.argv) == 2:
+        name = sys.argv[1]
+        ip_alias = False
 
     # Store the pid of the process so we can stop it when we stop the network
     with open("/tmp/flowServer_{0}.pid".format(name),"w") as f:
         f.write(str(os.getpid()))
 
-    FlowServer(name).run()
+    FlowServer(name, ip_alias=ip_alias).run()
