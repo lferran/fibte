@@ -39,6 +39,9 @@ import logging
 from fibte.logger import log
 from fibte.trafficgen import convert_to_elephant_ip
 
+from fibte import time_func
+
+
 class MyGraphProvider(SouthboundManager):
     """This class overrwides the received_initial_graph abstract method of
     the SouthboundManager class. It is used to receive the initial
@@ -97,8 +100,6 @@ class TestController(object):
         self.sbmanager.simple_path_requirement(d1_elephant_px, short_path)
         self.sbmanager.simple_path_requirement(d1_mice_px,long_path)
 
-
-
     def run(self):
         log.info("Looping for new events!")
         while True:
@@ -109,7 +110,6 @@ class TestController(object):
             except KeyboardInterrupt:
                 # Exit load balancer
                 self.exitGracefully()
-
 
     def exitGracefully(self):
         """
@@ -173,8 +173,8 @@ class LBController(object):
         self.dc_graph = DCGraph(k=self.k)
 
         # Here we store the current dags for each destiantion
-        self.dags = self._createInitialDags()
-        self.initial_dags = copy.deepcopy(self.dags)
+        self.current_dags = self._createInitialDags()
+        self.initial_dags = copy.deepcopy(self.current_dags)
 
         # Fill ospf_prefixes dict
         self.ospf_prefixes = self._fillInitialOSPFPrefixes()
@@ -182,7 +182,6 @@ class LBController(object):
         # Start getLoads thread that reads from counters
         #os.system(getLoads_path + ' -k {0} &'.format(self.k))
         self.p_getLoads = subprocess.Popen([getLoads_path, '-k', str(self.k), '-a', self.algorithm], shell=False)
-
 
         # Start getLoads thread reads from link usage
         thread = threading.Thread(target=self._getLoads, args=([1]))
@@ -252,8 +251,8 @@ class LBController(object):
         :return:
         """
         if '/' in prefix:
-            if prefix in self.dags.keys() and self.dags[prefix].has_key('gateway'):
-                return self.dags[prefix]['gateway']
+            if prefix in self.current_dags.keys() and self.current_dags[prefix].has_key('gateway'):
+                return self.current_dags[prefix]['gateway']
             else:
                 # Maybe it's a newly created prefix -- so check in the network graph
                 return self._getGatewayRouter(prefix)
@@ -309,7 +308,7 @@ class LBController(object):
 
     def _createInitialDags(self):
         """
-        Populates the self.dags dictionary for each existing prefix in the network
+        Populates the self.current_dags dictionary for each existing prefix in the network
         """
         # Result is stored here
         log.info("Creating initial DAGs (default OSPF)")
@@ -325,15 +324,8 @@ class LBController(object):
                 # Create a new dag
                 dc_dag = self.dc_graph.get_default_ospf_dag(prefix)
 
-                import ipdb;ipdb.set_trace()
                 # Add dag
                 dags[prefix] = {'gateway': gatewayRouter, 'dag': dc_dag}
-
-                try:
-                    # Instruct fibbing controller
-                    self.sbmanager.add_dag_requirement(prefix, dc_dag)
-                except Exception as e:
-                    import ipdb; ipdb.set_trace()
 
         return dags
 
@@ -351,16 +343,16 @@ class LBController(object):
         :return:
         """
         # Start crono
-        reset_time = time.time()
+        reset_start_time = time.time()
 
         # Remove all attraction points and lsas
         # Set all dags to original ospf dag
-        self.dags = copy.deepcopy(self.initial_dags)
+        self.current_dags = copy.deepcopy(self.initial_dags)
 
         # Reset all dags to initial state
-        action = [self.sbmanager.add_dag_requirement(prefix, self.dags[prefix]['dag']) for prefix in self.dags.keys()]
+        self.sbmanager.remove_all_dag_requirements()
 
-        return reset_time
+        return reset_start_time
 
     def handleFlow(self, event):
         """
@@ -424,8 +416,7 @@ class LBController(object):
 
         log.info("Cleaning up the network from fake LSAs ...")
         # Remove all lies before leaving
-        for prefix in self.network_graph.prefixes:
-            self.sbmanager.remove_dag_requirement(prefix)
+        self.current_dags = copy.deepcopy(self.initial_dags)
 
         # self.p_getLoads.terminate()
 
@@ -541,7 +532,7 @@ class RandomUplinksController(LBController):
             log.debug("There are no ongoing flows to {0} from pod {1}".format(dst_prefix, src_pod))
 
             # Retrieve current DAG for destination prefix
-            current_dag = self.dags[dst_prefix]['dag']
+            current_dag = self.current_dags[dst_prefix]['dag']
 
             # Modify DAG
             current_dag.modify_random_uplinks(src_pod=src_pod)
@@ -589,7 +580,7 @@ class RandomUplinksController(LBController):
         # Check if already ongoing flows
         if not self.areOngoingFlowsInPod(dst_prefix=dst_prefix, src_pod=src_pod):
             # Retrieve current DAG for destination prefix
-            current_dag = self.dags[dst_prefix]['dag']
+            current_dag = self.current_dags[dst_prefix]['dag']
 
             # Modify DAG -- set uplinks from source pod to default ECMP
             current_dag.set_ecmp_uplinks_from_pod(src_pod=src_pod)
@@ -790,7 +781,7 @@ class CoreChooserController(LBController):
                 completePath = pathSrcToCore + pathCoreToDst[1:]
                 if not self.collidesWithPreviousFlows(src_gw, core, flow):
                     capacities = self.getPathCapacities(completePath)
-                    core_paths.append({'core': core, 'path': completePath, 'capacity': capacities})
+                    core_paths.append({'core': core, 'path': completePath, 'capacities': capacities})
 
         return core_paths
 
@@ -884,12 +875,14 @@ class CoreChooserController(LBController):
         if len(cores) == 1:
             return cores[0]
         else:
-            raise ValueError("Flow is not assigned to any core - that's weird")
+            log.error("Flow is not assigned to any core - that's weird")
+            pass
 
     @abc.abstractmethod
     def chooseCore(self, available_cores, flow):
         """"""
 
+    @time_func
     def allocateFlow(self, flow):
         # Check for which cores I can send (must remove those
         # ones that would collide with already ongoing flows
@@ -933,7 +926,7 @@ class CoreChooserController(LBController):
             log.info("{0} was chosen with a final overflow of {1}".format(chosen_core_name, self.base.setSizeToStr(chosen_overflow)))
 
             # Retrieve current DAG for destination prefix
-            current_dag = self.dags[dst_prefix]['dag']
+            current_dag = self.current_dags[dst_prefix]['dag']
 
             # Apply path
             current_dag.apply_path_to_core(src_gw, chosen_core)
@@ -949,6 +942,7 @@ class CoreChooserController(LBController):
 
         #import ipdb; ipdb.set_trace()
 
+    @time_func
     def deallocateFlow(self, flow):
         #import ipdb; ipdb.set_trace()
 
@@ -979,7 +973,7 @@ class CoreChooserController(LBController):
             log.debug("No ongoing flows from the same pod {0} we found to prefix {1}".format(src_pod, dst_prefix))
 
             # Retrieve current DAG for destination prefix
-            current_dag = self.dags[dst_prefix]['dag']
+            current_dag = self.current_dags[dst_prefix]['dag']
 
             # Restore the DAG
             current_dag.set_ecmp_uplinks_from_source(src_gw, current_edge_to_core, all_layers=True)
@@ -1003,7 +997,7 @@ class CoreChooserController(LBController):
                 log.debug("There are NO colliding flows with same edge router gateway: {0}".format(src_gw))
 
                 # Retrieve current DAG for destination prefix
-                current_dag = self.dags[dst_prefix]['dag']
+                current_dag = self.current_dags[dst_prefix]['dag']
 
                 # Restore the DAG
                 current_dag.set_ecmp_uplinks_from_source(src_gw, current_edge_to_core, all_layers=False)
@@ -1100,7 +1094,7 @@ if __name__ == '__main__':
     from fibte.logger import log
     import logging
 
-    parser = argparse.ArgumentParser()    #group = parser.add_mutually_exclusive_group()
+    parser = argparse.ArgumentParser()
 
     parser.add_argument('--doBalance',
                         help='If set to False, ignores all events and just prints them',
