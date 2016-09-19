@@ -29,6 +29,7 @@ def signal_term_handler(signal, frame):
 class TestTopo1(IPTopo):
     def build(self, *args, **kwargs):
         """
+        Used to test Fibbing in longer prefixes
         """
         r1 = self.addRouter('r1')
         r2 = self.addRouter('r2')
@@ -56,7 +57,7 @@ class TestTopo1(IPTopo):
 
 class TestTopo2(IPTopo):
     def build(self, *args, **kwargs):
-        """
+        """Used to test traffic shaping and packet drops
         """
         r1 = self.addRouter('r1')
         r2 = self.addRouter('r2')
@@ -67,17 +68,19 @@ class TestTopo2(IPTopo):
         s1 = self.addHost('s1')
         s2 = self.addHost('s2')
         d1 = self.addHost('d1')
+        d2 = self.addHost('d2')
 
         self.addLink(s1, r1)
         self.addLink(s2, r1)
 
         self.addLink(d1, r2)
+        self.addLink(d2, r2)
 
         # Adding Fibbing Controller
         c1 = self.addController(cfg.C1, cfg_path=cfg.C1_cfg)
         self.addLink(c1, r1, cost=1000)
 
-def launch_network(k=4, bw=10, ip_alias=True):
+def launch_network(k=4, bw=10, ip_alias=False):
     signal.signal(signal.SIGTERM, signal_term_handler)
 
     # Cleanup the network
@@ -90,8 +93,8 @@ def launch_network(k=4, bw=10, ip_alias=True):
 
     # Topology
     # topo = TestTopo1()
-    topo = TestTopo2()
-    #topo = FatTree(k=k, sflow=False, ovs_switches=False)
+    #topo = TestTopo2()
+    topo = FatTree(k=k, sflow=False, ovs_switches=False)
 
     # Interfaces
     #intf = custom(TCIntf, bw=bw)

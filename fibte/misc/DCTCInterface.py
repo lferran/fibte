@@ -170,9 +170,6 @@ class DCTCIntf(TCIntf):
         debug("cmds:", cmds, '\n')
         debug("outputs:", tcoutputs, '\n')
 
-#        if self.node.name == 'h_0_0':
-#            import ipdb; ipdb.set_trace()
-
         # add marks to packets through IPTABLES RULES
         # OSPF
         self.cmd("iptables -w -t mangle -A POSTROUTING -o %s -p 89 -j MARK --set-mark 20" % self.name)
