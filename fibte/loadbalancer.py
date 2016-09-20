@@ -314,18 +314,20 @@ class LBController(object):
         log.info("Creating initial DAGs (default OSPF)")
         dags = {}
 
+        pxs = [p for p in self.network_graph.prefixes]
+        if len(pxs) != (self.k**3)/4:
+            log.error("MORE PREFIXES THAN EXPECTED!!!!")
+            import ipdb; ipdb.set_trace()
+
         for prefix in self.network_graph.prefixes:
-            # TODO: change this so that IP is read dynamically
-            if prefix != '192.255.255.0/24': #IP of the fibbing controller prefix...
+            # Get Edge router connected to prefix
+            gatewayRouter = self._getGatewayRouter(prefix)
 
-                # Get Edge router connected to prefix
-                gatewayRouter = self._getGatewayRouter(prefix)
+            # Create a new dag
+            dc_dag = self.dc_graph.get_default_ospf_dag(prefix)
 
-                # Create a new dag
-                dc_dag = self.dc_graph.get_default_ospf_dag(prefix)
-
-                # Add dag
-                dags[prefix] = {'gateway': gatewayRouter, 'dag': dc_dag}
+            # Add dag
+            dags[prefix] = {'gateway': gatewayRouter, 'dag': dc_dag}
 
         return dags
 
@@ -446,11 +448,11 @@ class LBController(object):
 
 class ECMPController(LBController):
     def __init__(self, doBalance=True, k=4):
-        super(ECMPController, self).__init__(doBalance, k, algorithm='ecmp')
+        super(ECMPController, self).__init__(doBalance=doBalance, k=k, algorithm='ecmp')
 
 class RandomUplinksController(LBController):
     def __init__(self, doBalance=True, k=4):
-        super(RandomUplinksController, self).__init__(doBalance, k, algorithm='random-dags')
+        super(RandomUplinksController, self).__init__(doBalance=doBalance, k=k, algorithm='random-dags')
         # Keeps track of elephant flows from each pod to every destination
         self.flows_per_pod = {px: {pod: [] for pod in range(0, self.k)} for px in self.network_graph.prefixes}
 
@@ -606,7 +608,7 @@ class RandomUplinksController(LBController):
 
 class CoreChooserController(LBController):
     def __init__(self, doBalance=True, k=4, threshold=0.9, algorithm=None):
-        super(CoreChooserController, self).__init__(doBalance, k, algorithm)
+        super(CoreChooserController, self).__init__(doBalance=doBalance, k=k, algorithm=algorithm)
 
         # Create structure where we store the ongoing elephant  flows in the graph
         self.elephants_in_paths = self._createElephantInPathsDict()
@@ -926,7 +928,11 @@ class CoreChooserController(LBController):
             log.info("{0} was chosen with a final overflow of {1}".format(chosen_core_name, self.base.setSizeToStr(chosen_overflow)))
 
             # Retrieve current DAG for destination prefix
-            current_dag = self.current_dags[dst_prefix]['dag']
+            if dst_prefix in self.current_dags.keys():
+                current_dag = self.current_dags[dst_prefix]['dag']
+            else:
+                log.error("dst_prefix not in current_dats")
+                import ipdb; ipdb.set_trace()
 
             # Apply path
             current_dag.apply_path_to_core(src_gw, chosen_core)
@@ -1120,13 +1126,13 @@ if __name__ == '__main__':
     elif args.algorithm == 'ecmp':
         lb = ECMPController(doBalance = args.doBalance, k=args.k)
 
-    elif args.algorithm == 'random_dags':
+    elif args.algorithm == 'random-dags':
         lb = RandomUplinksController(doBalance=args.doBalance, k=args.k)
 
-    elif args.algorithm == 'random_core':
+    elif args.algorithm == 'random-core':
         lb = RandomCoreChooser(doBalance=args.doBalance, k=args.k)
 
-    elif args.algorithm == 'best_ranked_core':
+    elif args.algorithm == 'best-ranked-core':
         lb = BestRankedCoreChooser(doBalance=args.doBalance, k=args.k)
 
     # Run the controller
