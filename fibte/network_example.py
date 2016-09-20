@@ -98,7 +98,7 @@ def launch_network(k=4, bw=10, ip_alias=False):
 
     # Interfaces
     #intf = custom(TCIntf, bw=bw)
-    intf = custom(DCTCIntf, bw=bw, max_queue_size=10)
+    intf = custom(DCTCIntf, bw=bw)
 
     # Network
     net = IPNet(topo=topo, debug=_lib.DEBUG_FLAG, intf=intf)
@@ -167,6 +167,7 @@ if __name__ == '__main__':
 
     parser.add_argument('--ip_alias', help='Configure ip alias if argument is present',
                         action="store_true", default=False)
+
     args = parser.parse_args()
     if args.debug:
         _lib.DEBUG_FLAG = True
