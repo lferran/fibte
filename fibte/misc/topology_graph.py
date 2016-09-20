@@ -371,8 +371,14 @@ class TopologyGraph(TopologyDB):
         :param pod: a pod number is expected in string form "pod_X"
         :return: a list of hosts under that pod
         """
+
         # Get pod number
-        pod_number = pod.split('_')[1]
+        if isinstance(pod, int):
+            pod_number = pod
+        elif isinstance(pod, str):
+            pod_number = pod.split('_')[1]
+        else:
+            raise ValueError("{0} is neither in int form (X) or string form (pod_X)")
 
         # Calculate corresponding edge router regex
         regex = "r_{0}_e".format(pod_number)
