@@ -1,4 +1,4 @@
-from udpTrafficGenerator import *
+from udpTrafficGeneratorBase import *
 
 class TG1Parser(TGParser):
     def __init__(self):
@@ -44,7 +44,7 @@ class udpTrafficGenerator1(udpTrafficGeneratorBase):
         filename = '{0}'.format(self.saved_traffic_dir)
         anames = ['tg1', '{2}', 'm{3}e{4}', 'fr{5}', 't{6}', 'ts{7}']
         filename += '_'.join(anames)
-        filename.format(args.pattern,
+        filename = filename.format(args.pattern,
                         str(args.mice).replace('.', ','),
                         str(args.elephant).replace('.', ','),
                         str(args.flow_rate).replace('.', ','),

@@ -5,6 +5,7 @@ import time
 import os
 import argparse
 import abc
+import json
 
 try:
     import cPickle as pickle
@@ -49,39 +50,14 @@ class TGParser(object):
         self.parser = argparse.ArgumentParser()
 
     def loadParser(self):
+        self.parser.add_argument('--pattern', help='Communication pattern: {random|staggered|bijection|stride}', type=str, default='random')
+        self.parser.add_argument('--pattern_args', help='Communication pattern arguments', type=json.loads, default='{}')
+        self.parser.add_argument('-t', '--time', help='Duration of the traffic generator', type=int, default=400)
+        self.parser.add_argument('-s', '--time_step', help="Granularity at which we inspect the generated traffic so that the rates are kept", type=int, default=1)
+        self.parser.add_argument('--save_traffic', help='Saves traffic in a file so it can be repeated', action="store_true")
+        self.parser.add_argument('--load_traffic', help='Load traffic from a file so it can be repeated', default="")
+        self.parser.add_argument('--flows_file', help="Schedule the flows specified in file", default=False)
         self.parser.add_argument('--terminate', help='Terminate any ongoing traffic', action='store_true')
-
-        self.parser.add_argument('-t', '--time',
-                            help='Duration of the traffic generator',
-                            type=int,
-                            default=400)
-
-        self.parser.add_argument('-s', '--time_step',
-                            help="Granularity at which we inspect the generated traffic so that the rates are kept",
-                            type=int,
-                            default=1)
-
-        self.parser.add_argument('--senders',
-                            help='List of switch edges or pods that can send traffic',
-                            default="all")
-
-        self.parser.add_argument('--receivers',
-                            help='List of switch edges or pods that can receive traffic',
-                            default="all")
-
-        self.parser.add_argument('--save_traffic',
-                            help='saves traffic in a file so it can be repeated',
-                            action="store_true")
-
-        self.parser.add_argument('--load_traffic',
-                            help='load traffic from a file so it can be repeated',
-                            default="")
-
-        self.parser.add_argument('--pattern', help='Communication pattern')
-
-        self.parser.add_argument('--flows_file',
-                            help="Schedule the flows specified in file",
-                            default=False)
 
     def parseArgs(self):
         # Parse the arguments and return them
@@ -93,7 +69,7 @@ class TGParser(object):
         import ipdb; ipdb.set_trace()
 
 class udpTrafficGeneratorBase(Base):
-    def __init__(self, pattern='random', totalTime=100, timeStep=1, *args, **kwargs):
+    def __init__(self, pattern='random', pattern_args={}, totalTime=100, timeStep=1, *args, **kwargs):
         super(udpTrafficGeneratorBase, self).__init__(*args, **kwargs)
 
         # Fodler where we store the traffic files
@@ -104,7 +80,7 @@ class udpTrafficGeneratorBase(Base):
 
         # Get attributes
         self.pattern = pattern
-        self.pattern_args = kwargs.get('pattern_args', {})
+        self.pattern_args = pattern_args
 
         self.totalTime = totalTime
         self.timeStep = timeStep
@@ -120,7 +96,6 @@ class udpTrafficGeneratorBase(Base):
 
         # Get sender hosts
         self.senders = self.topology.getHosts().keys()
-
         self.possible_destinations = self._createPossibleDestinations()
 
     @staticmethod
@@ -153,12 +128,10 @@ class udpTrafficGeneratorBase(Base):
         return absolute_times
 
     @staticmethod
-    def weighted_choice(*args):
+    def weighted_choice(choices):
         """
         *args example: [("e",weight_e),('m',weight_m)]
         """
-        choices = args
-
         total = sum(w for c, w in choices)
         r = random.uniform(0, total)
         upto = 0
@@ -225,12 +198,11 @@ class udpTrafficGeneratorBase(Base):
         """"""
         pos_dst = {}
         rcvs = self.senders[:]
-
         if self.pattern == 'random':
             for sender in self.senders:
                 # Filter sender and hosts with same network
-                rcvs = [r for r in rcvs if r != sender and not self.topology.inSameSubnetwork(r, sender)]
-                pos_dst[sender] = rcvs
+                rcvs_tmp = [r for r in rcvs if r != sender and not self.topology.inSameSubnetwork(r, sender)]
+                pos_dst[sender] = rcvs_tmp
 
         elif self.pattern == 'staggered':
             for sender in self.senders:
@@ -249,10 +221,11 @@ class udpTrafficGeneratorBase(Base):
                 # Compute receivers outside pod
                 rcvs_outside = [r for r in rcvs if self.topology.getHostPod(r) != hpod]
 
-                pos_dst[sender] = {'sameEdge': rcvs_edge, 'samePod': rcvs_pod, 'otehrPpod': rcvs_outside}
+                pos_dst[sender] = {'sameEdge': rcvs_edge, 'samePod': rcvs_pod, 'otherPod': rcvs_outside}
 
         elif self.pattern == 'bijection':
             # Create random pairs
+            import ipdb; ipdb.set_trace()
             random_hosts_list = random.shuffle(rcvs)
             for index, h in enumerate(random_hosts_list):
                 r_index = (index + 1) % len(random_hosts_list)
@@ -270,6 +243,8 @@ class udpTrafficGeneratorBase(Base):
                 r_index = (index + stride_i) % len(orderedHosts)
                 r = orderedHosts[r_index]
                 pos_dst[h] = r
+
+        return pos_dst
 
     def get_possible_destinations(self, sender):
         return self.possible_destinations[sender]
@@ -294,7 +269,7 @@ class udpTrafficGeneratorBase(Base):
                 return None
 
         elif self.pattern == 'stride':
-            receivers = list(set(receivers) - set(exclude))
+            receivers = list({receivers} - set(exclude))
             if len(receivers) == 1:
                 return receivers[0]
             elif len(receivers) == 0:
@@ -312,8 +287,8 @@ class udpTrafficGeneratorBase(Base):
             # Make a weighted choice
             choice = self.weighted_choice([('sameEdge', sameEdge_p), ('samePod', samePod_p), ('otherPod', otherPod_p)])
 
+            #import ipdb; ipdb.set_trace()
             # Choose host at random within chosen group
-
             # Remove excluded
             receivers_choice = receivers[choice]
             receivers_choice = list(set(receivers_choice) - set(exclude))
@@ -323,7 +298,7 @@ class udpTrafficGeneratorBase(Base):
                 return None
 
         elif self.pattern == 'bijection':
-            receivers = list(set(receivers) - set(exclude))
+            receivers = list({receivers} - set(exclude))
             if len(receivers) == 1:
                 return receivers[0]
             elif len(receivers) == 0:

@@ -1,4 +1,4 @@
-from udpTrafficGenerator import *
+from udpTrafficGeneratorBase import *
 
 class TG2Parser(TGParser):
     def __init__(self):
@@ -9,42 +9,51 @@ class TG2Parser(TGParser):
         super(TG2Parser, self).loadParser()
 
         # Load additional arguments
-        self.parser.add_argument('--elephant_rate',
-                            help='Percentage of elephant flows',
-                            type=float,
-                            default=0.1)
-
-        self.parser.add_argument('--mice_rate',
-                            help='Percentage of mice flows',
-                            type=float,
-                            default=1.5)
-
-        self.parser.add_argument('--target_load',
-                            help='Target average link load per host',
-                            type=float,
-                            default=0.5)
-
+        self.parser.add_argument('--elephant_rate', help='Rate at which elephant flows start at any host (flows/s)', type=float, default=0.1)
+        self.parser.add_argument('--mice_rate', help='Rate at which mice flows start at any host (flows/s)', type=float, default=1.5)
+        self.parser.add_argument('--target_load', help='Target average link load per host', type=float,default=0.5)
 
 class udpTrafficGenerator2(udpTrafficGeneratorBase):
     def __init__(self, mice_rate=1.5, elephant_rate=0.1, target_link_load=0.5, *args, **kwargs):
         super(udpTrafficGenerator2, self).__init__(*args, **kwargs)
 
         # Set target link load
+        self.target_relative_load = target_link_load
         self.target_link_load = LINK_BANDWIDTH*target_link_load
 
         # Set specific flow starting rates
         self.elephant_rate = elephant_rate
         self.mice_rate = mice_rate
 
+    def get_pattern_args_filename(self):
+        if self.pattern == 'random':
+            return None
+
+        elif self.pattern == 'staggered':
+            sameEdge = self.pattern_args.get('sameEdge')
+            samePod = self.pattern_args.get('samePod')
+            return "se{0}sp{1}".format(sameEdge, samePod)
+
+        elif self.pattern == 'bijection':
+            return None
+
+        elif self.pattern == 'stride':
+            i = self.pattern_args.get('i')
+            return "i{0}".format(i)
+
     def get_filename(self):
         """Return filename sample pattern"""
+        pattern_args_fn = self.get_pattern_args_filename()
         filename = '{0}'.format(self.saved_traffic_dir)
-        anames = ['tg2', '{0}', 'fm{1}', 'fe{2}', 'tl{3}', 't{4}', 'ts{5}']
-        filename += '_'.join(anames)
-        filename.format(self.pattern, str(self.elephant_rate).replace('.', ','),
+        anames = ['tg2', '{0}', pattern_args_fn, 'fm{1}', 'fe{2}', 'tl{3}', 't{4}', 'ts{5}']
+        filename += '_'.join([a for a in anames if a != None])
+
+        filename = filename.format(self.pattern,
                         str(self.mice_rate).replace('.', ','),
-                        str(self.target_link_load).replace('.', ','),
+                        str(self.elephant_rate).replace('.', ','),
+                        str(self.target_relative_load).replace('.', ','),
                         self.totalTime, self.timeStep)
+
         filename += '.traffic'
         return filename
 
@@ -153,7 +162,6 @@ class udpTrafficGenerator2(udpTrafficGeneratorBase):
         for i in range(2):
             # Check then received loads at each host
             for period in range(0, self.totalTime, self.timeStep):
-
                 # Get active and starting flows at that period of time
                 active_flows = self._get_active_flows(all_flows, period)
                 starting_flows = self._get_starting_flows(all_flows, period)
@@ -172,7 +180,7 @@ class udpTrafficGenerator2(udpTrafficGeneratorBase):
                     # If new starting flows don't fit in receiver link: try to reallocate them
                     if vload > LINK_BANDWIDTH:
 
-                        # Get all starting flow idsand shuffle them
+                        # Get all starting flow ids and shuffle them
                         sf_ids = starting_flows.keys()[:]
                         random.shuffle(sf_ids)
 
@@ -206,6 +214,7 @@ class udpTrafficGenerator2(udpTrafficGeneratorBase):
                                     if new_dst == None:
                                         # Remove flow forever
                                         all_flows.pop(id_to_reallocate)
+                                        starting_flows.pop(id_to_reallocate)
 
                                     else:
                                         # Reallocate
@@ -216,9 +225,13 @@ class udpTrafficGenerator2(udpTrafficGeneratorBase):
                             else:
                                 # Remove flow forever
                                 all_flows.pop(id_to_reallocate)
+                                starting_flows.pop(id_to_reallocate)
 
                             # Recompute
-                            starting_load = sum([all_flows[id]['size'] for id in starting_flows.keys() if all_flows[id]['dstHost'] == rcv])
+                            try:
+                                starting_load = sum([all_flows[id]['size'] for id in starting_flows.keys() if all_flows[id]['dstHost'] == rcv])
+                            except:
+                                import ipdb; ipdb.set_trace()
 
                             # Virtual load
                             vload = active_load + starting_load
@@ -246,6 +259,7 @@ class udpTrafficGenerator2(udpTrafficGeneratorBase):
         return flows_per_sender
 
 if __name__ == "__main__":
+
     # Get the TGParser
     tg2parser = TG2Parser()
     tg2parser.loadParser()
@@ -258,6 +272,7 @@ if __name__ == "__main__":
                                elephant_rate=args.elephant_rate,
                                target_link_load=args.target_load,
                                pattern=args.pattern,
+                               pattern_args=args.pattern_args,
                                totalTime=args.time,
                                timeStep=args.time_step)
 
@@ -279,6 +294,8 @@ if __name__ == "__main__":
                 # Fetch traffic from file
                 traffic = pickle.load(open(args.load_traffic,"r"))
 
+                import ipdb; ipdb.set_trace()
+
                 # Convert hostnames to current ips
                 traffic = tg2.changeTrafficHostnamesToIps(traffic)
 
@@ -286,10 +303,8 @@ if __name__ == "__main__":
                 # Generate traffic
                 traffic = tg2.plan_flows()
 
-                msg = "Generating traffic:\n\t"
-                msg += "Total time: {0}\n\tTime step: {1}\n\t"
-                msg += "Mice start rate: {2}\n\tElephant start rate: {3}\n\tTarget load: {4}"
-                print msg.format(args.time, args.time_step, args.mice_rate, args.elephant_rate, args.target_load)
+                msg = "Generating traffic\n\tArguments: {0}\n\t"
+                print msg.format(args)
 
                 # If it must be saved
                 if args.save_traffic:
@@ -320,7 +335,7 @@ if __name__ == "__main__":
 
 
 # Example commandline call:
-# python trafficGenerator2.py --senders pod_0,pod_1 --receivers pod_2,pod_3 --mice 0.8 --elephant 0.2 --flow_rate 0.25 --time 300 --save_traffic
-# python trafficGenerator2.py --terminate
-# python trafficGenerator2.py --load_traffic saved_traffic/
-# python trafficGenerator2.py --flows_file file.txt
+# python udpTrafficGenerator2.py --pattern bijection --mice_rate 0.25 --elephant_rate 1 --time 50 --save_traffic
+# python udpTrafficGenerator2.py --terminate
+# python udpTrafficGenerator2.py --load_traffic saved_traffic/
+# python udpTrafficGenerator2.py --flows_file file.txt
