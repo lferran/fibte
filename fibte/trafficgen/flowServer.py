@@ -89,23 +89,18 @@ class FlowServer(object):
         else:
             raise ValueError("starttime is older than the current time!")
 
-    def dummyWait(self):
-        log.info("Dummy wait...")
-        process = Process(target = time.sleep, kwargs=(3))
-        return
-
     def startFlow(self, flow):
         """
         Start flow calling the flow generation function
         :param flow:
         """
-        process = Process(target = flowGenerator.sendFlowNotifyController, kwargs = (flow))
+        process = Process(target=flowGenerator.sendFlowNotifyController, kwargs=flow)
         process.daemon = True
         process.start()
         return
 
     def stopFlow(self, flow):
-        process = Process(target = flowGenerator.stopFlowNotifyController, kwargs = (flow))
+        process = Process(target=flowGenerator.stopFlowNotifyController, kwargs=flow)
         process.daemon = True
         process.start()
         return
@@ -158,14 +153,14 @@ class FlowServer(object):
                     # Receive event from Socket server and convert it to a dict (--blocking)
                     event = json.loads(self.q_server.get())
                     self.q_server.task_done()
-                    
+
                     # Log a bit
                     #log.debug("server: {0}, event: {1}".format(self.address, str(event['type'])))
                     if event["type"] == "starttime":
                         self.setStartTime(event["data"])
                         self.received_starttime = True
                         log.debug("Event starttime arrived")
-                            
+
                     elif event["type"] == "flowlist":
                         self.flowlist = event["data"]
                         self.received_flowlist = True
@@ -193,7 +188,7 @@ class FlowServer(object):
 
                         # Schedule the flow start
                         self.scheduler.enterabs(self.starttime + flow["start_time"], 1, self.startFlow, [flow])
-                        
+
                         # Schedule the flow finish notification (only if it is an elephant flow)
                         if isElephant(flow):
                             flow_count['elephant'] += 1
@@ -207,13 +202,9 @@ class FlowServer(object):
 
                         else:
                             flow_count['mice'] += 1
-                            
+
                     log.debug("All flows were scheduled! Let's run the scheduler (in a different thread)")
                     log.debug("A total of {0} flows will be started at host. {1} MICE | {2} ELEPHANT".format(sum(flow_count.values()), flow_count['mice'], flow_count['elephant']))
-
-                    # Schedule dummy waitif
-                    if last_elephant != {}:
-                        self.scheduler.enterabs(last_elephant['ending_time']+2, 1, self.dummyWait, [])
 
                     # Run scheduler in another thread
                     self.scheduler_process.start()
@@ -257,6 +248,8 @@ if __name__ == "__main__":
     elif len(sys.argv) == 2:
         name = sys.argv[1]
         ip_alias = False
+    else:
+        raise Exception("Wrong number of arguments")
 
     # Store the pid of the process so we can stop it when we stop the network
     with open("/tmp/flowServer_{0}.pid".format(name),"w") as f:
