@@ -171,20 +171,20 @@ class DCTCIntf(TCIntf):
         debug("outputs:", tcoutputs, '\n')
 
         # add marks to packets through IPTABLES RULES
-        # OSPF
-        self.cmd("iptables -w -t mangle -A POSTROUTING -o %s -p 89 -j MARK --set-mark 20" % self.name)
+        # OSPF: marks ospf packets with priority 0x14 (20)
+        #self.cmd("iptables -w -t mangle -A POSTROUTING -o %s -p 89 -j MARK --set-mark 20" % self.name)
 
-        # ICMP
-        self.cmd("iptables -w -t mangle -A POSTROUTING -o %s -p 1 -j MARK --set-mark 10" % self.name)
+        # ICMP: marks icmp packets with priority 0xa (10)
+        #self.cmd("iptables -w -t mangle -A POSTROUTING -o %s -p 1 -j MARK --set-mark 10" % self.name)
 
-        # Traceroute
+        # Traceroute: marks pakets with TTL < 10 that are not OSPF with priority 0xa (10)
         #self.cmd("iptables -w -t mangle -A POSTROUTING -o %s -m ttl --ttl-lt 10 ! -p 89 -j MARK --set-mark 10" % self.name)
 
-        # TCP flags
+        # TCP flags: Gives priority 20 to TCP SYN and ACK packets
         #self.cmd("iptables -w -t mangle -A POSTROUTING -o %s -m ttl --ttl-gt 10 -p tcp --tcp-flags ACK ACK -m length --length :64 -j MARK --set-mark 20"% self.name)
         #self.cmd("iptables -w -t mangle -A POSTROUTING -o %s -m ttl --ttl-gt 10 -p tcp --tcp-flags SYN SYN -m length --length :64 -j MARK --set-mark 20" % self.name)
 
-        #self.cmd(iptables_path + " {0} &".format(self.name))
+        self.cmd(iptables_path + " {0} &".format(self.name))
 
         result['tcoutputs'] = tcoutputs
         result['parent'] = parent
