@@ -16,7 +16,7 @@ from threading import Thread
 import Queue
 
 from fibte.trafficgen.flowGenerator import isElephant
-from fibte.trafficgen import convert_to_elephant_ip
+from fibte.trafficgen import get_secondary_ip
 
 import select
 def my_sleep(seconds):
@@ -182,9 +182,9 @@ class FlowServer(object):
                         if delta < 0:
                             log.error("We neet do wait a bit more in the TrafficGenerator!! Delta is negative!")
 
-                        # Rewrite destination address if it is elephant to send to elephant ip
-                        if isElephant(flow) and self.ip_alias == True:
-                            flow['dst'] = convert_to_elephant_ip(flow['dst'])
+                        # Rewrite destination address when needed
+                        if not isElephant(flow) and self.ip_alias == True:
+                            flow['dst'] = get_secondary_ip(flow['dst'])
 
                         # Schedule the flow start
                         self.scheduler.enterabs(self.starttime + flow["start_time"], 1, self.startFlow, [flow])
