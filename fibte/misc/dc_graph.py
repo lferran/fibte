@@ -215,11 +215,20 @@ class DCDiGraph(DiGraph):
         else:
             return False
 
-    def _get_printable(self):
+    def _printable_nodes(self, data=False):
         """
-        :return: the same dag with the nodes replaced by router names
         """
-        pass
+        if not data:
+            return [self.node[node]['name'] for node in self.nodes_iter()]
+        else:
+            return [(self.node[node]['name'], d) for node, d in self.nodes_iter(data=True)]
+
+    def _printable_edges(self, data=False):
+        """"""
+        if not data:
+            return [(self.get_router_name(u), self.get_router_name(v)) for (u, v) in self.edges_iter()]
+        else:
+            return [((self.get_router_name(u), self.get_router_name(v)), d) for (u, v), d in self.edges_iter(data=True)]
 
     def get_upper_tier(self, routerid):
         """
@@ -850,14 +859,16 @@ class DCDag(DCDiGraph):
 
 if __name__ == "__main__":
     dcGraph = DCGraph(k=4)
-    import ipdb; ipdb.set_trace()
     prefixes = dcGraph.destination_prefixes()
     prefix = prefixes[random.randint(3, 7)]
     dcDag = dcGraph.get_default_ospf_dag(prefix=prefix)
-    source = dcDag.get_destination_prefix_gateway(prefix)
-    srcPod = dcDag.get_router_pod(source)
-    for i in range(20000):
-        dcDag.modify_random_uplinks(src_pod=srcPod)
-        if not dcDag.is_valid_dc_dag():
-            import ipdb; ipdb.set_trace()
+    dcDag._printable_nodes()
+    import ipdb; ipdb.set_trace()
+
+    #source = dcDag.get_destination_prefix_gateway(prefix)
+    #srcPod = dcDag.get_router_pod(source)
+    #for i in range(20000):
+    #    dcDag.modify_random_uplinks(src_pod=srcPod)
+    #    if not dcDag.is_valid_dc_dag():
+    #        import ipdb; ipdb.set_trace()
 
