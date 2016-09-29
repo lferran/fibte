@@ -79,7 +79,11 @@ class udpTrafficGenerator2(udpTrafficGeneratorBase):
         next_id = 0
 
         # We first obtain the flow start times for elephants at each host
-        elephants_times = {sender: self.get_poisson_times(self.elephant_rate, self.totalTime) for sender in self.senders}
+        if self.elephant_rate != 0:
+            elephants_times = {sender: self.get_poisson_times(self.elephant_rate, self.totalTime) for sender in self.senders}
+        else:
+            elephants_times = {sender: [] for sender in self.senders}
+
         # Generate elephants times first
         for sender, time_list in elephants_times.iteritems():
             list_of_dicts = []
@@ -98,7 +102,11 @@ class udpTrafficGenerator2(udpTrafficGeneratorBase):
         all_flows = {flow['id']: flow for sender, flowlist in flows_per_sender.iteritems() for flow in flowlist}
 
         # Now we generate start times for mice flows
-        mice_times = {sender: self.get_poisson_times(self.mice_rate, self.totalTime) for sender in self.senders}
+        if self.mice_rate != 0:
+            mice_times = {sender: self.get_poisson_times(self.mice_rate, self.totalTime) for sender in self.senders}
+        else:
+            mice_times = {sender: [] for sender in self.senders}
+
         for sender, time_list in mice_times.iteritems():
             list_of_dicts = []
             for index, starttime in enumerate(time_list):
