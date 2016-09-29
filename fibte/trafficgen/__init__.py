@@ -1,3 +1,14 @@
+from fibte import ELEPHANT_SIZE_RANGE
+
+def isElephant(flow):
+    """
+    Function that cheks if flow is elephant
+
+    returns: boolean
+    """
+    return flow['size'] >= ELEPHANT_SIZE_RANGE[0]
+
+
 
 # Assuming the networks are /24, this would be the
 # address reserved for all hosts's secondary ips
@@ -38,3 +49,4 @@ def get_secondary_ip_prefix(dst_prefix):
     new_dst = dst_prefix.split('/')[0].split('.')[:-1] + [IP_ALIAS_ADDRESS]
     new_dst = '.'.join(new_dst) + '/32'
     return new_dst
+
