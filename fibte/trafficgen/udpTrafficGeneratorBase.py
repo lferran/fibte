@@ -15,7 +15,6 @@ except:
 import json
 import scipy.stats as stats
 
-from fibte.trafficgen.flowGenerator import isElephant
 from fibte.misc.unixSockets import UnixClient, UnixClientTCP
 from fibte import CFG, LINK_BANDWIDTH, MICE_SIZE_RANGE, ELEPHANT_SIZE_RANGE, MICE_SIZE_STEP, ELEPHANT_SIZE_STEP
 
@@ -31,6 +30,15 @@ MAX_PORT = 2**16 -1
 RangePorts = xrange(MIN_PORT,MAX_PORT)
 
 SAVED_TRAFFIC_DIR = os.path.join(os.path.dirname(__file__), 'saved_traffic/')
+
+def time_func(function):
+    def wrapper(*args,**kwargs):
+        t = time.time()
+        res = function(*args,**kwargs)
+        log.debug("{0} took {1}s to execute".format(function.func_name, time.time()-t))
+        return res
+    return wrapper
+
 
 def read_pid(n):
     """
@@ -92,7 +100,7 @@ class udpTrafficGeneratorBase(Base):
         self.unixClient = UnixClientTCP(tmp_files+"flowServer_{0}")
 
         # Used to communicate with LoadBalancer Controller
-        self.ControllerClient = UnixClient(os.path.join(tmp_files, controllerServer))
+        self.ControllerClient = UnixClientTCP(os.path.join(tmp_files, controllerServer))
 
         # Get sender hosts
         self.senders = self.topology.getHosts().keys()

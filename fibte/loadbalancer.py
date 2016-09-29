@@ -2,7 +2,7 @@
 
 from fibbingnode.algorithms.southbound_interface import SouthboundManager
 from fibbingnode import CFG as CFG_fib
-from fibte.misc.unixSockets import UnixServer
+from fibte.misc.unixSockets import UnixServerTCP, UnixServer
 import threading
 import os
 import time
@@ -10,18 +10,18 @@ import copy
 import argparse
 import json
 import networkx as nx
-from fibte.misc.dc_graph import DCGraph, DCDag
+from threading import Thread
+from fibte.misc.dc_graph import DCGraph
 import ipaddress as ip
 from fibte.trafficgen.flow import Base
 import random
 import subprocess
 import abc
+import Queue
+import numpy as np
 
 from fibte.misc.topology_graph import TopologyGraph
-from fibbingnode.misc.mininetlib.ipnet import TopologyDB
-
 from fibte.monitoring.getLoads import GetLoads
-
 from fibte import tmp_files, db_topo, LINK_BANDWIDTH, CFG
 
 # Threading event to signal that the initial topo graph
@@ -37,7 +37,7 @@ getLoads_path = inspect.getsourcefile(fibte.monitoring.getLoads)
 
 import logging
 from fibte.logger import log
-from fibte.trafficgen import convert_to_elephant_ip
+from fibte.trafficgen import get_secondary_ip, get_secondary_ip_prefix
 
 from fibte import time_func
 
@@ -69,47 +69,117 @@ class TestController(object):
         t.start()
 
         # Unix domain server to make things faster and possibility to communicate with hosts
-        self.server = UnixServer(os.path.join(tmp_files, UDS_server_name))
+        self._address_server = os.path.join(tmp_files, UDS_server_name)
+        self.q_server = Queue.Queue(0)
+        self.server = UnixServerTCP(self._address_server, self.q_server)
 
         # Blocks until initial graph received from SouthBound Manager
         HAS_INITIAL_GRAPH.wait()
         log.info("Initial graph received from SouthBound Controller")
 
-        self.topology = TopologyDB(db=os.path.join(tmp_files, db_topo))
+        self.topology = TopologyGraph(db=os.path.join(tmp_files, db_topo))
 
-        d1_mice_tmp = [v['ip'] for i, v in self.topology.network['d1'].iteritems() if type(v) == dict][0]
-        d1_mice_tmp = d1_mice_tmp.strip('/24')
-        d1_elephant_tmp = convert_to_elephant_ip(d1_mice_tmp)
+        self.print_all_ips()
 
-        print("*** Router name-ip bindings")
-        for r in ('r1', 'r2','r3','r4', 'r5'):
-            print(r, '-->', self.topology.routerid(r))
+        # Here we store the mice levels from each host to all other hosts
+        self.mice_levels = {}
 
-        d1_mice_px = d1_mice_tmp.split('.')[:-1]+['0']
-        d1_mice_px = '.'.join(d1_mice_px)+'/24'
-        d1_elephant_px = d1_elephant_tmp + '/32'
+    def print_all_ips(self):
+        regex = "{0}\t->\t{1}"
+        log.info("*** Routers")
+        for name, rid in self.topology.routersIdMapping['nameToId'].iteritems():
+            log.info(regex.format(name, rid))
 
-        print ("D1 -- mice ip: {0}\t mice prefix: {1}".format(d1_mice_tmp, d1_mice_px))
-        print ("D1 -- elephant ip: {0}\t elephant prefix: {1}".format(d1_elephant_tmp, d1_elephant_px))
+        regex = "{0}\t->\t{1}, {2}"
+        log.info("*** Hosts")
+        for name, hip in self.topology.hostsIpMapping['nameToIp'].iteritems():
+            log.info(regex.format(name, hip, get_secondary_ip(hip)))
+
+    def reset(self):
+        pass
+
+    def run(self):
+        # Start process that handles connections to the TCP server
+        tcp_server_thread = Thread(target = self.server.run)
+        tcp_server_thread.setDaemon(True)
+        tcp_server_thread.start()
+
+        log.info("Looping for new events!")
+        while True:
+            try:
+                while True:
+                    # Read from TCP server queue
+                    event = json.loads(self.q_server.get())
+                    self.q_server.task_done()
+
+                    log.info("Event received: {0}".format(event))
+                    if event["type"] == "reset":
+                        log.info("RESET event received")
+                        self.reset()
+                        continue
+
+                    elif event["type"] in ["startingFlow", "stoppingFlow"]:
+                        self.handleFlow(event)
+
+                    elif event["type"] == "miceEstimation":
+                        estimation_data = event['data']
+                        self.handleMiceEstimation(estimation_data)
+
+                    else:
+                        log.error("Unknown event: {0}".format(event))
+                        import ipdb; ipdb.set_trace()
+
+            except KeyboardInterrupt:
+                # Exit load balancer
+                self.exitGracefully()
+
+    @time_func
+    def handleMiceEstimation(self, estimation_data):
+        # Get mice source
+        src = estimation_data['src']
+        log.info("Received estimation data from {0}".format(src))
+        if src not in self.mice_levels.keys():
+            self.mice_levels[src] = {}
+
+        # Get per-destination samples
+        dst_samples = estimation_data['samples']
+        for (dst, samples) in dst_samples.iteritems():
+            samples = np.asarray(samples)
+            avg, std = samples.mean(), samples.std()
+            # Add new average and std values
+            if dst not in self.mice_levels[src].keys():
+                self.mice_levels[src][dst] = {'avg': [avg], 'std': [std]}
+            else:
+                self.mice_levels[src][dst]['avg'].append(avg)
+                self.mice_levels[src][dst]['std'].append(std)
+
+    def handleFlow(self, flow):
+        src_ip = flow['src']
+        dst_e_ip = flow['dst']
+
+        dst_mice_px = [p for p in self.sbmanager.igp_graph.prefixes if ip.ip_address(dst_e_ip) in ip.ip_network(p)][0]
+        dst_elep_px = get_secondary_ip_prefix(dst_mice_px)
 
         long_path = [self.topology.routerid(r) for r in ('r1', 'r2', 'r4', 'r5')]
         short_path = [self.topology.routerid(r) for r in ('r1', 'r3', 'r5')]
 
         import ipdb; ipdb.set_trace()
 
-        self.sbmanager.simple_path_requirement(d1_elephant_px, short_path)
-        self.sbmanager.simple_path_requirement(d1_mice_px,long_path)
+        log.info("BEFORE mice -> long path")
+        self.sbmanager.simple_path_requirement(dst_mice_px, long_path)
+        log.info("AFTER mice -> long path")
 
-    def run(self):
-        log.info("Looping for new events!")
-        while True:
-            try:
-                while True:
-                    event = self.server.receive()
-                    log.info("LB not active - event received: {0}".format(json.loads(event)))
-            except KeyboardInterrupt:
-                # Exit load balancer
-                self.exitGracefully()
+        import ipdb; ipdb.set_trace()
+
+        log.info("BEFORE eleph -> short path")
+        self.sbmanager.simple_path_requirement(dst_elep_px, short_path)
+        log.info("AFTER eleph -> short path")
+
+        import ipdb; ipdb.set_trace()
+
+
+        #self.sbmanager.simple_path_requirement(d1_elephant_px, short_path)
+        #self.sbmanager.simple_path_requirement(d1_mice_px, long_path)
 
     def exitGracefully(self):
         """
@@ -118,12 +188,13 @@ class TestController(object):
         """
         log.info("Keyboad Interrupt catched!")
 
+        self.sbmanager.remove_all_dag_requirements()
+
         # Finally exit
         os._exit(0)
 
 class LBController(object):
     def __init__(self, doBalance = True, k=4, algorithm=None, load_variables=False):
-
         # Config logging to dedicated file for this thread
         handler = logging.FileHandler(filename='{0}loadbalancer_{1}.log'.format(tmp_files, algorithm))
         fmt = logging.Formatter('[%(levelname)20s] %(asctime)s %(funcName)s: %(message)s ')
@@ -142,7 +213,9 @@ class LBController(object):
         self.algorithm = algorithm
 
         # Unix domain server to make things faster and possibility to communicate with hosts
-        self.server = UnixServer(os.path.join(tmp_files, UDS_server_name))
+        self._address_server = os.path.join(tmp_files, UDS_server_name)
+        self.q_server = Queue.Queue(0)
+        self.server = UnixServerTCP(self._address_server, self.q_server)
 
         # Connects to the southbound controller. Must be called before
         # creating the instance of SouthboundManager
@@ -156,6 +229,9 @@ class LBController(object):
         # Blocks until initial graph received from SouthBound Manager
         HAS_INITIAL_GRAPH.wait()
         log.info("Initial graph received from SouthBound Controller")
+
+        # Remoeve old DAG requirements
+        self.sbmanager.remove_all_dag_requirements()
 
         # Load the topology
         self.topology = TopologyGraph(getIfindexes=True, db=os.path.join(tmp_files, db_topo))
@@ -190,6 +266,9 @@ class LBController(object):
 
         # Object useful to make some unit conversions
         self.base = Base()
+
+        # Here we store the estimated mice levels
+        self.mice_levels = {}
 
         # This is for debugging purposes only --should be removed
         if load_variables == True and self.k == 4:
@@ -371,8 +450,33 @@ class LBController(object):
             flow = event['flow']
             log.debug("Flow FINISHED: {0}".format(flow))
 
+        elif event['type'] == 'miceEstimation':
+            estimation_data = event['data']
+            self.handleMiceEstimation(estimation_data)
         else:
             log.error("Unknown event type: {0}".format(event['type']))
+            import ipdb; ipdb.set_trace()
+
+    def handleMiceEstimation(self, estimation_data):
+        """"""
+        # Get mice source
+        # Get mice source
+        src = estimation_data['src']
+        log.info("Received estimation data from {0}".format(src))
+        if src not in self.mice_levels.keys():
+            self.mice_levels[src] = {}
+
+        # Get per-destination samples
+        dst_samples = estimation_data['samples']
+        for (dst, samples) in dst_samples.iteritems():
+            samples = np.asarray(samples)
+            avg, std = samples.mean(), samples.std()
+            # Add new average and std values
+            if dst not in self.mice_levels[src].keys():
+                self.mice_levels[src][dst] = {'avg': [avg], 'std': [std]}
+            else:
+                self.mice_levels[src][dst]['avg'].append(avg)
+                self.mice_levels[src][dst]['std'].append(std)
 
     def _runGetLoads(self):
         getLoads = GetLoads(k=self.k)
@@ -428,20 +532,40 @@ class LBController(object):
     def run(self):
         # Receive events and handle them
         log.info("Looping for new events!")
+
+        # Start process that handles connections to the TCP server
+        tcp_server_thread = Thread(target = self.server.run)
+        tcp_server_thread.setDaemon(True)
+        tcp_server_thread.start()
+
+        # Loop for new events
         while True:
             try:
                 if not(self.doBalance):
                     while True:
-                        event = self.server.receive()
+                        # Read from TCP server's queue
+                        event = json.loads(self.q_server.get())
+                        self.q_server.task_done()
                         log.info("LB not active - event received: {0}".format(json.loads(event)))
                 else:
-                    event = json.loads(self.server.receive())
+                    # Read from TCP server's queue
+                    event = json.loads(self.q_server.get())
+                    self.q_server.task_done()
+
                     if event["type"] == "reset":
                         log.info("RESET event received")
                         self.reset()
                         continue
-                    else:
+
+                    elif event["type"] in ["startingFlow", "stoppingFlow"]:
                         self.handleFlow(event)
+
+                    elif event["type"] == "miceEstimation":
+                        self.handleMiceEstimation(event)
+
+                    else:
+                        log.error("Unknown event: {0}".format(event))
+
             except KeyboardInterrupt:
                 # Exit load balancer
                 self.exitGracefully()
@@ -890,9 +1014,13 @@ class CoreChooserController(LBController):
         # ones that would collide with already ongoing flows
 
         # Get prefix from host ip
+        import ipdb; ipdb.set_trace()
         src_gw = self.getGatewayRouter(flow['src'])
         src_gw_name = self.dc_graph.get_router_name(src_gw)
         dst_prefix = self.getMatchingPrefix(flow['dst'])
+
+        # Convert it to alias prefix
+        convert_to_elephant_ip()
 
         # Get ongonig flows to dst_prefix from the same gateway
         ongoingFlowsSameGateway = self.getongoingFlowsFromGateway(src_gw, dst_prefix)
