@@ -10,8 +10,6 @@ minSizeUDP = 42
 maxUDPSize = 10000
 import math
 
-from fibte import ELEPHANT_SIZE_RANGE
-
 from fibte.misc.unixSockets import UnixClient
 import json
 
@@ -132,14 +130,10 @@ def keepSending(initialDestinations,rate,totalTime):
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             dport = 6005
 
-def isElephant(flow):
-    """
-    Function that cheks if flow is elephant
+def sendFlowNotNotify(**flow):
+    # Start sending flow
+    sendFlow(**flow)
 
-    returns: boolean
-    """
-    return flow['size'] >= ELEPHANT_SIZE_RANGE[0]
-            
 def sendFlowNotifyController(**flow):
     # Store time so we sleep 1 seconds - time needed for the following commands
     now  = time.time()
@@ -148,15 +142,13 @@ def sendFlowNotifyController(**flow):
     client = UnixClient("/tmp/controllerServer")
 
     # Tell controller that flow will start
-    iselephant = isElephant(flow)
-    if iselephant:
-        try:
-            log.debug("New ELEPHANT is STARTING: to {0} {1}(bps) during {2}".format(flow['dst'], flow['size'], flow['duration']))
-            # Notify controller that an elephant flow started
-            client.send(json.dumps({"type": "startingFlow", "flow": flow}), "")
+    try:
+        log.debug("Flow is STARTING: to {0} {1}(bps) during {2}".format(flow['dst'], flow['size'], flow['duration']))
+        # Notify controller that an elephant flow started
+        client.send(json.dumps({"type": "startingFlow", "flow": flow}), "")
 
-        except Exception as e:
-            log.error("Controller cound not be informed about startingFlow event. Error {0}".format(e))
+    except Exception as e:
+        log.error("Controller cound not be informed about startingFlow event. Error {0}".format(e))
 
     # Close the socket
     client.sock.close()
@@ -168,7 +160,7 @@ def stopFlowNotifyController(**flow):
     # Open socket with controller
     client = UnixClient("/tmp/controllerServer")
 
-    log.debug("New ELEPHANT is STOPPING: to {0} {1}(bps) during {2}".format(flow['dst'], flow['size'], flow['duration']))
+    log.debug("Flow is STOPPING: to {0} {1}(bps) during {2}".format(flow['dst'], flow['size'], flow['duration']))
     try:
         # Notify controller that elephant flow finished
         client.send(json.dumps({"type": "stoppingFlow", "flow": flow}), "")
