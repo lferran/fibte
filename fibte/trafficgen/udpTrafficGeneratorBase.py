@@ -421,13 +421,12 @@ class udpTrafficGeneratorBase(Base):
         Sends a reset command to the controller and terminate traffic command
         to all flowServers of the network
         """
-        try:
-            for host in self.topology.getHosts():
+        for host in self.topology.getHosts():
+            try:
                 self.unixClient.send(json.dumps({"type": "terminate"}), host)
-
-        except Exception as e:
-            log.debug("FlowServer of {0} did not receive terminate command. Exception: {1}".format(host, e))
-            pass
+            except Exception as e:
+                log.debug("FlowServer of {0} did not receive terminate command. Exception: {1}".format(host, e))
+                pass
         try:
             # Send reset to the controller
             self.ControllerClient.send(json.dumps({"type": "reset"}), "")

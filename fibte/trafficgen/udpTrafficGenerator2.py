@@ -302,8 +302,6 @@ if __name__ == "__main__":
                 # Fetch traffic from file
                 traffic = pickle.load(open(args.load_traffic,"r"))
 
-                import ipdb; ipdb.set_trace()
-
                 # Convert hostnames to current ips
                 traffic = tg2.changeTrafficHostnamesToIps(traffic)
 
@@ -340,7 +338,6 @@ if __name__ == "__main__":
             tg2.schedule(traffic)
 
     print "Elapsed time ", time.time()-t
-
 
 # Example commandline call:
 # python udpTrafficGenerator2.py --pattern bijection --mice_rate 0.25 --elephant_rate 1 --time 50 --save_traffic

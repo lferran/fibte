@@ -20,7 +20,7 @@ import subprocess
 
 from fibte import flowServer_path
 
-from fibte.trafficgen import setup_alias
+from fibte.misc.ipalias import setup_alias
 
 def signal_term_handler(signal, frame):
     import sys
@@ -30,6 +30,10 @@ class TestTopo1(IPTopo):
     def build(self, *args, **kwargs):
         """
         Used to test Fibbing in longer prefixes
+                 ___ r3______
+               /             \
+        s1-- r1               r5 --d1
+              \____r2____r4__/
         """
         r1 = self.addRouter('r1')
         r2 = self.addRouter('r2')
@@ -37,9 +41,10 @@ class TestTopo1(IPTopo):
         r4 = self.addRouter('r4')
         r5 = self.addRouter('r5')
 
-        # Short path
+        # Short (default) path
         self.addLink(r1, r3)
         self.addLink(r3, r5)
+
         # Long path
         self.addLink(r1, r2)
         self.addLink(r2, r4)
@@ -92,12 +97,11 @@ def launch_network(k=4, bw=10, ip_alias=False):
     subprocess.call(["iptables", "-t", "mangle" ,"-X"])
 
     # Topology
-    # topo = TestTopo1()
+    #topo = TestTopo1()
     #topo = TestTopo2()
     topo = FatTree(k=k, sflow=False, ovs_switches=False)
 
     # Interfaces
-    #intf = custom(TCIntf, bw=bw)
     intf = custom(DCTCIntf, bw=bw)
 
     # Network

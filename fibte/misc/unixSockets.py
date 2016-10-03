@@ -10,6 +10,7 @@ from fibte import CFG
 tmp_files = CFG.get("DEFAULT","tmp_files")
 
 RECV_BUFFER_SIZE = 1024
+MAX_CONN = 20
 
 def send_msg(sock, msg):
     msg = struct.pack('>I', len(msg)) + msg
@@ -76,8 +77,6 @@ class UnixClientTCP(object):
                 print serr
                 print "Server {0} could not be reached".format(server)
 
-
-
 class UnixServerTCP(object):
     def __init__(self, address, queue):
         self.server_address = address
@@ -93,7 +92,7 @@ class UnixServerTCP(object):
         self.sock.bind(self.server_address)
 
         # Listen for connectoins made to socket (max 5)
-        self.sock.listen(5)
+        self.sock.listen(MAX_CONN)
 
         self.queue = queue
 

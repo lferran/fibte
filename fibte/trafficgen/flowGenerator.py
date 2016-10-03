@@ -10,7 +10,7 @@ minSizeUDP = 42
 maxUDPSize = 10000
 import math
 
-from fibte.misc.unixSockets import UnixClient
+from fibte.misc.unixSockets import UnixClientTCP
 import json
 
 import logging
@@ -91,7 +91,7 @@ def sendFlow(dst="10.0.32.2",sport=5000,size='10M',dport=5001,duration=10,**kwar
 
     startTime = time.time()
     while (time.time() - startTime < totalTime):
-        sendRate_batch(s,dst,dport,rate,length=10000, packets_round=5)
+        sendRate_batch(s, dst, dport, rate, length=10000, packets_round=5)
         #sendRate_old(s, dst, dport, rate)
 
 def sendRound(socket,dst,rate,dport,offset):
@@ -139,7 +139,7 @@ def sendFlowNotifyController(**flow):
     now  = time.time()
 
     # Start controller client
-    client = UnixClient("/tmp/controllerServer")
+    client = UnixClientTCP("/tmp/controllerServer")
 
     # Tell controller that flow will start
     try:
