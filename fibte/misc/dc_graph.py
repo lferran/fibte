@@ -4,6 +4,7 @@ from fibte import CFG
 import os
 import random
 import networkx as nx
+import fibte.misc.ipalias as ipalias
 
 """
 Module that defines the DCGraph object, which extends the nx.DiGraph class
@@ -18,16 +19,23 @@ class DCDiGraph(DiGraph):
     Common parent class that holds all the methods to add and remove nodes and edges
     in a fat-tree-like datacenter network.
     """
-    def __init__(self, k=4, *args, **kwargs):
+    def __init__(self, k=4, prefix_type='primary', *args, **kwargs):
         super(DCDiGraph, self).__init__(*args, **kwargs)
         # DC parameter
         self.k = k
+
+        # Set prefix type
+        self.prefix_type = prefix_type
 
         # We store prefix-gateway here
         self.prefix_gateway_bindings = {'prefixToGateway':{}, 'gatewayToPrefix': {}}
 
         # Prefixes are not stored as nodes
         self.prefixes = {}
+
+    def is_correct_prefix(self, prefix):
+        """Checks validity of prefix wrt specified prefix type"""
+        return (ipalias.get_ip_prefix_type(prefix) == self.prefix_type)
 
     def add_edge_router(self, routerid, routername, index, pod):
         if pod >= 0 and pod <= self.k - 1:
@@ -55,6 +63,9 @@ class DCDiGraph(DiGraph):
 
     def add_destination_prefix(self, prefix, gateway):
         """Adds a destination prefix attached to gateway router"""
+        if not self.is_correct_prefix(prefix):
+            raise ValueError("Prefix not valid: {0}, DCDigraph prefiy_type is {1}".format(prefix, self.prefix_type))
+
         if self.is_edge(gateway):
             pod = self.get_router_pod(gateway)
             self.prefixes[prefix] = {'pod':pod, 'gateway':gateway}
@@ -62,14 +73,15 @@ class DCDiGraph(DiGraph):
             # Add prefix in structure
             if prefix not in self.prefix_gateway_bindings['prefixToGateway'].keys():
                 self.prefix_gateway_bindings['prefixToGateway'][prefix] = gateway
+
             if gateway not in self.prefix_gateway_bindings['gatewayToPrefix'].keys():
                 self.prefix_gateway_bindings['gatewayToPrefix'][gateway] = [prefix]
+
             else:
                 if prefix not in self.prefix_gateway_bindings['gatewayToPrefix'][gateway]:
                     self.prefix_gateway_bindings['gatewayToPrefix'][gateway] += [prefix]
         else:
-            raise ValueError(
-                "Router {0} is not an edge router, so we can't set him a destination prefix".format(gateway))
+            raise ValueError("Router {0} is not an edge router, so we can't set him a destination prefix".format(gateway))
 
     def is_edge(self, routerid):
         return self.node[routerid]['type'] == 'edge'
@@ -147,6 +159,9 @@ class DCDiGraph(DiGraph):
             raise ValueError("Router {0} is a core router - it has no pod number".format(routerid))
 
     def get_destination_prefix_pod(self, dest):
+        if not self.is_correct_prefix(dest):
+            raise ValueError("Prefix not valid: {0}, DCDigraph prefiy_type is {1}".format(dest, self.prefix_type))
+
         if dest in self.prefixes.keys():
             return self.prefixes[dest]['pod']
         else:
@@ -362,8 +377,8 @@ class DCGraph(DCDiGraph):
     There should be only once instance of DCGraph in the controller.
     It builds itself thanks to the topologyDB object, at startup.
     """
-    def __init__(self, k=4, *args, **kwargs):
-        super(DCGraph, self).__init__(k, *args, **kwargs)
+    def __init__(self, *args, **kwargs):
+        super(DCGraph, self).__init__(*args, **kwargs)
 
         # Object that connects to the topology db dile
         self.topo = TopologyGraph(getIfindexes=True, db=os.path.join(tmp_files, db_topo))
@@ -414,6 +429,11 @@ class DCGraph(DCDiGraph):
         for prefix in prefixes:
             gw = self.topo.getGatewayRouterFromNetworkPrefix(prefix)
             gwid = self.topo.getRouterId(gw)
+
+            # Convert it to secondary prefix if necessary
+            if self.prefix_type == 'secondary':
+                prefix = ipalias.get_secondary_ip_prefix(prefix)
+
             self.add_destination_prefix(prefix=prefix, gateway=gwid)
 
     def get_default_ospf_dag(self, prefix):
@@ -428,7 +448,7 @@ class DCGraph(DCDiGraph):
         gateway = self.get_destination_prefix_gateway(prefix)
         if self.is_destination_prefix(prefix):
             # Create empty-links dag from self DCGraph
-            dc_dag = DCDag(sink_id=gateway, dst_prefix=prefix, k=self.k, dc_graph=self)
+            dc_dag = DCDag(sink_id=gateway, dst_prefix=prefix, k=self.k, dc_graph=self, prefix_type=self.prefix_type)
 
             # Add uplinks
             add_uplinks1 = [dc_dag.add_uplink(er, ar) for er in self.edge_routers_iter() for ar in self.get_upper_tier(er) if er != gateway]
@@ -451,8 +471,8 @@ class DCDag(DCDiGraph):
     This class represents a Fat-Tree like Direct Acyclic Graph for a
     certain destination, which must be the single sink in the graph.
     """
-    def __init__(self, sink_id, dst_prefix, k=4, *args, **kwargs):
-        super(DCDag, self).__init__(k, *args, **kwargs)
+    def __init__(self, sink_id, dst_prefix, *args, **kwargs):
+        super(DCDag, self).__init__(*args, **kwargs)
 
         # Set DCDag's sink
         self.sink_id = sink_id
@@ -858,7 +878,8 @@ class DCDag(DCDiGraph):
             raise ValueError("Sink can't send flows to himself!")
 
 if __name__ == "__main__":
-    dcGraph = DCGraph(k=4)
+    import ipdb; ipdb.set_trace()
+    dcGraph = DCGraph(k=4, prefix_type='secondary')
     prefixes = dcGraph.destination_prefixes()
     prefix = prefixes[random.randint(3, 7)]
     dcDag = dcGraph.get_default_ospf_dag(prefix=prefix)
