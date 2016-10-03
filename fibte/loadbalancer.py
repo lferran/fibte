@@ -20,6 +20,7 @@ import abc
 import Queue
 import numpy as np
 
+from fibte.loadbalancer.mice_estimator import MiceEstimatorThread
 from fibte.misc.topology_graph import TopologyGraph
 from fibte.monitoring.getLoads import GetLoads
 from fibte import tmp_files, db_topo, LINK_BANDWIDTH, CFG
@@ -37,10 +38,8 @@ getLoads_path = inspect.getsourcefile(fibte.monitoring.getLoads)
 
 import logging
 from fibte.logger import log
-from fibte.trafficgen import get_secondary_ip, get_secondary_ip_prefix
-
+from fibte.misc.ipalias import get_secondary_ip, get_secondary_ip_prefix
 from fibte import time_func
-
 
 class MyGraphProvider(SouthboundManager):
     """This class overrwides the received_initial_graph abstract method of
@@ -82,7 +81,7 @@ class TestController(object):
         self.print_all_ips()
 
         # Here we store the mice levels from each host to all other hosts
-        self.mice_levels = {}
+        self.mice_dbs = {}
 
     def print_all_ips(self):
         regex = "{0}\t->\t{1}"
@@ -138,20 +137,22 @@ class TestController(object):
         # Get mice source
         src = estimation_data['src']
         log.info("Received estimation data from {0}".format(src))
-        if src not in self.mice_levels.keys():
-            self.mice_levels[src] = {}
 
         # Get per-destination samples
         dst_samples = estimation_data['samples']
         for (dst, samples) in dst_samples.iteritems():
+            if dst not in self.mice_dbs.keys():
+                self.mice_dbs[dst] = {}
+
             samples = np.asarray(samples)
             avg, std = samples.mean(), samples.std()
+
             # Add new average and std values
-            if dst not in self.mice_levels[src].keys():
-                self.mice_levels[src][dst] = {'avg': [avg], 'std': [std]}
+            if src not in self.mice_dbs[dst].keys():
+                self.mice_dbs[dst][src] = {'avg': [avg], 'std': [std]}
             else:
-                self.mice_levels[src][dst]['avg'].append(avg)
-                self.mice_levels[src][dst]['std'].append(std)
+                self.mice_dbs[dst][src]['avg'].append(avg)
+                self.mice_dbs[dst][src]['std'].append(std)
 
     def handleFlow(self, flow):
         src_ip = flow['src']
@@ -195,14 +196,6 @@ class TestController(object):
 
 class LBController(object):
     def __init__(self, doBalance = True, k=4, algorithm=None, load_variables=False):
-        # Config logging to dedicated file for this thread
-        handler = logging.FileHandler(filename='{0}loadbalancer_{1}.log'.format(tmp_files, algorithm))
-        fmt = logging.Formatter('[%(levelname)20s] %(asctime)s %(funcName)s: %(message)s ')
-
-        handler.setFormatter(fmt)
-        log.addHandler(handler)
-        log.setLevel(logging.DEBUG)
-
         # Set fat-tree parameter
         self.k = k
 
@@ -211,6 +204,9 @@ class LBController(object):
 
         # Loadbalancing strategy/algorithm
         self.algorithm = algorithm
+
+        # Configure logging
+        self._do_logging_stuff()
 
         # Unix domain server to make things faster and possibility to communicate with hosts
         self._address_server = os.path.join(tmp_files, UDS_server_name)
@@ -236,28 +232,32 @@ class LBController(object):
         # Load the topology
         self.topology = TopologyGraph(getIfindexes=True, db=os.path.join(tmp_files, db_topo))
 
-        # Lock for accessing link loads
-        self.link_loads_lock = threading.Lock()
-
         # Get dictionary where loads are stored
         self.link_loads = self.topology.getEdgesUsageDictionary()
+        self.link_loads_lock = threading.Lock()
 
         # Receive network graph
-        self.network_graph = self.sbmanager.igp_graph
+        self.fibbing_network_graph = self.sbmanager.igp_graph
 
         # Create my modified version of the graph
-        self.dc_graph = DCGraph(k=self.k)
+        self.dc_graph_elep = DCGraph(k=self.k, prefix_type='primary')
+        self.dc_graph_mice = DCGraph(k=self.k, prefix_type='secondary')
 
         # Here we store the current dags for each destiantion
-        self.current_dags = self._createInitialDags()
-        self.initial_dags = copy.deepcopy(self.current_dags)
+        self.current_elephant_dags = self._createInitialDags(prefix_type='primary')
+        self.current_mice_dags = self._createInitialDags(prefix_type='secondary')
+        self.current_mice_dags_lock = threading.Lock()
+
+        # We keep a copy of the initial ones
+        self.initial_elep_dags = copy.deepcopy(self.current_elephant_dags)
+        self.initial_mice_dags = copy.deepcopy(self.current_mice_dags)
 
         # Fill ospf_prefixes dict
         self.ospf_prefixes = self._fillInitialOSPFPrefixes()
 
         # Start getLoads thread that reads from counters
-        #os.system(getLoads_path + ' -k {0} &'.format(self.k))
         self.p_getLoads = subprocess.Popen([getLoads_path, '-k', str(self.k), '-a', self.algorithm], shell=False)
+        #os.system(getLoads_path + ' -k {0} &'.format(self.k))
 
         # Start getLoads thread reads from link usage
         thread = threading.Thread(target=self._getLoads, args=([1]))
@@ -267,8 +267,8 @@ class LBController(object):
         # Object useful to make some unit conversions
         self.base = Base()
 
-        # Here we store the estimated mice levels
-        self.mice_levels = {}
+        # Start mice estimator thread
+        self._startMiceEstimatorThread()
 
         # This is for debugging purposes only --should be removed
         if load_variables == True and self.k == 4:
@@ -301,18 +301,59 @@ class LBController(object):
             self.r_c2 = self.topology.getRouterId('r_c2')
             self.r_c3 = self.topology.getRouterId('r_c3')
 
+    def _startMiceEstimatorThread(self):
+        # Here we store the estimated mice levels
+        self.hosts_notified = []
+        self.total_hosts = ((self.k/2)**2)*self.k
+        self.mice_dbs = {}
+        self.mice_dbs_lock = threading.Lock()
+        self.mice_caps_graph = self._createElephantsCapsGraph()
+        self.mice_caps_lock = threading.Lock()
+        self.mice_orders_queue= Queue.Queue()
+        self.mice_result_queue = Queue.Queue()
+
+        # Create the mice estimator thread
+        self.miceEstimatorThread = MiceEstimatorThread(orders_queue = self.mice_orders_queue,
+                                                       results_queue = self.mice_result_queue,
+                                                       mice_distributions = self.mice_dbs,
+                                                       mice_distributions_lock = self.mice_dbs_lock,
+                                                       capacities_graph = self.mice_caps_graph,
+                                                       capacities_lock = self.mice_caps_lock,
+                                                       dags = self.current_mice_dags,
+                                                       dags_lock = self.current_mice_dags_lock,
+                                                       samples = 100)
+        # Start the thread
+        self.miceEstimatorThread.start()
+
+    def _createElephantsCapsGraph(self):
+        graph = DCGraph(k=self.k, prefix_type='secondary')
+        for (u, v, data) in graph.edges_iter(data=True):
+            data['elephants_capacity'] = 0
+        return graph
+
+    def _printPath(self, path):
+        return [self.dc_graph_elep.get_router_name(n) for n in path]
+
+    def _do_logging_stuff(self):
+        # Config logging to dedicated file for this thread
+        handler = logging.FileHandler(filename='{0}loadbalancer_{1}.log'.format(tmp_files, self.algorithm))
+        fmt = logging.Formatter('[%(levelname)20s] %(asctime)s %(funcName)s: %(message)s ')
+        handler.setFormatter(fmt)
+        log.addHandler(handler)
+        log.setLevel(logging.DEBUG)
+
     def _getGatewayRouter(self, prefix):
         """
         Given a prefix, returns the connected edge router
         :param prefix:
         :return:
         """
-        if self.network_graph.is_prefix(prefix):
-            pred = self.network_graph.predecessors(prefix)
-            if len(pred) == 1 and not self.network_graph.is_fake_route(pred[0], prefix):
+        if self.fibbing_network_graph.is_prefix(prefix):
+            pred = self.fibbing_network_graph.predecessors(prefix)
+            if len(pred) == 1 and not self.fibbing_network_graph.is_fake_route(pred[0], prefix):
                 return pred[0]
             else:
-                real_gw = [p for p in pred if not self.network_graph.is_fake_route(p, prefix)]
+                real_gw = [p for p in pred if not self.fibbing_network_graph.is_fake_route(p, prefix)]
                 if len(real_gw) == 1:
                     return real_gw[0]
                 else:
@@ -330,8 +371,8 @@ class LBController(object):
         :return:
         """
         if '/' in prefix:
-            if prefix in self.current_dags.keys() and self.current_dags[prefix].has_key('gateway'):
-                return self.current_dags[prefix]['gateway']
+            if prefix in self.current_elephant_dags.keys() and self.current_elephant_dags[prefix].has_key('gateway'):
+                return self.current_elephant_dags[prefix]['gateway']
             else:
                 # Maybe it's a newly created prefix -- so check in the network graph
                 return self._getGatewayRouter(prefix)
@@ -380,12 +421,12 @@ class LBController(object):
         :param edgeRouter:
         :return:
         """
-        if self.dc_graph.is_edge(edgeRouter):
-            return [r for r in self.network_graph.successors(edgeRouter) if self.network_graph.is_prefix(r)]
+        if self.dc_graph_elep.is_edge(edgeRouter):
+            return [r for r in self.fibbing_network_graph.successors(edgeRouter) if self.fibbing_network_graph.is_prefix(r)]
         else:
             raise ValueError("{0} is not an edge router".format(edgeRouter))
 
-    def _createInitialDags(self):
+    def _createInitialDags(self, prefix_type='primary'):
         """
         Populates the self.current_dags dictionary for each existing prefix in the network
         """
@@ -393,17 +434,22 @@ class LBController(object):
         log.info("Creating initial DAGs (default OSPF)")
         dags = {}
 
-        pxs = [p for p in self.network_graph.prefixes]
+        pxs = [p for p in self.fibbing_network_graph.prefixes]
         if len(pxs) != (self.k**3)/4:
             log.error("MORE PREFIXES THAN EXPECTED!!!!")
             import ipdb; ipdb.set_trace()
 
-        for prefix in self.network_graph.prefixes:
+        for prefix in self.fibbing_network_graph.prefixes:
             # Get Edge router connected to prefix
             gatewayRouter = self._getGatewayRouter(prefix)
 
-            # Create a new dag
-            dc_dag = self.dc_graph.get_default_ospf_dag(prefix)
+            # Create DAG to prefix
+            if prefix_type=='secondary':
+                prefix = get_secondary_ip_prefix(prefix)
+                dc_dag = self.dc_graph_mice.get_default_ospf_dag(prefix)
+
+            else:
+                dc_dag = self.dc_graph_elep.get_default_ospf_dag(prefix)
 
             # Add dag
             dags[prefix] = {'gateway': gatewayRouter, 'dag': dc_dag}
@@ -415,7 +461,7 @@ class LBController(object):
         Fills up the data structure
         """
         prefixes = []
-        fill = [prefixes.append(ip.ip_network(prefix)) for prefix in self.network_graph.prefixes]
+        fill = [prefixes.append(ip.ip_network(prefix)) for prefix in self.fibbing_network_graph.prefixes]
         return prefixes
 
     def reset(self):
@@ -428,12 +474,32 @@ class LBController(object):
 
         # Remove all attraction points and lsas
         # Set all dags to original ospf dag
-        self.current_dags = copy.deepcopy(self.initial_dags)
+        self.current_elephant_dags = copy.deepcopy(self.initial_elep_dags)
+        self.current_mice_dags = copy.deepcopy(self.initial_mice_dags)
 
         # Reset all dags to initial state
         self.sbmanager.remove_all_dag_requirements()
 
+        # Terminate pevious mice estimator thread
+        self.miceEstimatorThread.orders_queue.put({'type':'terminate'})
+        self.miceEstimatorThread.join()
+
+        # Restart Mice Estimator Thread
+        self._startMiceEstimatorThread()
+
         return reset_start_time
+
+    def allocateFlow(self, flow):
+        """
+        Subclass this method
+        """
+        log.debug("New flow STARTED: {0}".format(flow))
+
+    def deallocateFlow(self, flow):
+        """
+        Subclass this method
+        """
+        log.debug("Flow FINISHED: {0}".format(flow))
 
     def handleFlow(self, event):
         """
@@ -444,11 +510,11 @@ class LBController(object):
         log.info("Event to handle received: {0}".format(event["type"]))
         if event["type"] == 'startingFlow':
             flow = event['flow']
-            log.debug("New flow STARTED: {0}".format(flow))
+            self.allocateFlow(flow)
 
         elif event["type"] == 'stoppingFlow':
             flow = event['flow']
-            log.debug("Flow FINISHED: {0}".format(flow))
+            self.deallocateFlow(flow)
 
         elif event['type'] == 'miceEstimation':
             estimation_data = event['data']
@@ -459,24 +525,29 @@ class LBController(object):
 
     def handleMiceEstimation(self, estimation_data):
         """"""
-        # Get mice source
-        # Get mice source
-        src = estimation_data['src']
-        log.info("Received estimation data from {0}".format(src))
-        if src not in self.mice_levels.keys():
-            self.mice_levels[src] = {}
+        src_ip = self.topology.hostsIpMapping['nameToIp'][estimation_data['src']]
+        src_mice_px = self.getSourcePrefixFromFlow({'src': src_ip})
+        if src_mice_px in self.hosts_notified:
+            log.error("Notification catch up!")
+
+        self.hosts_notified.append(src_mice_px)
 
         # Get per-destination samples
         dst_samples = estimation_data['samples']
-        for (dst, samples) in dst_samples.iteritems():
+        for (dst_ip, samples) in dst_samples.iteritems():
+            dst_mice_px = self.getDestinationPrefixFromFlow({'dst': dst_ip})
+            if dst_mice_px not in self.mice_dbs.keys():
+                self.mice_dbs[dst_mice_px] = {}
+
             samples = np.asarray(samples)
             avg, std = samples.mean(), samples.std()
+
             # Add new average and std values
-            if dst not in self.mice_levels[src].keys():
-                self.mice_levels[src][dst] = {'avg': [avg], 'std': [std]}
+            if src_mice_px not in self.mice_dbs[dst_mice_px].keys():
+                self.mice_dbs[dst_mice_px][src_mice_px] = {'avg': [avg], 'std': [std]}
             else:
-                self.mice_levels[src][dst]['avg'].append(avg)
-                self.mice_levels[src][dst]['std'].append(std)
+                self.mice_dbs[dst_mice_px][src_mice_px]['avg'].append(avg)
+                self.mice_dbs[dst_mice_px][src_mice_px]['std'].append(std)
 
     def _runGetLoads(self):
         getLoads = GetLoads(k=self.k)
@@ -520,9 +591,9 @@ class LBController(object):
         """
         log.info("Keyboad Interrupt catched!")
 
-        log.info("Cleaning up the network from fake LSAs ...")
         # Remove all lies before leaving
-        self.current_dags = copy.deepcopy(self.initial_dags)
+        log.info("Cleaning up the network from fake LSAs ...")
+        self.sbmanager.remove_all_dag_requirements()
 
         # self.p_getLoads.terminate()
 
@@ -558,11 +629,23 @@ class LBController(object):
                         continue
 
                     elif event["type"] in ["startingFlow", "stoppingFlow"]:
+                        log.info("{0} event received".format(event['type']))
                         self.handleFlow(event)
 
                     elif event["type"] == "miceEstimation":
-                        self.handleMiceEstimation(event)
+                        estimation_data = event['data']
+                        self.handleMiceEstimation(estimation_data)
 
+                        if len(self.hosts_notified) == self.total_hosts:
+                            self.hosts_notified = []
+                            starttime = time.time()
+                            order = {'type': 'compute_congestion_probability', 'threshold': 0.95}
+                            self.miceEstimatorThread.orders_queue.put(order)
+                            cp = self.miceEstimatorThread.results_queue.get()
+
+                            # Log it
+                            message = "Congestion probability (with threshold {0}) is {1}%% - it took {2}s to compute"
+                            log.info(message.format(order['threshold'], cp*100, time.time()-starttime))
                     else:
                         log.error("Unknown event: {0}".format(event))
 
@@ -578,25 +661,15 @@ class RandomUplinksController(LBController):
     def __init__(self, doBalance=True, k=4):
         super(RandomUplinksController, self).__init__(doBalance=doBalance, k=k, algorithm='random-dags')
         # Keeps track of elephant flows from each pod to every destination
-        self.flows_per_pod = {px: {pod: [] for pod in range(0, self.k)} for px in self.network_graph.prefixes}
+        self.flows_per_pod = {px: {pod: [] for pod in range(0, self.k)} for px in self.fibbing_network_graph.prefixes}
 
-    def handleFlow(self, event):
-        """
-         Default handle flow skeleton
-         :param event:
-         :return:
-         """
-        log.info("Event to handle received: {0}".format(event["type"]))
-        if event["type"] == 'startingFlow':
-            flow = event['flow']
-            self.chooseRandomUplinks(flow)
+    def allocateFlow(self, flow):
+        """"""
+        self.chooseRandomUplinks(flow)
 
-        elif event["type"] == 'stoppingFlow':
-            flow = event['flow']
-            self.resetOSPFDag(flow)
-
-        else:
-            log.error("Unknown event type: {0}".format(event['type']))
+    def deallocateFlow(self, flow):
+        """"""
+        self.resetOSPFDag(flow)
 
     def areOngoingFlowsInPod(self, dst_prefix, src_pod=None):
         """Returns the list of ongoing elephant flows to
@@ -609,7 +682,7 @@ class RandomUplinksController(LBController):
         :return:
         """
         if src_pod != None:
-            if self.dc_graph._valid_pod_number(src_pod):
+            if self.dc_graph_elep._valid_pod_number(src_pod):
                 return self.flows_per_pod[dst_prefix][src_pod] != []
             else:
                 raise ValueError("Wrong pod number: {0}".format(src_pod))
@@ -627,7 +700,7 @@ class RandomUplinksController(LBController):
         :return:
         """
         if src_pod != None:
-            if self.dc_graph._valid_pod_number(src_pod):
+            if self.dc_graph_elep._valid_pod_number(src_pod):
                 return self.flows_per_pod[dst_prefix][src_pod]
             else:
                 raise ValueError("Wrong pod number: {0}".format(src_pod))
@@ -651,14 +724,14 @@ class RandomUplinksController(LBController):
         src_gw = self.getGatewayRouter(src_prefix)
 
         # Get source gateway pod
-        src_pod = self.dc_graph.get_router_pod(routerid=src_gw)
+        src_pod = self.dc_graph_elep.get_router_pod(routerid=src_gw)
 
         # Check if already ongoing flows
         if not self.areOngoingFlowsInPod(dst_prefix=dst_prefix, src_pod=src_pod):
             log.debug("There are no ongoing flows to {0} from pod {1}".format(dst_prefix, src_pod))
 
             # Retrieve current DAG for destination prefix
-            current_dag = self.current_dags[dst_prefix]['dag']
+            current_dag = self.current_elephant_dags[dst_prefix]['dag']
 
             # Modify DAG
             current_dag.modify_random_uplinks(src_pod=src_pod)
@@ -698,7 +771,7 @@ class RandomUplinksController(LBController):
         src_gw = self.getGatewayRouter(src_prefix)
 
         # Get source gateway pod
-        src_pod = self.dc_graph.get_router_pod(routerid=src_gw)
+        src_pod = self.dc_graph_elep.get_router_pod(routerid=src_gw)
 
         # Remove flow from flows_per_pod
         self.flows_per_pod[dst_prefix][src_pod].remove(flow)
@@ -706,7 +779,7 @@ class RandomUplinksController(LBController):
         # Check if already ongoing flows
         if not self.areOngoingFlowsInPod(dst_prefix=dst_prefix, src_pod=src_pod):
             # Retrieve current DAG for destination prefix
-            current_dag = self.current_dags[dst_prefix]['dag']
+            current_dag = self.current_elephant_dags[dst_prefix]['dag']
 
             # Modify DAG -- set uplinks from source pod to default ECMP
             current_dag.set_ecmp_uplinks_from_pod(src_pod=src_pod)
@@ -726,7 +799,7 @@ class RandomUplinksController(LBController):
         reset_time = super(RandomUplinksController, self).reset()
 
         # Reset the flows_per_pod too
-        self.flows_per_pod = {px: {pod: [] for pod in range(0, self.k)} for px in self.network_graph.prefixes}
+        self.flows_per_pod = {px: {pod: [] for pod in range(0, self.k)} for px in self.fibbing_network_graph.prefixes}
 
         log.debug("Time to perform the reset to the load balancer: {0}s".format(time.time() - reset_time))
 
@@ -749,30 +822,30 @@ class CoreChooserController(LBController):
 
     def _generateFlowToCoreDict(self):
         flow_to_core = {}
-        for c in self.dc_graph.core_routers_iter():
+        for c in self.dc_graph_elep.core_routers_iter():
             flow_to_core[c] = {}
-            for p in self.network_graph.prefixes:
+            for p in self.fibbing_network_graph.prefixes:
                 flow_to_core[c][p] = []
         return flow_to_core
 
     def _generateEdgeToCorePaths(self):
         d = {}
-        for edge in self.dc_graph.edge_routers_iter():
+        for edge in self.dc_graph_elep.edge_routers_iter():
             d[edge] = {}
-            for core in self.dc_graph.core_routers_iter():
+            for core in self.dc_graph_elep.core_routers_iter():
                 d[edge][core] = self._getPathBetweenNodes(edge, core)
         return d
 
     def _generateCoreToEdgePaths(self):
         d = {}
-        for core in self.dc_graph.core_routers_iter():
+        for core in self.dc_graph_elep.core_routers_iter():
             d[core] = {}
-            for edge in self.dc_graph.edge_routers_iter():
+            for edge in self.dc_graph_elep.edge_routers_iter():
                 d[core][edge] = self._getPathBetweenNodes(core, edge)
         return d
 
     def _createElephantInPathsDict(self):
-        elephant_in_paths = self.dc_graph.copy()
+        elephant_in_paths = self.dc_graph_elep.copy()
         for (u, v, data) in elephant_in_paths.edges_iter(data=True):
             data['flows'] = []
             data['capacity'] = LINK_BANDWIDTH
@@ -786,7 +859,7 @@ class CoreChooserController(LBController):
         givn flow"""
         srcpx = self.getSourcePrefixFromFlow(flow)
         srcgw = self.getGatewayRouter(srcpx)
-        src_pod = self.dc_graph.get_router_pod(srcgw)
+        src_pod = self.dc_graph_elep.get_router_pod(srcgw)
         return src_pod
 
     def getDstPodFromFlow(self, flow):
@@ -794,7 +867,7 @@ class CoreChooserController(LBController):
         givn flow"""
         dstpx = self.getSourcePrefixFromFlow(flow)
         dstgw = self.getGatewayRouter(dstpx)
-        dst_pod = self.dc_graph.get_router_pod(dstgw)
+        dst_pod = self.dc_graph_elep.get_router_pod(dstgw)
         return dst_pod
 
     def getSourceGatewayFromFlow(self, flow):
@@ -819,14 +892,17 @@ class CoreChooserController(LBController):
     def _getPathBetweenNodes(self, node1, node2):
         """Used to construct the edge_to_core data structure
         """
-        return nx.dijkstra_path(self.dc_graph, node1, node2)
+        return nx.dijkstra_path(self.dc_graph_elep, node1, node2)
 
     def addFlowToPath(self, flow, path):
         edges = self.getEdgesFromPath(path)
         core = path[2]
-        for (u, v) in edges:
-            self.elephants_in_paths[u][v]['flows'].append(flow)
-            self.elephants_in_paths[u][v]['capacity'] -= flow['size']
+
+        with self.mice_caps_lock:
+            for (u, v) in edges:
+                self.elephants_in_paths[u][v]['flows'].append(flow)
+                self.elephants_in_paths[u][v]['capacity'] -= flow['size']
+                self.mice_caps_graph[u][v]['elephants_capacity'] += flow['size']
 
         # Add it to flow_to_core datastructure too
         dst_prefix = self.getDestinationPrefixFromFlow(flow)
@@ -839,12 +915,14 @@ class CoreChooserController(LBController):
         edges = self.getEdgesFromPath(path)
         core = path[2]
         for (u, v) in edges:
-            if flow in self.elephants_in_paths[u][v]['flows']: self.elephants_in_paths[u][v]['flows'].remove(flow)
+            if flow in self.elephants_in_paths[u][v]['flows']:
+                self.elephants_in_paths[u][v]['flows'].remove(flow)
             self.elephants_in_paths[u][v]['capacity'] += flow['size']
 
         # Remove it from flow_to_core
         dst_prefix = self.getDestinationPrefixFromFlow(flow)
-        if flow in self.flow_to_core[core][dst_prefix]: self.flow_to_core[core][dst_prefix].remove(flow)
+        if flow in self.flow_to_core[core][dst_prefix]:
+            self.flow_to_core[core][dst_prefix].remove(flow)
 
     def flowFitsInPath(self, flow, path):
         """
@@ -878,7 +956,7 @@ class CoreChooserController(LBController):
         core_paths = []
         dst_px = self.getDestinationPrefixFromFlow(flow)
         dst_gw = self.getGatewayRouter(dst_px)
-        for core in self.dc_graph.core_routers():
+        for core in self.dc_graph_elep.core_routers():
             # Get both parts of the path
             pathSrcToCore = self.getPathFromEdgeToCore(src_gw, core)
             pathCoreToDst = self.getPathFromCoreToEdge(core, dst_gw)
@@ -898,7 +976,7 @@ class CoreChooserController(LBController):
             #TODO: think what to do with this
             log.error("No available core paths found!! Returning the non-colliding paths!")
             core_paths = []
-            for core in self.dc_graph.core_routers():
+            for core in self.dc_graph_elep.core_routers():
                 # Get both parts of the path
                 pathSrcToCore = self.getPathFromEdgeToCore(src_gw, core)
                 pathCoreToDst = self.getPathFromCoreToEdge(core, dst_gw)
@@ -932,7 +1010,7 @@ class CoreChooserController(LBController):
         ongoing_flows = [f for c in self.flow_to_core.keys() for f in self.flow_to_core[c][dst_prefix]]
 
         # Filters only those with the same source pod
-        ongoing_flows_same_pod = [flow for flow in ongoing_flows if self.dc_graph.get_router_pod(self.getSourceGatewayFromFlow(flow)) == src_pod]
+        ongoing_flows_same_pod = [flow for flow in ongoing_flows if self.dc_graph_elep.get_router_pod(self.getSourceGatewayFromFlow(flow)) == src_pod]
 
         return ongoing_flows_same_pod
 
@@ -953,10 +1031,10 @@ class CoreChooserController(LBController):
         """
         dst_prefix = self.getDestinationPrefixFromFlow(flow)
 
-        src_pod = self.dc_graph.get_router_pod(src_gw)
+        src_pod = self.dc_graph_elep.get_router_pod(src_gw)
 
         # Get all flows from that pod going to dst_prefix
-        all_flows_same_pod = [self.flow_to_core[c][dst_prefix] for c in self.dc_graph.core_routers_iter()]
+        all_flows_same_pod = [self.flow_to_core[c][dst_prefix] for c in self.dc_graph_elep.core_routers_iter()]
         all_flows_same_pod = [f for fl in all_flows_same_pod for f in fl if self.getSourcePodFromFlow(f) == src_pod]
 
         #Check if flow from same gateway router
@@ -1013,19 +1091,18 @@ class CoreChooserController(LBController):
         # Check for which cores I can send (must remove those
         # ones that would collide with already ongoing flows
 
-        # Get prefix from host ip
-        import ipdb; ipdb.set_trace()
+        # Get prefix from host inp
         src_gw = self.getGatewayRouter(flow['src'])
-        src_gw_name = self.dc_graph.get_router_name(src_gw)
+        src_gw_name = self.dc_graph_elep.get_router_name(src_gw)
         dst_prefix = self.getMatchingPrefix(flow['dst'])
 
         # Convert it to alias prefix
-        convert_to_elephant_ip()
+        #convert_to_elephant_ip()
 
         # Get ongonig flows to dst_prefix from the same gateway
         ongoingFlowsSameGateway = self.getongoingFlowsFromGateway(src_gw, dst_prefix)
         if ongoingFlowsSameGateway:
-            src_gw_name = self.dc_graph.get_router_name(src_gw)
+            src_gw_name = self.dc_graph_elep.get_router_name(src_gw)
             log.info("There are already ongoing flows to {0} starting at gateway {1}. We CAN NOT modify DAG".format(dst_prefix, src_gw_name))
             chosen_core = self.getCurrentCoreForFlow(ongoingFlowsSameGateway[0])
             chosen_path = self.getPathFromEdgeToCore(src_gw, chosen_core)
@@ -1040,7 +1117,7 @@ class CoreChooserController(LBController):
                 raise EnvironmentError
 
             # Log a bit
-            ac = [self.dc_graph.get_router_name(c['core']) for c in available_cores]
+            ac = [self.dc_graph_elep.get_router_name(c['core']) for c in available_cores]
             log.info("Available cores: {0}".format(ac))
 
             # Choose core
@@ -1048,16 +1125,17 @@ class CoreChooserController(LBController):
 
             # Extract data
             chosen_core = chosen['core']
-            chosen_core_name = self.dc_graph.get_router_name(chosen_core)
+            chosen_core_name = self.dc_graph_elep.get_router_name(chosen_core)
             chosen_path = chosen['path']
             chosen_overflow = chosen['overflow']
 
             # Log a bit
             log.info("{0} was chosen with a final overflow of {1}".format(chosen_core_name, self.base.setSizeToStr(chosen_overflow)))
+            log.info("Path: {0}".format(self._printPath(chosen_path)))
 
             # Retrieve current DAG for destination prefix
-            if dst_prefix in self.current_dags.keys():
-                current_dag = self.current_dags[dst_prefix]['dag']
+            if dst_prefix in self.current_elephant_dags.keys():
+                current_dag = self.current_elephant_dags[dst_prefix]['dag']
             else:
                 log.error("dst_prefix not in current_dats")
                 import ipdb; ipdb.set_trace()
@@ -1067,18 +1145,16 @@ class CoreChooserController(LBController):
 
             # Apply DAG
             self.sbmanager.add_dag_requirement(prefix=dst_prefix, dag=current_dag)
-            src_gw_name = self.dc_graph.get_router_name(src_gw)
-            chosen_core_name = self.dc_graph.get_router_name(chosen_core)
+            src_gw_name = self.dc_graph_elep.get_router_name(src_gw)
+            chosen_core_name = self.dc_graph_elep.get_router_name(chosen_core)
             log.info("A new path was forced from {0} -> {1} for prefix {2}".format(src_gw_name, chosen_core_name, dst_prefix))
 
         # Append flow to state variables
         self.addFlowToPath(flow, chosen_path)
 
-        #import ipdb; ipdb.set_trace()
-
     @time_func
     def deallocateFlow(self, flow):
-        #import ipdb; ipdb.set_trace()
+        import ipdb; ipdb.set_trace()
 
         # Get prefix from flow
         (src_prefix, dst_prefix) = self.getPrefixesFromFlow(flow)
@@ -1086,7 +1162,7 @@ class CoreChooserController(LBController):
         # Get gateway router and pod
         src_gw = self.getGatewayRouter(src_prefix)
         dst_gw = self.getGatewayRouter(dst_prefix)
-        src_pod = self.dc_graph.get_router_pod(src_gw)
+        src_pod = self.dc_graph_elep.get_router_pod(src_gw)
 
         # Get to which core the flow was directed to
         core = self.getCoreFromFlow(flow)
@@ -1107,7 +1183,7 @@ class CoreChooserController(LBController):
             log.debug("No ongoing flows from the same pod {0} we found to prefix {1}".format(src_pod, dst_prefix))
 
             # Retrieve current DAG for destination prefix
-            current_dag = self.current_dags[dst_prefix]['dag']
+            current_dag = self.current_elephant_dags[dst_prefix]['dag']
 
             # Restore the DAG
             current_dag.set_ecmp_uplinks_from_source(src_gw, current_edge_to_core, all_layers=True)
@@ -1116,7 +1192,7 @@ class CoreChooserController(LBController):
             self.sbmanager.add_dag_requirement(prefix=dst_prefix, dag=current_dag)
 
             # Log a bit
-            src_gw_name = self.dc_graph.get_router_name(src_gw)
+            src_gw_name = self.dc_graph_elep.get_router_name(src_gw)
             log.info("A new DAG was forced restoring the default ECMP DAG from source {0} -> {1}".format(src_gw_name, dst_prefix))
 
         # There are ongoing flows to same destination from same pod
@@ -1131,7 +1207,7 @@ class CoreChooserController(LBController):
                 log.debug("There are NO colliding flows with same edge router gateway: {0}".format(src_gw))
 
                 # Retrieve current DAG for destination prefix
-                current_dag = self.current_dags[dst_prefix]['dag']
+                current_dag = self.current_elephant_dags[dst_prefix]['dag']
 
                 # Restore the DAG
                 current_dag.set_ecmp_uplinks_from_source(src_gw, current_edge_to_core, all_layers=False)
@@ -1140,24 +1216,13 @@ class CoreChooserController(LBController):
                 self.sbmanager.add_dag_requirement(prefix=dst_prefix, dag=current_dag)
 
                 # Log a bit
-                src_gw_name = self.dc_graph.get_router_name(src_gw)
+                src_gw_name = self.dc_graph_elep.get_router_name(src_gw)
                 log.info("A new DAG was forced restoring PART OF the ECMP DAG from source {0} -> {1}".format(src_gw_name, dst_prefix))
 
             # There are colliding flows from the same source edge router
             else:
                 # Log a bit
                 log.debug("There are colliding flows with same edge gateway router {0}. We CAN NOT restore original DAG yet".format(src_gw))
-
-    def handleFlow(self, event):
-        log.info("Event to handle received: {0}".format(event["type"]))
-        if event["type"] == 'startingFlow':
-            flow = event['flow']
-            self.allocateFlow(flow)
-        elif event["type"] == 'stoppingFlow':
-            flow = event['flow']
-            self.deallocateFlow(flow)
-        else:
-            log.error("Unknown event type: {0}".format(event['type']))
 
     def reset(self):
         # Reset parent class first
