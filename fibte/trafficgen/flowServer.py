@@ -18,7 +18,7 @@ import numpy as np
 from threading import Lock
 
 from fibte.trafficgen import isElephant
-from fibte.trafficgen import get_secondary_ip
+from fibte.misc.ipalias import get_secondary_ip
 from fibte.misc.unixSockets import UnixClientTCP
 
 def time_func(function):
