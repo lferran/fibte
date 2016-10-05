@@ -5,6 +5,9 @@ import os
 import random
 import networkx as nx
 import fibte.misc.ipalias as ipalias
+from fibte import log
+import logging
+import time
 
 """
 Module that defines the DCGraph object, which extends the nx.DiGraph class
@@ -32,6 +35,8 @@ class DCDiGraph(DiGraph):
 
         # Prefixes are not stored as nodes
         self.prefixes = {}
+
+        log.setLevel(logging.DEBUG)
 
     def is_correct_prefix(self, prefix):
         """Checks validity of prefix wrt specified prefix type"""
@@ -370,6 +375,22 @@ class DCDiGraph(DiGraph):
             ur_name = self.get_router_name(upper_rid)
             raise ValueError("This downlink is not valid: {0} -> {1}".format(ur_name, lr_name))
 
+    def print_stuff(self, listt):
+        if listt:
+            if isinstance(listt[0], list) or isinstance(listt[0], tuple):
+                new_list = type(listt)()
+                for a in listt:
+                    ep = map(self.get_router_name, a)
+                    new_list.append(ep)
+                return new_list
+            else:
+                if isinstance(listt, list) or isinstance(listt, tuple):
+                    return map(self.get_router_name, listt)
+                else:
+                    return self.get_router_name(listt)
+        else:
+            return []
+
 class DCGraph(DCDiGraph):
     """
     Models the DC graph as a networkx DiGraph subclass object
@@ -465,6 +486,102 @@ class DCGraph(DCDiGraph):
             return dc_dag
         else:
             raise ValueError("Prefix must be an existing destination prefix. {0} isn't".format(prefix))
+
+    @staticmethod
+    def weighted_choice(choices):
+        """
+        *args example: [("e",weight_e),('m',weight_m)]
+        """
+        total = sum(w for c, w in choices)
+        r = random.uniform(0, total)
+        upto = 0
+        for c, w in choices:
+            if upto + w >= r:
+                return c
+            upto += w
+        assert False, "Shouldn't get here"
+
+    def get_random_dag_from_probability_dcgraph(self, prefix, link_probabilities):
+        """Computes a random DAG towards prefix based on the individual link
+        probabilities specified in prob_dc_graph.
+
+        link probabilities is a dictionary of dictionaries:
+          keyed by source -> dst -> {'probability' attribute in [0,1] and 'changed' [True, False]}
+        """
+        prefix_pod = self.get_destination_prefix_pod(prefix)
+        gateway = self.get_destination_prefix_gateway(prefix)
+        if self.is_destination_prefix(prefix):
+            # Create empty-links dag from self DCGraph
+            dc_dag = DCDag(sink_id=gateway, dst_prefix=prefix, k=self.k, dc_graph=self, prefix_type=self.prefix_type)
+
+            # Add uplinks
+            for er in dc_dag.edge_routers_iter():
+                log.debug("Edge router: {0}".format(dc_dag.get_router_name(er)))
+                if er != gateway:
+                    possible_aggr = dc_dag.get_upper_tier(er)
+                    log.debug("Upper tier aggregation routers: {0}".format(self.print_stuff(possible_aggr)))
+
+                    possible_links = [(er, ar) for ar in possible_aggr]
+                    if all([link_probabilities[link] <= 0 for link in possible_links]):
+                        log.error("ALL LINKS HAVE PROBABILITY 0")
+                        import ipdb; ipdb.set_trace()
+
+                    at_least_one_link = False
+                    start_time = time.time()
+                    links_used = []
+                    while not at_least_one_link:
+                        for link in possible_links:
+                            link_prob = link_probabilities[link]['probability']
+                            log.debug("{0} {1}".format(self.print_stuff(link), link_prob))
+                            use_link = self.weighted_choice([(True, link_prob), (False, 1-link_prob)])
+                            if use_link:
+                                dc_dag.add_uplink(link[0], link[1])
+                                at_least_one_link = True
+                                links_used.append(link)
+
+                    log.debug("It took {0}s to find links".format(time.time()- start_time))
+                    log.debug("Used links: {0}".format(self.print_stuff(links_used)))
+
+            # Compute aggregation routers in destiantoin pod
+            for ar in dc_dag.aggregation_routers_iter():
+                log.debug("Aggregation router: {0}".format(self.print_stuff(ar)))
+                ar_pod = dc_dag.get_router_pod(ar)
+                if ar_pod != prefix_pod:
+                    possible_cores = dc_dag.get_upper_tier(ar)
+                    log.debug("Upper tier core routers: {0}".format(self.print_stuff(possible_cores)))
+
+                    possible_agg_core_links = [(ar, cr) for cr in possible_cores]
+                    if all([link_probabilities[link] <= 0 for link in possible_agg_core_links]):
+                        log.error("ALL LINKS HAVE PROBABILITY 0")
+                        import ipdb; ipdb.set_trace()
+
+                    at_least_one_link = False
+                    start_time = time.time()
+                    links_used = []
+                    while not at_least_one_link:
+                        for link in possible_agg_core_links:
+                            link_prob = link_probabilities[link]['probability']
+                            use_link = self.weighted_choice([(True, link_prob), (False, 1 - link_prob)])
+                            if use_link:
+                                dc_dag.add_uplink(link[0], link[1])
+                                at_least_one_link = True
+                                links_used.append(link)
+
+                    log.debug("It took {0}s to find links".format(time.time() - start_time))
+                    log.debug("Used links: {0}".format(self.print_stuff(links_used)))
+
+            # Add downlinks
+            add_downlinks1 = [dc_dag.add_downlink(cr, ar) for cr in self.core_routers_iter() for ar in self.get_lower_tier(cr) if self.get_router_pod(ar) == prefix_pod and dc_dag.is_valid_downlink(cr, ar)]
+            add_downlinks2 = [dc_dag.add_downlink(ar, er) for ar in self.aggregation_routers_iter() for er in self.get_lower_tier(ar) if self.get_router_pod(ar) == prefix_pod and dc_dag.is_valid_downlink(ar, er)]
+
+            # Add links to gateway
+            dc_dag.add_destination_prefix(prefix, gateway)
+
+            # Return the DCDag object
+            return dc_dag
+        else:
+            raise ValueError("Prefix must be an existing destination prefix. {0} isn't".format(prefix))
+
 
 class DCDag(DCDiGraph):
     """
