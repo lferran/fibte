@@ -185,13 +185,17 @@ class FlowServer(object):
     @time_func
     def takeMiceLoadSample(self):
         """Start process that takes sample"""
-        with self.samples_lock:
-            with self.estimation_lock:
-                for (dst, load) in self.mice_estimation.iteritems():
-                    if dst in self.mice_estimation_samples.keys():
-                        self.mice_estimation_samples[dst].append(load)
-                    else:
-                        self.mice_estimation_samples[dst] = [load]
+        try:
+            with self.samples_lock:
+                with self.estimation_lock:
+                    for (dst, load) in self.mice_estimation.iteritems():
+                        if dst in self.mice_estimation_samples.keys():
+                            self.mice_estimation_samples[dst].append(load)
+                        else:
+                            self.mice_estimation_samples[dst] = [load]
+        except Exception as e:
+            log.exception(e)
+            import ipdb; ipdb.set_trace()
         #process = Process(target=self._takeMiceLoadSample, args=(mice_estimation_samples, self.estimation_lock, self.samples_lock))
         #process.daemon = True
         #process.start()
@@ -234,15 +238,20 @@ class FlowServer(object):
     @time_func
     def notifyMiceLoads(self):
         """Send samples from last period to controller"""
-        with self.samples_lock:
-            # Copy dict
-            samples_to_send = self.mice_estimation_samples.copy()
+        try:
+            with self.samples_lock:
+                # Copy dict
+                samples_to_send = self.mice_estimation_samples.copy()
 
-            # Empty previous samples
-            self.mice_estimation_samples.clear()
+                # Empty previous samples
+                self.mice_estimation_samples.clear()
 
-        # Send them to the controller
-        self.client_to_controller.send(json.dumps({"type": "miceEstimation", 'data': {'src': self.name, 'samples': samples_to_send}}), "")
+            # Send them to the controller
+            self.client_to_controller.send(json.dumps({"type": "miceEstimation", 'data': {'src': self.name, 'samples': samples_to_send}}), "")
+        except Exception as e:
+            log.exception(e)
+            import ipdb; ipdb.set_trace()
+
 
     def terminateTraffic(self):
         # No need to terminate startFlow processes, since they are killed when

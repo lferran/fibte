@@ -1,6 +1,9 @@
 # Assuming the networks are /24, this would be the
 # address reserved for all hosts's secondary ips
 IP_ALIAS_ADDRESS = '222'
+IP_ALIAS_NETWORK_PREFIXLEN = '/32'
+DEFAULT_NETWORK_ADDR = '0'
+DEFAULT_NETWORK_PREFIXLEN = '/24'
 
 def setup_alias(host):
     """Setup alias at host h"""
@@ -30,12 +33,16 @@ def get_secondary_ip(dst_ip):
 
 def get_secondary_ip_prefix(dst_prefix):
     """
-
     :param dst_prefix: string representing an ipv4 network prefix
     :return:
     """
     new_dst = dst_prefix.split('/')[0].split('.')[:-1] + [IP_ALIAS_ADDRESS]
-    new_dst = '.'.join(new_dst) + '/32'
+    new_dst = '.'.join(new_dst) + IP_ALIAS_NETWORK_PREFIXLEN
+    return new_dst
+
+def get_primary_ip_prefix(secondary_prefix):
+    new_dst = secondary_prefix.split('/')[0].split('.')[:-1] + [DEFAULT_NETWORK_ADDR]
+    new_dst = '.'.join(new_dst) + DEFAULT_NETWORK_PREFIXLEN
     return new_dst
 
 def is_secondary_ip(dst_ip):
