@@ -55,7 +55,7 @@ class MyGraphProvider(SouthboundManager):
         HAS_INITIAL_GRAPH.set()
 
 class LBController(object):
-    def __init__(self, doBalance = True, k=4, algorithm=None, load_variables=False):
+    def __init__(self, doBalance = True, k=4, algorithm=None, load_variables=True):
         # Set fat-tree parameter
         self.k = k
 
@@ -159,6 +159,21 @@ class LBController(object):
             self.r_c1 = self.topology.getRouterId('r_c1')
             self.r_c2 = self.topology.getRouterId('r_c2')
             self.r_c3 = self.topology.getRouterId('r_c3')
+
+        # FOR DEBUGGING MICE ETIMATOR THREAD --------------------------------------------------------->
+        # Crete sample
+        sample_path = [self.r_0_e0, self.r_0_a0, self.r_c0, self.r_3_a0, self.r_3_e0]
+        # Add it in the capacities graph
+        for (u,v) in self.get_links_from_path(sample_path):
+            self.mice_caps_graph[u][v]['elephants_capacity'] = LINK_BANDWIDTH
+
+        order = {'type':'adapt_mice_to_elephants', 'path': sample_path}
+        self.miceEstimatorThread.orders_queue.put(order)
+        time.sleep(3000)
+
+    @staticmethod
+    def get_links_from_path(path):
+        return zip(path[:-1], path[1:])
 
     def _startMiceEstimatorThread(self):
         # Here we store the estimated mice levels
@@ -1205,8 +1220,6 @@ class RandomCoreChooser(CoreChooserController):
         chosen = available_cores[0]
 
         return chosen
-
-
 
 class TestController(object):
     def __init__(self):

@@ -36,7 +36,7 @@ class DCDiGraph(DiGraph):
         # Prefixes are not stored as nodes
         self.prefixes = {}
 
-        log.setLevel(logging.DEBUG)
+        #log.setLevel(logging.NOTSET)
 
     def is_correct_prefix(self, prefix):
         """Checks validity of prefix wrt specified prefix type"""
@@ -514,61 +514,85 @@ class DCGraph(DCDiGraph):
             # Create empty-links dag from self DCGraph
             dc_dag = DCDag(sink_id=gateway, dst_prefix=prefix, k=self.k, dc_graph=self, prefix_type=self.prefix_type)
 
-            # Add uplinks
+            # Add uplinks: first the edge -> aggr links
             for er in dc_dag.edge_routers_iter():
-                log.debug("Edge router: {0}".format(dc_dag.get_router_name(er)))
+                #log.debug("Edge router: {0}".format(dc_dag.get_router_name(er)))
                 if er != gateway:
                     possible_aggr = dc_dag.get_upper_tier(er)
-                    log.debug("Upper tier aggregation routers: {0}".format(self.print_stuff(possible_aggr)))
+                    #log.debug("Upper tier aggregation routers: {0}".format(self.print_stuff(possible_aggr)))
 
-                    possible_links = [(er, ar) for ar in possible_aggr]
-                    if all([link_probabilities[link] <= 0 for link in possible_links]):
-                        log.error("ALL LINKS HAVE PROBABILITY 0")
-                        import ipdb; ipdb.set_trace()
+                    # Compute all possible links
+                    possible_edge_to_aggr_links = [(er, ar) for ar in possible_aggr]
 
+                    # Check if probability is zero for all links
+                    if all([link_probabilities[link]['final_probability'] <= 0 for link in possible_edge_to_aggr_links]):
+                        #log.error("ALL LINKS HAVE PROBABILITY 0 -> Activate ECMP on all links!")
+                        for link in possible_edge_to_aggr_links:
+                            dc_dag.add_uplink(link[0], link[1])
+                        continue
+
+                    # Make some iterations until at least one link is chosen
                     at_least_one_link = False
                     start_time = time.time()
                     links_used = []
-                    while not at_least_one_link:
-                        for link in possible_links:
-                            link_prob = link_probabilities[link]['probability']
-                            log.debug("{0} {1}".format(self.print_stuff(link), link_prob))
+                    n_iterations = 0
+                    while not at_least_one_link and n_iterations < 10:
+                        for link in possible_edge_to_aggr_links:
+                            link_prob = link_probabilities[link]['final_probability']
+                            #log.debug("{0} with probability {1} of being chosen in DAG".format(self.print_stuff(link), link_prob))
                             use_link = self.weighted_choice([(True, link_prob), (False, 1-link_prob)])
                             if use_link:
                                 dc_dag.add_uplink(link[0], link[1])
                                 at_least_one_link = True
                                 links_used.append(link)
+                        n_iterations += 1
 
-                    log.debug("It took {0}s to find links".format(time.time()- start_time))
-                    log.debug("Used links: {0}".format(self.print_stuff(links_used)))
+                    if not at_least_one_link:
+                        #log.error("Probabilities might be too low for all possible links -> Activate ECMP on all links!")
+                        for link in possible_edge_to_aggr_links:
+                            dc_dag.add_uplink(link[0], link[1])
+                        continue
+
+                    #log.debug("It took {0}s to find (edge -> aggr) links".format(time.time()- start_time))
+                    #log.debug("Used links: {0}".format(self.print_stuff(links_used)))
 
             # Compute aggregation routers in destiantoin pod
             for ar in dc_dag.aggregation_routers_iter():
-                log.debug("Aggregation router: {0}".format(self.print_stuff(ar)))
+                #log.debug("Aggregation router: {0}".format(self.print_stuff(ar)))
                 ar_pod = dc_dag.get_router_pod(ar)
                 if ar_pod != prefix_pod:
                     possible_cores = dc_dag.get_upper_tier(ar)
-                    log.debug("Upper tier core routers: {0}".format(self.print_stuff(possible_cores)))
+                    #log.debug("Upper tier core routers: {0}".format(self.print_stuff(possible_cores)))
 
                     possible_agg_core_links = [(ar, cr) for cr in possible_cores]
-                    if all([link_probabilities[link] <= 0 for link in possible_agg_core_links]):
-                        log.error("ALL LINKS HAVE PROBABILITY 0")
-                        import ipdb; ipdb.set_trace()
+                    if all([link_probabilities[link]['final_probability'] <= 0 for link in possible_agg_core_links]):
+                        #log.error("ALL LINKS HAVE PROBABILITY 0 -> Activate ECMP on all links!")
+                        for link in possible_agg_core_links:
+                            dc_dag.add_uplink(link[0], link[1])
+                        continue
 
                     at_least_one_link = False
                     start_time = time.time()
                     links_used = []
-                    while not at_least_one_link:
+                    n_iterations = 0
+                    while not at_least_one_link and n_iterations < 10:
                         for link in possible_agg_core_links:
-                            link_prob = link_probabilities[link]['probability']
+                            link_prob = link_probabilities[link]['final_probability']
                             use_link = self.weighted_choice([(True, link_prob), (False, 1 - link_prob)])
                             if use_link:
                                 dc_dag.add_uplink(link[0], link[1])
                                 at_least_one_link = True
                                 links_used.append(link)
+                        n_iterations += 1
 
-                    log.debug("It took {0}s to find links".format(time.time() - start_time))
-                    log.debug("Used links: {0}".format(self.print_stuff(links_used)))
+                    if not at_least_one_link:
+                        #log.error("Probabilities might be too low for all possible links -> Activate ECMP on all links!")
+                        for link in possible_agg_core_links:
+                            dc_dag.add_uplink(link[0], link[1])
+                        continue
+
+                    #log.debug("It took {0}s to find (aggr -> core) links".format(time.time() - start_time))
+                    #log.debug("Used links: {0}".format(self.print_stuff(links_used)))
 
             # Add downlinks
             add_downlinks1 = [dc_dag.add_downlink(cr, ar) for cr in self.core_routers_iter() for ar in self.get_lower_tier(cr) if self.get_router_pod(ar) == prefix_pod and dc_dag.is_valid_downlink(cr, ar)]
@@ -581,7 +605,6 @@ class DCGraph(DCDiGraph):
             return dc_dag
         else:
             raise ValueError("Prefix must be an existing destination prefix. {0} isn't".format(prefix))
-
 
 class DCDag(DCDiGraph):
     """
