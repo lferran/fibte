@@ -63,6 +63,7 @@ def sendRate(s,dst,dport,bytesPerSec,length=None):
 def sendRate_batch(s,dst,dport,bytesPerSec,length=None,packets_round=1):
     if length:
         maxUDPSize = length
+
     times = math.ceil((float(bytesPerSec) / (maxUDPSize+minSizeUDP))/packets_round)
     time_step= 1/times
     start = time.time()
@@ -94,8 +95,7 @@ def sendFlow(dst="10.0.32.2",sport=5000,size='10M',dport=5001,duration=10,**kwar
         sendRate_batch(s, dst, dport, rate, length=10000, packets_round=5)
         #sendRate_old(s, dst, dport, rate)
 
-def sendRound(socket,dst,rate,dport,offset):
-
+def sendRound(socket, dst, rate, dport, offset):
     while rate > 0 and dport < 65535:
         for destination in dst[offset:]:
             socket.sendto("",(destination,dport))
@@ -148,7 +148,7 @@ def sendFlowNotifyController(**flow):
         client.send(json.dumps({"type": "startingFlow", "flow": flow}), "")
 
     except Exception as e:
-        log.error("Controller cound not be informed about startingFlow event. Error {0}".format(e))
+        log.error("Controller cound not be informed about startingFlow event")
 
     # Close the socket
     client.sock.close()
@@ -158,7 +158,7 @@ def sendFlowNotifyController(**flow):
     
 def stopFlowNotifyController(**flow):
     # Open socket with controller
-    client = UnixClient("/tmp/controllerServer")
+    client = UnixClientTCP("/tmp/controllerServer")
 
     log.debug("Flow is STOPPING: to {0} {1}(bps) during {2}".format(flow['dst'], flow['size'], flow['duration']))
     try:
@@ -166,7 +166,7 @@ def stopFlowNotifyController(**flow):
         client.send(json.dumps({"type": "stoppingFlow", "flow": flow}), "")
 
     except Exception as e:
-        log.error("Controller cound not be informed about stoppingFlow event. Error: {0}".format(e))
+        log.error("Controller cound not be informed about stoppingFlow event")
 
     # Close socket
     client.close()    

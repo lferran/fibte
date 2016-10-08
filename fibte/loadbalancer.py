@@ -2,7 +2,7 @@
 
 from fibbingnode.algorithms.southbound_interface import SouthboundManager
 from fibbingnode import CFG as CFG_fib
-from fibte.misc.unixSockets import UnixServerTCP, UnixServer
+from fibte.misc.unixSockets import UnixServerTCP, UnixServer, UnixClient
 import threading
 import os
 import time
@@ -30,6 +30,7 @@ from fibte import tmp_files, db_topo, LINK_BANDWIDTH, CFG
 HAS_INITIAL_GRAPH = threading.Event()
 
 UDS_server_name = CFG.get("DEFAULT","controller_UDS_name")
+UDS_server_traceroute = CFG.get("DEFAULT", 'controller_UDS_traceroute')
 C1_cfg = CFG.get("DEFAULT", "C1_cfg")
 
 import inspect
@@ -73,6 +74,17 @@ class LBController(object):
         self.q_server = Queue.Queue(0)
         self.server = UnixServerTCP(self._address_server, self.q_server)
 
+        # UDS server where we listen for the traceroute data
+        self.traceroute_server = UnixServer(os.path.join(tmp_files, UDS_server_traceroute))
+
+        # UDS client used to instruct host to start traceroute path discovery
+        self.traceroute_client = UnixClient(os.path.join(tmp_files, "/tmp/tracerouteServer_{0}"))
+
+        # Start thread that listends for results
+        thread = threading.Thread(target=self.traceroute_listener, args=())
+        thread.setDaemon(True)
+        thread.start()
+
         # Connects to the southbound controller. Must be called before
         # creating the instance of SouthboundManager
         CFG_fib.read(os.path.join(tmp_files, C1_cfg))
@@ -90,7 +102,7 @@ class LBController(object):
         self.sbmanager.remove_all_dag_requirements()
 
         # Load the topology
-        self.topology = TopologyGraph(getIfindexes=True, db=os.path.join(tmp_files, db_topo))
+        self.topology = TopologyGraph(getIfindexes=True, interfaceToRouterName=True, db=os.path.join(tmp_files, db_topo))
 
         # Get dictionary where loads are stored
         self.link_loads = self.topology.getEdgesUsageDictionary()
@@ -113,6 +125,10 @@ class LBController(object):
 
         # Fill ospf_prefixes dict
         self.ospf_prefixes = self._fillInitialOSPFPrefixes()
+
+        # Flow to path allocations
+        self.flow_to_paths = {}
+        self.new_flow_allocations_queue = Queue.Queue()
 
         # Start getLoads thread that reads from counters
         self.p_getLoads = subprocess.Popen([getLoads_path, '-k', str(self.k), '-a', self.algorithm], shell=False)
@@ -162,14 +178,14 @@ class LBController(object):
 
         # FOR DEBUGGING MICE ETIMATOR THREAD --------------------------------------------------------->
         # Crete sample
-        sample_path = [self.r_0_e0, self.r_0_a0, self.r_c0, self.r_3_a0, self.r_3_e0]
+        #sample_path = [self.r_0_e0, self.r_0_a0, self.r_c0, self.r_3_a0, self.r_3_e0]
         # Add it in the capacities graph
-        for (u,v) in self.get_links_from_path(sample_path):
-            self.mice_caps_graph[u][v]['elephants_capacity'] = LINK_BANDWIDTH
+        #for (u,v) in self.get_links_from_path(sample_path):
+        #    self.mice_caps_graph[u][v]['elephants_capacity'] = LINK_BANDWIDTH
 
-        order = {'type':'adapt_mice_to_elephants', 'path': sample_path}
-        self.miceEstimatorThread.orders_queue.put(order)
-        time.sleep(3000)
+        #order = {'type':'adapt_mice_to_elephants', 'path': sample_path}
+        #self.miceEstimatorThread.orders_queue.put(order)
+        #time.sleep(3000)
 
     @staticmethod
     def get_links_from_path(path):
@@ -198,6 +214,79 @@ class LBController(object):
                                                        samples = 50)
         # Start the thread
         self.miceEstimatorThread.start()
+
+    def traceroute_listener(self):
+        """
+        This function is meant to be executed in a separate thread.
+        It iteratively reads for new traceroute results, that are
+        sent by flowServers, and saves the results in a data
+        structure
+        """
+        while True:
+            # Get a new route
+            try:
+                # Reads from the
+                traceroutes = json.loads(self.traceroute_server.sock.recv(65536))
+
+                # Extract flow
+                flow = traceroutes['flow']
+
+                # Gets the traceroute information convers it from ip to names and adds the information in the cache memory
+                route = self.ipPath_to_namePath(traceroutes)
+
+                # Put result into queue
+                self.new_flow_allocations_queue.put({'flow': flow, 'route': route})
+
+                import ipdb; ipdb.set_trace()
+
+            except Exception:
+                import traceback
+                print traceback.print_exc()
+
+    def get_router_name(self, addr):
+        """Addr can either the router id, the interface ip or the private ip"""
+        for fun in [self.topology.getRouterName, self.topology.getRouterFromPrivateIp, self.topology.getRouterFromInterfaceIp]:
+            try:
+                return fun(addr)
+            except KeyError:
+                continue
+        return ValueError("{0} is neither a private ip, router id or interface ip".format(addr))
+
+    def ipPath_to_namePath(self, event):
+        #Used to convert traceroute information from ip to router names so we get the path
+        route = event['route']
+        elephant_flow = event["flow"]
+
+        path = []
+        notComplete=False
+        if route:
+            srcRouter = self.get_router_name(route[0])
+            dstRouter = self.get_router_name(route[-1])
+
+            # Check if the first and last routers are the correct gateways:
+            src_gw_ok = self.topology.getGatewayRouter(self.topology.getHostName(elephant_flow["src"])) == srcRouter
+            dst_gw_ok = self.topology.getGatewayRouter(self.topology.getHostName(elephant_flow["dst"])) == dstRouter
+            if src_gw_ok and dst_gw_ok:
+                for i, router_ip in enumerate(route):
+
+                    # Get router
+                    router = self.get_router_name(router_ip)
+
+                    # If we are not the first or last router
+                    if not(router == srcRouter):
+                        # Check connectivity
+                        if self.topology.areNeighbors(router, path[-1]):
+                            path.append(router)
+                        else:
+                            notComplete = True
+                            break
+                    # Source router
+                    else:
+                        path.append(router)
+                if not(notComplete):
+                    #log.debug("Found a new path using traceroute: {0} for header: {1}".format(path, elephant_flow))
+                    return path
+        return None
 
     def _createElephantsCapsGraph(self):
         graph = DCGraph(k=self.k, prefix_type='secondary')
@@ -429,6 +518,20 @@ class LBController(object):
         Subclass this method
         """
         log.debug("Flow FINISHED: {0}".format(flow))
+
+    @time_func
+    def getFlowPath(self, flow):
+        """Starts a traceroute"""
+        # Get prefix from host ip
+        src_name = self.topology.getHostName(flow['src'])
+
+        # Send instruction to start traceroute
+        self.traceroute_client.send(json.dumps(flow), src_name)
+
+        try:
+            return self.new_flow_allocations_queue.get(timeout=2)
+        except:
+            return None
 
     def handleFlow(self, event):
         """
@@ -1023,10 +1126,16 @@ class CoreChooserController(LBController):
         # Check for which cores I can send (must remove those
         # ones that would collide with already ongoing flows
 
-        # Get prefix from host inp
+        path = self.getFlowPath(flow)
+
+
+        import ipdb; ipdb.set_trace()
+
         src_gw = self.getGatewayRouter(flow['src'])
         src_gw_name = self.dc_graph_elep.get_router_name(src_gw)
         dst_prefix = self.getMatchingPrefix(flow['dst'])
+
+
 
         # Convert it to alias prefix
         #convert_to_elephant_ip()

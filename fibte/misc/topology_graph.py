@@ -1,6 +1,5 @@
 #!/usr/bin/python
 
-from fibbingnode.misc.mininetlib.ipnet import TopologyDB
 import os
 import json
 import networkx as nx
@@ -19,9 +18,11 @@ import logging
 import time
 
 from fibte import CFG
+from fibbingnode.misc.mininetlib.ipnet import TopologyDB
 
 tmp_files = CFG.get("DEFAULT", "tmp_files")
 db_topo = CFG.get("DEFAULT", "db_topo")
+private_ip_binding_file = CFG.get("DEFAULT", 'private_ip_binding_file')
 
 class NetworkGraph(object):
     """
@@ -224,6 +225,32 @@ class TopologyGraph(TopologyDB):
         # Populates self.interfaceIPToRouterName dict
         if interfaceToRouterName:
             self.loadInterfaceToRouterName()
+
+        self.private_ip_binding = self.loadPrivateIpBindings()
+
+    def loadPrivateIpBindings(self):
+        bindings = {'privateToPublic': {}, 'publicToPrivate': {}}
+        with open(private_ip_binding_file, 'r') as f:
+            bds = json.loads(f.read())
+
+        for priv_net, data in bds.iteritems():
+            for rid, prv_ip in data.iteritems():
+                private_ip = prv_ip[0].split('/')[0]
+
+                if rid not in bindings['publicToPrivate'].keys():
+                    bindings['publicToPrivate'][rid] = {priv_net: private_ip}
+                else:
+                    bindings['publicToPrivate'][rid][priv_net] = private_ip
+
+                bindings['privateToPublic'][private_ip] = rid
+        return bindings
+
+    def getRouterIdFromPrivateIp(self, private_ip):
+        return self.private_ip_binding['privateToPublic'][private_ip]
+
+    def getRouterFromPrivateIp(self, private_ip):
+        rid = self.getRouterIdFromPrivateIp(private_ip)
+        return self.getRouterName(rid)
 
     def loadGraphFromDB(self):
         g = nx.Graph()
@@ -728,16 +755,26 @@ class TopologyGraph(TopologyDB):
         """
         import ipdb; ipdb.set_trace()
 
+    def getHopsBetweenHosts(self, src, dst):
+        """
+        Returns the number of devices in
+        the path from src host to dst host
+        """
+        if src not in self.network:
+            raise ValueError("{0} does not exist".format(src))
+
+        if dst not in self.network:
+            raise ValueError("{0} does not exist".format(dst))
+
+        if src == dst:
+            raise ValueError("src == dst")
+
+        return len(nx.shortest_path(self.networkGraph, src, dst)) - 2
+
+    def areNeighbors(self, node1, node2):
+        return node1 in self.networkGraph.adj[node2]
+
 if __name__ == "__main__":
     topology = TopologyGraph(getIfindexes=True, db=os.path.join(tmp_files, db_topo))
     import ipdb;ipdb.set_trace()
     topology.getHostsBehindRouter('r_0_e0')
-
-    g = topology.networkGraph
-
-    # topology.loadIfNames()
-    # print
-
-    # routers = topology.getIfNames()
-    
-    # roprint

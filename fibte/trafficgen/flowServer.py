@@ -1,7 +1,5 @@
 #!/usr/bin/env python
 
-import flowGenerator
-from fibte.misc.unixSockets import UnixServerTCP
 import multiprocessing
 from multiprocessing import Process
 import json
@@ -11,15 +9,19 @@ import time
 import sys
 import traceback
 import logging
-from fibte.logger import log
-from threading import Thread
 import Queue
 import numpy as np
-from threading import Lock
+from threading import Thread, Lock
 
+import flowGenerator
+from fibte.monitoring.traceroute import traceroute
+from fibte.misc.unixSockets import UnixServerTCP, UnixClientTCP, UnixServer, UnixClient
 from fibte.trafficgen import isElephant
 from fibte.misc.ipalias import get_secondary_ip
-from fibte.misc.unixSockets import UnixClientTCP
+from fibte.logger import log
+from fibte.misc.topology_graph import TopologyGraph
+from fibte import tmp_files, db_topo
+
 
 def time_func(function):
     def wrapper(*args,**kwargs):
@@ -69,6 +71,11 @@ class FlowServer(object):
         self.scheduler_process = Process(target=self.scheduler.run)
         self.scheduler_process.daemon = False
 
+        # Create the topology object
+        self.topology = TopologyGraph(getIfindexes=False,
+                                      interfaceToRouterName=False,
+                                      db=os.path.join(tmp_files, db_topo))
+
         # Weather secondary ip's are present at the host or not
         self.ip_alias = ip_alias
         log.debug("Is ip alias for elephants is active? {0}".format(str(self.ip_alias)))
@@ -85,6 +92,16 @@ class FlowServer(object):
 
         # Unix Client to communicate to controller
         self.client_to_controller = UnixClientTCP("/tmp/controllerServer")
+        self.traceroute_server_name = "/tmp/tracerouteServer_{0}".format(name)
+        self.traceroute_server = UnixServer("/tmp/tracerouteServer_{0}".format(name))
+        # Client that sends to the server -- we must have one like this in the controller
+        self.traceroute_client = UnixClient(self.traceroute_server_name)
+
+        # Start process that listens from server
+
+        process = multiprocessing.Process(target=self.tracerouteServer)
+        # process.daemon = True
+        process.start()
 
     def setup_logging(self):
         """"""
@@ -101,10 +118,60 @@ class FlowServer(object):
         # Only parent will do this
         if os.getpid() == self.parentPid:
             #self.queue.put(None)
+            self.traceroute_server.close()
             self.server_from_tg.close()
             sys.exit(0)
         else:
             sys.exit(0)
+
+    def tracerouteThread(self, client, **flow):
+        """Starts a traceroute procedure"""
+        now = time.time()
+
+        # Result is stored here
+        route_info = {'flow': flow, 'route': []}
+        log.info("FLOW: {0}".format(flow))
+
+        # Gets hop count for traceroute
+        hops = self.topology.getHopsBetweenHosts(self.topology.getHostName(flow["src"]), self.topology.getHostName(flow["dst"]))
+
+        if hops < 3:
+            return
+
+        # Traceroute original flow
+        route = traceroute(hops = hops, **flow)
+        original_try_again = 3
+        while not route and original_try_again > 0:
+            # Try it again
+            route = traceroute(hops=hops, **flow)
+            original_try_again -= 1
+
+        # Add found route
+        route_info['route'] = route
+        log.debug("Original route: {0}".format(route_info["route"]))
+        client.send(json.dumps(route_info), "")
+
+        print "Server {1}, time doing traceroute {0}".format(time.time() - now, self.name)
+
+    def tracerouteServer(self):
+        """
+        This function is ran in a separate thread:
+        it receives orders from the controller to know
+        the route taken by certain flows
+        """
+
+        # Results are sent to the controller
+        client = UnixClient("/tmp/controllerServer_traceroute")
+
+        while True:
+            # Wait for traceroute commands
+            flow = json.loads(self.traceroute_server.receive())
+
+            # Start traceroute in a dedicated thread!
+            thread = multiprocessing.Process(target=self.tracerouteThread, args=(client,), kwargs=(flow))
+            thread.daemon = True
+            # thread.setDaemon(True)
+            thread.start()
 
     def setStartTime(self, starttime):
         if time.time() < starttime:
@@ -194,8 +261,9 @@ class FlowServer(object):
                         else:
                             self.mice_estimation_samples[dst] = [load]
         except Exception as e:
+            log.error("Error while taking mice load sample")
             log.exception(e)
-            import ipdb; ipdb.set_trace()
+
         #process = Process(target=self._takeMiceLoadSample, args=(mice_estimation_samples, self.estimation_lock, self.samples_lock))
         #process.daemon = True
         #process.start()
@@ -249,9 +317,7 @@ class FlowServer(object):
             # Send them to the controller
             self.client_to_controller.send(json.dumps({"type": "miceEstimation", 'data': {'src': self.name, 'samples': samples_to_send}}), "")
         except Exception as e:
-            log.exception(e)
-            import ipdb; ipdb.set_trace()
-
+            log.error("Controller not found")
 
     def terminateTraffic(self):
         # No need to terminate startFlow processes, since they are killed when
@@ -392,9 +458,11 @@ if __name__ == "__main__":
     if len(sys.argv) == 3 and sys.argv[2] == '--ip_alias':
         name = sys.argv[1]
         ip_alias = True
+
     elif len(sys.argv) == 2:
         name = sys.argv[1]
         ip_alias = False
+
     else:
         raise Exception("Wrong number of arguments")
 
