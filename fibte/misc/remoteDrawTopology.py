@@ -84,7 +84,6 @@ class RemoteDrawTopology(object):
             # Get all the elements to start
             self.receiveTopology()
             self.receivePosition()
-            import ipdb; ipdb.set_trace()
             while True:
                 msg = pickle.loads(recv_msg(conn))
                 queue.put(msg)
@@ -127,11 +126,13 @@ class RemoteDrawTopology(object):
             while not self.queue.empty():
                 link_loads = self.queue.get(timeout=ONEYEAR)
 
+            import ipdb; ipdb.set_trace()
+
             # weights = {x:y for x,y in link_loads.items() if all("sw" not in e for e in x)}
             weights = link_loads
             tt = time.time()
 
-            nx.draw_networkx_nodes(self.topology, ax=None, nodelist=self.switches, pos=self.pos, node_shape='o',
+            nx.draw_networkx_nodes(self.topology, ax=None, nodelist=self.hosts, pos=self.pos, node_shape='o',
                                    node_color='r')
             nx.draw_networkx_nodes(self.topology, ax=None, nodelist=self.routers, pos=self.pos, node_shape='s',
                                    node_color='b')
