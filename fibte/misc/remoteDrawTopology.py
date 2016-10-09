@@ -268,6 +268,11 @@ if __name__ == "__main__":
                         type=int,
                         default=8083)
 
+    parser.add_argument('--ip',
+                        help='Ip of the host',
+                        type=str,
+                        default="192.168.33.1")
+
     args = parser.parse_args()
 
-    RemoteDrawTopology(args.port, args.k).run()
+    RemoteDrawTopology(listeningIp=args.ip, listeningPort=args.port, k=args.k).run()
