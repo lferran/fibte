@@ -3,22 +3,14 @@
 import os
 import json
 import networkx as nx
-from ipaddress import ip_interface
-import subprocess
 import copy
-import matplotlib
 import ipaddress
-
-#matplotlib.use('Qt4Agg')
-
 import matplotlib.pyplot as plt
-#from lb.logger import log
-
-import logging
 import time
 
-from fibte import CFG
 from fibbingnode.misc.mininetlib.ipnet import TopologyDB
+
+from fibte import CFG
 
 tmp_files = CFG.get("DEFAULT", "tmp_files")
 db_topo = CFG.get("DEFAULT", "db_topo")
@@ -187,7 +179,6 @@ class NetworkGraph(object):
         pos = self.getFatTreePositions(k)
         nx.draw(g, arrows=False, width=1.5, pos=pos, node_shape='o', node_color='b')
         plt.show()
-
 
 class TopologyGraph(TopologyDB):
     def __init__(self, getIfindexes=True, interfaceToRouterName=False, *args,

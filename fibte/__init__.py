@@ -12,7 +12,9 @@ with open(os.path.join(RES,'config.cfg'),'r') as f:
 
 tmp_files = CFG.get("DEFAULT","tmp_files")
 db_topo = CFG.get("DEFAULT","db_topo")
-
+UDS_server_name = CFG.get("DEFAULT","controller_UDS_name")
+UDS_server_traceroute = CFG.get("DEFAULT", 'controller_UDS_traceroute')
+C1_cfg = CFG.get("DEFAULT", "C1_cfg")
 LINK_BANDWIDTH = float(CFG.get("DEFAULT","link_bandwidth"))
 
 MIN_MICE_SIZE = float(CFG.get("DEFAULT", "min_mice_size"))*LINK_BANDWIDTH
@@ -26,11 +28,11 @@ ELEPHANT_SIZE_RANGE = [MIN_ELEPHANT_SIZE, MAX_ELEPHANT_SIZE]
 MICE_SIZE_STEP = float(CFG.get("DEFAULT", "mice_size_step"))*LINK_BANDWIDTH
 ELEPHANT_SIZE_STEP = float(CFG.get("DEFAULT", "elephant_size_step"))*LINK_BANDWIDTH
 
-import inspect
-import fibte.trafficgen.flowServer
-flowServer_path = inspect.getsourcefile(fibte.trafficgen.flowServer)
+flowServer_path = pkgutil.get_loader("fibte.trafficgen.flowServer").filename
 iptables_path = pkgutil.get_loader("fibte.misc.iptables").filename
-
+ifDescrNamespace_path= pkgutil.get_loader("fibte.monitoring.ifDescrNamespace").filename
+counterCollector_path = pkgutil.get_loader("fibte.monitoring.collectCounters").filename
+getLoads_path = pkgutil.get_loader("fibte.monitoring.getLoads").filename
 
 import logging
 from fibte.logger import log

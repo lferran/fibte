@@ -22,7 +22,6 @@ from fibte.logger import log
 from fibte.misc.topology_graph import TopologyGraph
 from fibte import tmp_files, db_topo
 
-
 def time_func(function):
     def wrapper(*args,**kwargs):
         t = time.time()

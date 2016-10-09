@@ -1,26 +1,23 @@
 import argparse
-from fibbingnode import CFG
-
-import fibbingnode.misc.mininetlib as _lib
-from fibbingnode.misc.mininetlib.cli import FibbingCLI
-from fibbingnode.misc.mininetlib.ipnet import IPNet, TopologyDB
-from fibbingnode.misc.mininetlib.iptopo import IPTopo
-from fattree import FatTree, FatTreeOOB
-
-from fibbingnode.algorithms.southbound_interface import SouthboundManager
-from fibbingnode.algorithms.ospf_simple import OSPFSimple
-
-from mininet.clean import cleanup, sh
-from mininet.util import custom
-from mininet.link import TCIntf
-from fibte.misc.DCTCInterface import DCTCIntf
-import fibte.res.config as cfg
 import signal
 import subprocess
 
-from fibte import flowServer_path
+from mininet.clean import cleanup, sh
+from mininet.util import custom
 
+from fibbingnode import CFG
+from fibbingnode.misc.mininetlib.cli import FibbingCLI
+from fibbingnode.misc.mininetlib.ipnet import IPNet, TopologyDB
+from fibbingnode.misc.mininetlib.iptopo import IPTopo
+from fibbingnode.algorithms.southbound_interface import SouthboundManager
+from fibbingnode.algorithms.ospf_simple import OSPFSimple
+import fibbingnode.misc.mininetlib as _lib
+
+from fibte.fattree import FatTree, FatTreeOOB
+from fibte.misc.DCTCInterface import DCTCIntf
 from fibte.misc.ipalias import setup_alias
+import fibte.res.config as cfg
+from fibte import flowServer_path
 
 def signal_term_handler(signal, frame):
     import sys
@@ -119,10 +116,10 @@ def launch_network(k=4, bw=10, ip_alias=False):
     if ip_alias: command = flowServer_path + " {0} --ip_alias &"
     else: command = flowServer_path + " {0} &"
 
-    for h in net.hosts:
+    #for h in net.hosts:
         # Start flowServers
-        h.cmd(command.format(h.name))
-        print(h.name)
+        #h.cmd(command.format(h.name))
+        #print(h.name)
 
     if ip_alias == True:
         print('*** Setting up ip alias for elephant traffic - alias identifier: .222')

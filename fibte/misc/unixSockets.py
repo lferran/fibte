@@ -1,12 +1,10 @@
 import socket
 import os
 import errno
-#from logger import log
-#import logging
 import struct
 import threading
-
 from fibte import CFG
+
 tmp_files = CFG.get("DEFAULT","tmp_files")
 
 RECV_BUFFER_SIZE = 1024
@@ -100,7 +98,6 @@ class UnixServerTCP(object):
         self.sock.close()
         os.remove(self.server_address)
 
-
     def handleConnection(self, conn, queue):
         # Receives whole message, closes the connection
         # and puts it in a queue
@@ -108,10 +105,8 @@ class UnixServerTCP(object):
         conn.close()
         queue.put(message)
 
-
     def receive(self):
         return self.sock.recv(RECV_BUFFER_SIZE)
-
 
     def run(self):
         while True:
@@ -133,11 +128,9 @@ class UnixClient(object):
 
         #log.setLevel(logging.INFO)
 
-
     def close(self):
 
         self.sock.close()
-
 
     def send(self,m,server):
         try:
@@ -159,7 +152,6 @@ class UnixServer(object):
                 raise
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
         self.sock.bind(self.server_address)
-
 
     def close(self):
         self.sock.close()

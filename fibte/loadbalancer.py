@@ -1,8 +1,5 @@
 #!/usr/bin/python
 
-from fibbingnode.algorithms.southbound_interface import SouthboundManager
-from fibbingnode import CFG as CFG_fib
-from fibte.misc.unixSockets import UnixServerTCP, UnixServer, UnixClient
 import threading
 import os
 import time
@@ -11,31 +8,27 @@ import argparse
 import json
 import networkx as nx
 from threading import Thread
-from fibte.misc.dc_graph import DCGraph
 import ipaddress as ip
-from fibte.trafficgen.flow import Base
 import random
 import subprocess
 import abc
 import Queue
 import numpy as np
 
+from fibbingnode.algorithms.southbound_interface import SouthboundManager
+from fibbingnode import CFG as CFG_fib
+
+from fibte.misc.unixSockets import UnixServerTCP, UnixServer, UnixClient
+from fibte.trafficgen.flow import Base
+from fibte.misc.dc_graph import DCGraph
 from fibte.loadbalancer.mice_estimator import MiceEstimatorThread
 from fibte.misc.topology_graph import TopologyGraph
 from fibte.monitoring.getLoads import GetLoads
-from fibte import tmp_files, db_topo, LINK_BANDWIDTH, CFG
+from fibte import tmp_files, db_topo, LINK_BANDWIDTH, UDS_server_name, UDS_server_traceroute, C1_cfg, getLoads_path
 
 # Threading event to signal that the initial topo graph
 # has been received from the Fibbing controller
 HAS_INITIAL_GRAPH = threading.Event()
-
-UDS_server_name = CFG.get("DEFAULT","controller_UDS_name")
-UDS_server_traceroute = CFG.get("DEFAULT", 'controller_UDS_traceroute')
-C1_cfg = CFG.get("DEFAULT", "C1_cfg")
-
-import inspect
-import fibte.monitoring.getLoads
-getLoads_path = inspect.getsourcefile(fibte.monitoring.getLoads)
 
 import logging
 from fibte.logger import log
@@ -178,14 +171,14 @@ class LBController(object):
 
         # FOR DEBUGGING MICE ETIMATOR THREAD --------------------------------------------------------->
         # Crete sample
-        #sample_path = [self.r_0_e0, self.r_0_a0, self.r_c0, self.r_3_a0, self.r_3_e0]
+        sample_path = [self.r_0_e0, self.r_0_a0]#, self.r_c0, self.r_3_a0, self.r_3_e0]
         # Add it in the capacities graph
-        #for (u,v) in self.get_links_from_path(sample_path):
-        #    self.mice_caps_graph[u][v]['elephants_capacity'] = LINK_BANDWIDTH
+        for (u,v) in self.get_links_from_path(sample_path):
+            self.mice_caps_graph[u][v]['elephants_capacity'] = LINK_BANDWIDTH
 
-        #order = {'type':'adapt_mice_to_elephants', 'path': sample_path}
-        #self.miceEstimatorThread.orders_queue.put(order)
-        #time.sleep(3000)
+        order = {'type':'adapt_mice_to_elephants', 'path': sample_path}
+        self.miceEstimatorThread.orders_queue.put(order)
+        time.sleep(3000)
 
     @staticmethod
     def get_links_from_path(path):
