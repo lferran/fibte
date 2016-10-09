@@ -36,12 +36,11 @@ def recvall(sock, n):
 
 
 class RemoteDrawTopology(object):
-    def __init__(self, listeningPort=5010, k=4):
-
+    def __init__(self, listeningIp="192.168.33.1", listeningPort=5010, k=4):
+        self.listeningIp = listeningIp
         self.listeningPort = listeningPort
 
         self.k = k
-
         self.queue = Queue.Queue(0)
         self.sock = ""
         self.connections = []
@@ -76,18 +75,17 @@ class RemoteDrawTopology(object):
 
     def serverStart(self):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        import ipdb; ipdb.set_trace()
-        self.sock.bind(("127.0.0.1", self.listeningPort))
+        self.sock.bind((self.listeningIp, self.listeningPort))
         self.sock.listen(5)
 
         while True:
             self.conn, addr = self.sock.accept()
             self.connections.append(self.conn)
             print "received a connection"
-            import ipdb; ipdb.set_trace()
-            p = threading.Thread(target=self.handleConnection, args=(self.conn, self.queue,))
-            p.setDaemon(True)
-            p.start()
+            self.handleConnection(self.conn, self.queue)
+#            p = threading.Thread(target=self.handleConnection, args=(self.conn, self.queue,))
+#            p.setDaemon(True)
+#            p.start()
 
     def handleConnection(self, conn, queue):
         try:
@@ -104,6 +102,7 @@ class RemoteDrawTopology(object):
 
         # waits for the topology to arrive
         self.topology = pickle.loads(recv_msg(self.conn))
+        import ipdb; ipdb.set_trace()
 
         self.routers = [x for x in self.topology.node if self.topology.node[x]['type'] == "router"]
         self.switches = [x for x in self.topology.node if self.topology.node[x]['type'] == "switch"]
@@ -254,7 +253,6 @@ class RemoteDrawTopology(object):
             plt.pause(0.0001)
             print time.time() - tt
 
-
 if __name__ == "__main__":
     import argparse
 
@@ -268,7 +266,7 @@ if __name__ == "__main__":
     parser.add_argument('-p', '--port',
                         help='Port at which the remoteDrow is listening',
                         type=int,
-                        default=5010 )
+                        default=8083)
 
     args = parser.parse_args()
 
