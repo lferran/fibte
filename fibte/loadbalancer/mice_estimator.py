@@ -60,10 +60,13 @@ class MiceEstimatorThread(threading.Thread):
         # Link load from which we consider congestion
         self.congestion_threshold = 0.95
 
+        self.load_router_names()
+
         # Set debug level
         log.setLevel(logging.DEBUG)
 
-
+    def load_router_names(self):
+        """FOR DEBUGGING PURPOSES ONLY"""
         self.r_0_e0 = self.caps_graph.get_router_from_position('edge', 0,0)
         self.r_0_e1 = self.caps_graph.get_router_from_position('edge', 1,0)
 
@@ -193,7 +196,6 @@ class MiceEstimatorThread(threading.Thread):
 
         return link_probs
 
-    @time_func
     def set_probabilities_unchanged(self, prefix):
         """Iterate prob graph and set changed = False for specific prefix"""
         action = [data[prefix].update({'changed': False}) for (u, v, data) in self.link_probs_graph.edges_iter(data=True) if prefix in data]
@@ -395,10 +397,11 @@ class MiceEstimatorThread(threading.Thread):
     def adapt_mice_dags(self, path):
         """Compute new link probabilities for the path where an elephant flow
         has been added or deleted, and generates new random DAGs"""
+
         # Modify the probabilities of the links in the path
         self.modify_path_probabilities(path)
 
-        # Generate new random DAGs
+        # Generate new random DAGs for destinations that probabilities changed
         new_dags = {}
         for prefix in self.prefixes:
             link_probabilities = self.get_link_probabilities(prefix)
@@ -406,27 +409,26 @@ class MiceEstimatorThread(threading.Thread):
                 # Generate new random dag
                 new_random_dag = self.choose_random_dag(prefix, link_probabilities)
 
-                edges = self.print_stuff(new_random_dag.edges())
-                edge_edges = [(a,b) for (a,b) in edges if 'e' in a or 'e' in b]
-                core_edges = [(a,b) for (a,b) in edges if 'c' in a or 'c' in b]
+                #edges = self.print_stuff(new_random_dag.edges())
+                #edge_edges = [(a,b) for (a,b) in edges if 'e' in a or 'e' in b]
+                #core_edges = [(a,b) for (a,b) in edges if 'c' in a or 'c' in b]
 
-                log.info("Edge-Aggr links")
-                for i, edge in enumerate(edge_edges):
-                    log.info("{0}:\t{1}".format(i, edge))
+                #log.info("Edge-Aggr links")
+                #for i, edge in enumerate(edge_edges):
+                #    log.info("{0}:\t{1}".format(i, edge))
 
-                log.info("Aggr-Core links")
-                for i, edge in enumerate(core_edges):
-                    log.info("{0}:\t{1}".format(i, edge))
+                #log.info("Aggr-Core links")
+                #for i, edge in enumerate(core_edges):
+                #    log.info("{0}:\t{1}".format(i, edge))
 
                 new_dags[prefix] = new_random_dag
                 self.dags[prefix]['dag'] = new_random_dag
 
-                import ipdb; ipdb.set_trace()
                 # Reset changed = False
                 self.set_probabilities_unchanged(prefix)
 
         # Apply new dags all at same time
-        #xself.sbmanager.add_dag_requirements_from(new_dags)
+        self.sbmanager.add_dag_requirements_from(new_dags)
 
     def run(self):
         while True:

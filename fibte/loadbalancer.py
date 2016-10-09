@@ -171,7 +171,11 @@ class LBController(object):
 
         # FOR DEBUGGING MICE ETIMATOR THREAD --------------------------------------------------------->
         # Crete sample
-        sample_path = [self.r_0_e0, self.r_0_a0]#, self.r_c0, self.r_3_a0, self.r_3_e0]
+        sample_path = [self.r_0_e0, self.r_0_a0, self.r_c0, self.r_3_a0, self.r_3_e0]
+        #sample_path = [self.r_3_a0, self.r_3_e0]
+        #sample_path = [self.r_c3, self.r_3_a1]
+        #sample_path = [self.r_0_a0, self.r_c0]
+        #sample_path = [self.r_0_e0, self.r_0_a0]
         # Add it in the capacities graph
         for (u,v) in self.get_links_from_path(sample_path):
             self.mice_caps_graph[u][v]['elephants_capacity'] = LINK_BANDWIDTH

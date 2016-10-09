@@ -595,8 +595,13 @@ class DCGraph(DCDiGraph):
                     #log.debug("Used links: {0}".format(self.print_stuff(links_used)))
 
             # Add downlinks
-            add_downlinks1 = [dc_dag.add_downlink(cr, ar) for cr in self.core_routers_iter() for ar in self.get_lower_tier(cr) if self.get_router_pod(ar) == prefix_pod and dc_dag.is_valid_downlink(cr, ar)]
-            add_downlinks2 = [dc_dag.add_downlink(ar, er) for ar in self.aggregation_routers_iter() for er in self.get_lower_tier(ar) if self.get_router_pod(ar) == prefix_pod and dc_dag.is_valid_downlink(ar, er)]
+            # core -> aggr
+            add_downlinks1 = [dc_dag.add_downlink(cr, ar) for cr in self.core_routers_iter() for ar in self.get_lower_tier(cr)
+                              if self.get_router_pod(ar) == prefix_pod and dc_dag.is_valid_downlink(cr, ar)]
+
+            # aggr -> edge
+            add_downlinks2 = [dc_dag.add_downlink(ar, er) for ar in self.aggregation_routers_iter() for er in self.get_lower_tier(ar)
+                              if self.get_router_pod(ar) == prefix_pod and dc_dag.is_valid_downlink(ar, er)]
 
             # Add links to gateway
             dc_dag.add_destination_prefix(prefix, gateway)
