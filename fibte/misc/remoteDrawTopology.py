@@ -55,7 +55,6 @@ class RemoteDrawTopology(object):
     def run(self):
 
         try:
-
             # start thread that checks connectivity to the server
             #p = threading.Thread(target=self.handlesTunnelConnection, args=())
             #p.setDaemon(True)
@@ -72,11 +71,12 @@ class RemoteDrawTopology(object):
             self.plotsGraph(self.k)
 
         except KeyboardInterrupt:
-
-            self.clearReverseSSH()
+            pass
+            #self.clearReverseSSH()
 
     def serverStart(self):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        import ipdb; ipdb.set_trace()
         self.sock.bind(("127.0.0.1", self.listeningPort))
         self.sock.listen(5)
 
@@ -90,7 +90,6 @@ class RemoteDrawTopology(object):
             p.start()
 
     def handleConnection(self, conn, queue):
-
         try:
             # get all the elements to start
             self.receiveTopology()
@@ -98,7 +97,6 @@ class RemoteDrawTopology(object):
             while True:
                 msg = pickle.loads(recv_msg(conn))
                 queue.put(msg)
-
         except:
             conn.close()
 
@@ -111,17 +109,14 @@ class RemoteDrawTopology(object):
         self.switches = [x for x in self.topology.node if self.topology.node[x]['type'] == "switch"]
 
     def receivePosition(self):
-
         self.pos = pickle.loads(recv_msg(self.conn))
 
     def reverseSSH(self):
-
         subprocess.call("ssh -p 3006 -f -N -R {0}:localhost:{0} edgar@pisco.ethz.ch".format(self.listeningPort),
                         shell=True)
         # subprocess.call("ssh -p 2222 -f -N -R {0}:localhost:{0} edgar@pc-10326.ethz.ch".format(self.listeningPort),shell=True)
 
     def clearReverseSSH(self):
-
         subprocess.call("kill -9 $(ps aux | grep 'ssh -p 3006 -f -N -R " + "{0}' ".format(
             self.listeningPort) + "| awk '{print $2}')", shell=True)
         # then we will clear the port number
@@ -166,9 +161,7 @@ class RemoteDrawTopology(object):
             return False
 
     def plotsGraph(self, k):
-
         plt.ion()
-
         fig, ax = plt.subplots()
 
         # g = self.topology
