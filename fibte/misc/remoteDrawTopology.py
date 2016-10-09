@@ -84,6 +84,7 @@ class RemoteDrawTopology(object):
             # Get all the elements to start
             self.receiveTopology()
             self.receivePosition()
+            import ipdb; ipdb.set_trace()
             while True:
                 msg = pickle.loads(recv_msg(conn))
                 queue.put(msg)
@@ -95,14 +96,11 @@ class RemoteDrawTopology(object):
         """"""
         # waits for the topology to arrive
         self.topology = pickle.loads(recv_msg(self.conn))
-
-        import ipdb; ipdb.set_trace()
         self.routers = [x for x in self.topology.node if self.topology.node[x]['type'] == "router"]
         self.hosts = [x for x in self.topology.node if self.topology.node[x]['type'] == "host"]
 
     def receivePosition(self):
         """Receive the position of the nodes in the graph"""
-        import ipdb; ipdb.set_trace()
         self.pos = pickle.loads(recv_msg(self.conn))
 
     def plotsGraph(self, k):
