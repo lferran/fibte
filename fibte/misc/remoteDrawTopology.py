@@ -52,112 +52,58 @@ class RemoteDrawTopology(object):
         self.serverProcess.start()
 
     def run(self):
-
         try:
-            # start thread that checks connectivity to the server
-            #p = threading.Thread(target=self.handlesTunnelConnection, args=())
-            #p.setDaemon(True)
-            #p.start()
-
-            # start a thread that handles TCP connections
+            # Start a thread that handles TCP connections
             self.serverThread()
 
-            # self.clearReverseSSH()
-            # self.reverseSSH()
-            # self.serverStart()
-            # self.receiveTopology()
-            print "STARTED SERVER now i start GRAPH"
+            # Start to plot the graph
             self.plotsGraph(self.k)
 
         except KeyboardInterrupt:
+            print("KeyboardInterrupt: plot stopped")
             pass
-            #self.clearReverseSSH()
 
     def serverStart(self):
+        """"""
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.bind((self.listeningIp, self.listeningPort))
         self.sock.listen(5)
-
+        print("Server lisitening for connections on: {0}:{1}".format(self.listeningIp, self.listeningPort))
         while True:
             self.conn, addr = self.sock.accept()
             self.connections.append(self.conn)
-            print "received a connection"
+            print("A new connection received")
+
             self.handleConnection(self.conn, self.queue)
-#            p = threading.Thread(target=self.handleConnection, args=(self.conn, self.queue,))
-#            p.setDaemon(True)
-#            p.start()
+            #p = threading.Thread(target=self.handleConnection, args=(self.conn, self.queue,))
+            #p.setDaemon(True)
+            #p.start()
 
     def handleConnection(self, conn, queue):
         try:
-            # get all the elements to start
+            # Get all the elements to start
             self.receiveTopology()
             self.receivePosition()
             while True:
                 msg = pickle.loads(recv_msg(conn))
                 queue.put(msg)
         except:
+            print("Error on handling connection {0}".format(conn))
             conn.close()
 
     def receiveTopology(self):
-
+        """"""
         # waits for the topology to arrive
         self.topology = pickle.loads(recv_msg(self.conn))
-        import ipdb; ipdb.set_trace()
 
+        import ipdb; ipdb.set_trace()
         self.routers = [x for x in self.topology.node if self.topology.node[x]['type'] == "router"]
-        self.switches = [x for x in self.topology.node if self.topology.node[x]['type'] == "switch"]
+        self.hosts = [x for x in self.topology.node if self.topology.node[x]['type'] == "host"]
 
     def receivePosition(self):
+        """Receive the position of the nodes in the graph"""
+        import ipdb; ipdb.set_trace()
         self.pos = pickle.loads(recv_msg(self.conn))
-
-    def reverseSSH(self):
-        subprocess.call("ssh -p 3006 -f -N -R {0}:localhost:{0} edgar@pisco.ethz.ch".format(self.listeningPort),
-                        shell=True)
-        # subprocess.call("ssh -p 2222 -f -N -R {0}:localhost:{0} edgar@pc-10326.ethz.ch".format(self.listeningPort),shell=True)
-
-    def clearReverseSSH(self):
-        subprocess.call("kill -9 $(ps aux | grep 'ssh -p 3006 -f -N -R " + "{0}' ".format(
-            self.listeningPort) + "| awk '{print $2}')", shell=True)
-        # then we will clear the port number
-        subprocess.call("ssh -p 3006 edgar@pisco.ethz.ch  'sudo fuser -k -n tcp {0}'".format(self.listeningPort),
-                        shell=True)
-
-        for connection in self.connections:
-            connection.close()
-        self.connections = []
-        # subprocess.call("kill -9 $(ps aux | grep 'ssh -p 2222 -f -N' | awk '{print $2}')",shell=True)
-
-    def handlesTunnelConnection(self):
-
-        # first think to do is to clear the server
-        #self.clearReverseSSH()
-        #self.reverseSSH()
-        connected = True
-
-        while True:
-            time.sleep(2)
-            status = self.checkInternetOn("pisco.ethz.ch")
-            print status, "current port:", self.listeningPort
-            if status:
-                if not (connected):
-                    connected = True
-                    self.clearReverseSSH()
-                    time.sleep(5)
-                    self.reverseSSH()
-
-            else:
-                if connected:
-                    print "disconnecting"
-                    connected = False
-
-                    #
-
-    def checkInternetOn(self, serverName="pisco.ethz.ch"):
-        response = os.system("ping -c 1 " + serverName + " > /dev/null")
-        if response == 0:
-            return True
-        else:
-            return False
 
     def plotsGraph(self, k):
         plt.ion()
@@ -165,12 +111,10 @@ class RemoteDrawTopology(object):
 
         # g = self.topology
 
-
         # routers = [x for x in g.node if g.node[x]['type']=="router"]
         # switches = [x for x in g.node if g.node[x]['type']=="switch"]
 
         # print routers
-
 
         # nx.draw(g,arrows = False,width=1.5,pos=pos, node_shape = 'o', node_color = 'b')
         plt.tight_layout()
@@ -180,8 +124,7 @@ class RemoteDrawTopology(object):
 
         ONEYEAR = 365 * 24 * 3600
         while True:
-            # read new link_loads
-
+            # Read new link_loads
             link_loads = self.queue.get(timeout=ONEYEAR)
             while not self.queue.empty():
                 link_loads = self.queue.get(timeout=ONEYEAR)
@@ -225,33 +168,6 @@ class RemoteDrawTopology(object):
 
             print "drawing", time.time() - tt
             time.sleep(1e-6)  # unnecessary, but useful
-
-    def plotsGraph2(self, k):
-
-        plt.ion()
-        fig = plt.figure()
-        g = self.topology
-        pos = pickle.loads(recv_msg(self.conn))
-
-        nx.draw(g, arrows=False, width=1.5, pos=pos, node_shape='o', node_color='b')
-
-        plt.show(block=False)
-
-        while True:
-            # read new link_loads
-            link_loads = pickle.loads(recv_msg(self.conn))
-
-            weights = {x: y for x, y in link_loads.items() if all("sw" not in e for e in x)}
-            tt = time.time()
-            nx.draw_networkx_edge_labels(g, pos, edge_labels=weights, label_pos=0.15, font_size=8, font_color="k",
-                                         font_weight='bold')
-            print time.time() - tt
-
-            # plt.show()
-            # fig.canvas.update()
-            # fig.canvas.flush_events()
-            plt.pause(0.0001)
-            print time.time() - tt
 
 if __name__ == "__main__":
     import argparse
