@@ -63,6 +63,36 @@ class MiceEstimatorThread(threading.Thread):
         # Set debug level
         log.setLevel(logging.DEBUG)
 
+
+        self.r_0_e0 = self.caps_graph.get_router_from_position('edge', 0,0)
+        self.r_0_e1 = self.caps_graph.get_router_from_position('edge', 1,0)
+
+        self.r_1_e0 = self.caps_graph.get_router_from_position('edge', 0,1)
+        self.r_1_e1 = self.caps_graph.get_router_from_position('edge', 1,1)
+
+        self.r_2_e0 = self.caps_graph.get_router_from_position('edge', 0,2)
+        self.r_2_e1 = self.caps_graph.get_router_from_position('edge', 1,2)
+
+        self.r_3_e0 = self.caps_graph.get_router_from_position('edge', 0,3)
+        self.r_3_e1 = self.caps_graph.get_router_from_position('edge', 1,3)
+
+        self.r_0_a0 = self.caps_graph.get_router_from_position('aggregation', 0, 0)
+        self.r_0_a1 = self.caps_graph.get_router_from_position('aggregation', 1, 0)
+
+        self.r_1_a0 = self.caps_graph.get_router_from_position('aggregation', 0, 1)
+        self.r_1_a1 = self.caps_graph.get_router_from_position('aggregation', 1, 1)
+
+        self.r_2_a0 = self.caps_graph.get_router_from_position('aggregation', 0, 2)
+        self.r_2_a1 = self.caps_graph.get_router_from_position('aggregation', 1, 2)
+
+        self.r_3_a0 = self.caps_graph.get_router_from_position('aggregation', 0, 3)
+        self.r_3_a1 = self.caps_graph.get_router_from_position('aggregation', 1, 3)
+
+        self.r_c0 = self.caps_graph.get_router_from_position('core', 0)
+        self.r_c1 = self.caps_graph.get_router_from_position('core', 1)
+        self.r_c2 = self.caps_graph.get_router_from_position('core', 2)
+        self.r_c3 = self.caps_graph.get_router_from_position('core', 3)
+
     def print_stuff(self, stuff):
         return self.caps_graph.print_stuff(stuff)
 
@@ -77,12 +107,12 @@ class MiceEstimatorThread(threading.Thread):
             return 1
         else:
             # Compute average of dependant links
-            dependant_probability = 0
+            dependant_probability = 0.0
             for edge in slinks:
                 [src, dst] = edge
                 dependant_probability += self.link_probs_graph[src][dst][dst_prefix]['final_probability']
 
-            return dependant_probability/len(slinks)
+            return dependant_probability/float(len(slinks))
 
     def compute_final_probability(self, link, dst_prefix):
         """Takes a link, fetches its own current probability (from mice rate passing),
@@ -375,14 +405,28 @@ class MiceEstimatorThread(threading.Thread):
             if self.link_probabilities_changed(link_probabilities):
                 # Generate new random dag
                 new_random_dag = self.choose_random_dag(prefix, link_probabilities)
+
+                edges = self.print_stuff(new_random_dag.edges())
+                edge_edges = [(a,b) for (a,b) in edges if 'e' in a or 'e' in b]
+                core_edges = [(a,b) for (a,b) in edges if 'c' in a or 'c' in b]
+
+                log.info("Edge-Aggr links")
+                for i, edge in enumerate(edge_edges):
+                    log.info("{0}:\t{1}".format(i, edge))
+
+                log.info("Aggr-Core links")
+                for i, edge in enumerate(core_edges):
+                    log.info("{0}:\t{1}".format(i, edge))
+
                 new_dags[prefix] = new_random_dag
                 self.dags[prefix]['dag'] = new_random_dag
 
+                import ipdb; ipdb.set_trace()
                 # Reset changed = False
                 self.set_probabilities_unchanged(prefix)
 
         # Apply new dags all at same time
-        self.sbmanager.add_dag_requirements_from(new_dags)
+        #xself.sbmanager.add_dag_requirements_from(new_dags)
 
     def run(self):
         while True:
