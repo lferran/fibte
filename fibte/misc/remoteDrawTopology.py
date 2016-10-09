@@ -182,7 +182,7 @@ if __name__ == "__main__":
     parser.add_argument('-p', '--port',
                         help='Port at which the remoteDrow is listening',
                         type=int,
-                        default=8083)
+                        default=5010)
 
     parser.add_argument('--ip',
                         help='Ip of the host',
