@@ -37,8 +37,6 @@ class DCDiGraph(DiGraph):
         # Prefixes are not stored as nodes
         self.prefixes = {}
 
-        #log.setLevel(logging.NOTSET)
-
     def is_correct_prefix(self, prefix):
         """Checks validity of prefix wrt specified prefix type"""
         return (ipalias.get_ip_prefix_type(prefix) == self.prefix_type)
