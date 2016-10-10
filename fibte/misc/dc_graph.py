@@ -8,6 +8,7 @@ import fibte.misc.ipalias as ipalias
 from fibte import log
 import logging
 import time
+import matplotlib.pyplot as plt
 
 """
 Module that defines the DCGraph object, which extends the nx.DiGraph class
@@ -482,6 +483,9 @@ class DCGraph(DCDiGraph):
             # Add links to gateway
             dc_dag.add_destination_prefix(prefix, gateway)
 
+            # Set initial edges
+            dc_dag._set_initial_edges()
+
             # Return the DCDag object
             return dc_dag
         else:
@@ -629,6 +633,11 @@ class DCDag(DCDiGraph):
         if 'dc_graph' in kwargs and isinstance(kwargs['dc_graph'], DCGraph):
             # If dc_graph is given, add all routers of dc_graph
             self._build_from_dc_graph(kwargs['dc_graph'])
+
+        self.plot_positions = self.get_plot_positions()
+
+    def _set_initial_edges(self):
+        self.all_edges = self.edges()[:]
 
     def _get_printable(self):
         """
@@ -1022,14 +1031,94 @@ class DCDag(DCDiGraph):
             import ipdb; ipdb.set_trace()
             raise ValueError("Sink can't send flows to himself!")
 
+    def get_plot_positions(self):
+        positions = {}
+
+        edgeStartPos = (1, 1)
+        aggStartPos = (1, 2)
+
+        # allocate edge routers
+        for pod in range(self.k):
+            for sub_pod in range(self.k / 2):
+                # Get router first
+                router = self.get_router_from_position('edge', index=sub_pod, pod=pod)
+                positions[router] = edgeStartPos
+                edgeStartPos = (edgeStartPos[0] + 3, edgeStartPos[1])
+            edgeStartPos = (edgeStartPos[0] + 2.5, edgeStartPos[1])
+
+        # allocate aggregation routers
+        for pod in range(self.k):
+            for sub_pod in range(self.k / 2):
+                router = self.get_router_from_position('aggregation', index=sub_pod, pod=pod)
+                positions[router] = aggStartPos
+                aggStartPos = (aggStartPos[0] + 3, aggStartPos[1])
+            aggStartPos = (aggStartPos[0] + 2.5, aggStartPos[1])
+
+        totalDistance = positions[self.get_router_from_position('edge', self.k/2 - 1, self.k - 1)][0] - 1
+        step = totalDistance / float(((self.k / 2) ** 2))
+
+        coreStartPos = (1 + step / 2, 3.5)
+
+        # Allocate core routers
+        for pod in range((self.k / 2) ** 2):
+            router = self.get_router_from_position('core', index=pod)
+            positions[router] = (coreStartPos[0], coreStartPos[1])
+            coreStartPos = (coreStartPos[0] + step, coreStartPos[1])
+
+        # Compute sink position
+        dst = self.dst_prefix
+        gw = self.get_sink_id()
+        gwPos = positions[gw]
+        positions[dst] = (gwPos[0], gwPos[1] - 1)
+
+        return positions
+
+    def plot(self):
+        """Plots himself!"""
+        routers = [n for n in self.nodes_iter()]
+
+        # Draw nodes and edges
+        nx.draw_networkx_nodes(self, ax=None, nodelist=[self.dst_prefix], pos=self.plot_positions, node_shape='o',
+                               node_color='r')
+        nx.draw_networkx_nodes(self, ax=None, nodelist=routers, pos=self.plot_positions, node_shape='s',
+                               node_color='b')
+
+        # Draw edges of current dag
+        nx.draw_networkx_edges(self, ax=None, width=1.5, pos=self.plot_positions)
+
+        # Compute edges that are not currently used
+        all_edges = set(self.all_edges)
+        current_edges = set(self.edges())
+        not_used = list(all_edges - current_edges)
+
+        # Generate new graph copy of self, but with non-used edges
+        g = DiGraph()
+        g.add_nodes_from(self.nodes())
+        g.add_edge(self.sink_id, self.dst_prefix)
+
+        # Draw first sink-> dst edge
+        nx.draw_networkx_edges(g, ax=None, width=1.5, pos=self.plot_positions)
+
+        g.remove_edge(self.sink_id, self.dst_prefix)
+        g.add_edges_from(not_used)
+
+        # Draw edges of current dag
+        nx.draw_networkx_edges(g, ax=None, width=1.0, arrows=False, edge_color='grey', style='dashdot', pos=self.plot_positions)
+
+        plt.show()
+
+
 if __name__ == "__main__":
-    import ipdb; ipdb.set_trace()
-    dcGraph = DCGraph(k=4, prefix_type='secondary')
+    dcGraph = DCGraph(k=4, prefix_type='primary')
     prefixes = dcGraph.destination_prefixes()
     prefix = prefixes[random.randint(3, 7)]
     dcDag = dcGraph.get_default_ospf_dag(prefix=prefix)
-    dcDag._printable_nodes()
-    import ipdb; ipdb.set_trace()
+    dcDag.modify_random_uplinks(0)
+    dcDag.modify_random_uplinks(1)
+    dcDag.modify_random_uplinks(2)
+    dcDag.modify_random_uplinks(3)
+    dcDag.plot()
+
 
     #source = dcDag.get_destination_prefix_gateway(prefix)
     #srcPod = dcDag.get_router_pod(source)
