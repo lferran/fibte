@@ -74,10 +74,9 @@ class RemoteDrawTopology(object):
             self.connections.append(self.conn)
             print("A new connection received")
 
-            self.handleConnection(self.conn, self.queue)
-            #p = threading.Thread(target=self.handleConnection, args=(self.conn, self.queue,))
-            #p.setDaemon(True)
-            #p.start()
+            p = threading.Thread(target=self.handleConnection, args=(self.conn, self.queue,))
+            p.setDaemon(True)
+            p.start()
 
     def handleConnection(self, conn, queue):
         try:
@@ -106,13 +105,6 @@ class RemoteDrawTopology(object):
         plt.ion()
         fig, ax = plt.subplots()
 
-        # g = self.topology
-
-        # routers = [x for x in g.node if g.node[x]['type']=="router"]
-        # switches = [x for x in g.node if g.node[x]['type']=="switch"]
-
-        # print routers
-
         # nx.draw(g,arrows = False,width=1.5,pos=pos, node_shape = 'o', node_color = 'b')
         plt.tight_layout()
         plt.show(block=False)
@@ -132,12 +124,14 @@ class RemoteDrawTopology(object):
             weights = link_loads
             tt = time.time()
 
+            # Draw nodes and edges
             nx.draw_networkx_nodes(self.topology, ax=None, nodelist=self.hosts, pos=self.pos, node_shape='o',
                                    node_color='r')
             nx.draw_networkx_nodes(self.topology, ax=None, nodelist=self.routers, pos=self.pos, node_shape='s',
                                    node_color='b')
             nx.draw_networkx_edges(self.topology, ax=None, width=1.5, pos=self.pos)
 
+            # Draw edges labels - colored depending on current load
             red_labels = {x: y for x, y in link_loads.items() if y > 0.75}
             orange_lables = {x: y for x, y in link_loads.items() if y >= 0.5 and y < 0.75}
             green_labels = {x: y for x, y in link_loads.items() if y >= 0.25 and y < 0.5}

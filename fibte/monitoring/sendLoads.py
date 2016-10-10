@@ -20,8 +20,7 @@ def send_msg(sock, msg):
     sock.sendall(msg)
 
 class SendLoads(object):
-    def __init__(self, remotePort=5010, k=4, time_interval=1):
-
+    def __init__(self, remoteIp="192.168.33.1", remotePort=5010, k=4, time_interval=1):
         # Load topology
         self.topology = TopologyGraph(getIfindexes=True, db=os.path.join(tmp_files, db_topo))
         self.routers = self.topology.getRouters()
@@ -30,43 +29,41 @@ class SendLoads(object):
         self.link_loads = self.topology.getEdgesUsageDictionary()
 
         self.queue = Queue.Queue(maxsize=0)
+        self.remoteIp = remoteIp
         self.remotePort = remotePort
         self.k = k
 
         self.time_interval = time_interval
 
     def startGrahpThread(self):
-
         graphPlotterThread = Thread(target=self.topology.networkGraph.plotGraphAnimated, args=(self.k, self.queue))
         graphPlotterThread.setDaemon(True)
         graphPlotterThread.start()
 
     def sendLoadToThread(self):
-
+        """"""
         self.queue.put(self.link_loads)
 
     def connectToRemoteServer(self):
-        import ipdb; ipdb.set_trace()
         self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.s.connect(("127.0.0.1", self.remotePort))
+        self.s.connect((self.remoteIp, self.remotePort))
 
     def readLoads(self):
-
+        """Read the loads going through router interfaces"""
         loads = {}
-
-        for router in self.routers:
-
+        for router in self.routers.keys():
             try:
                 with open("{1}load_{0}".format(router, tmp_files)) as f:
                     loads[router] = json.load(f)
-
             except IOError, e:
-                print e
+                print("IOError: {0}".format(e))
+                import ipdb; ipdb.set_trace()
+            except:
+                print("Error reading load file")
 
         return loads
 
     def readBridgesLoads(self):
-
         loads = {}
         try:
             with open("{1}load_{0}".format("root", tmp_files)) as f:
@@ -77,7 +74,6 @@ class SendLoads(object):
         return loads
 
     def readLoadsEdges(self):
-
         loads = {}
         for router in self.edgeRouters:
             try:
@@ -89,10 +85,8 @@ class SendLoads(object):
         return loads
 
     def getInOutTraffic(self):
-
-        in_traffic = sum({x: y for x, y in self.link_loads.items() if "sw" in x[0]}.values())
-        out_traffic = sum({x: y for x, y in self.link_loads.items() if "sw" in x[1]}.values())
-
+        in_traffic = sum({x: y for x, y in self.link_loads.items() if "h" in x[0]}.values())
+        out_traffic = sum({x: y for x, y in self.link_loads.items() if "h" in x[1]}.values())
         return in_traffic, out_traffic
 
     def getParsedLoads(self):
@@ -112,81 +106,58 @@ class SendLoads(object):
         return self.link_loads
 
     def handShake(self):
+        # Connect to socket first
         self.connectToRemoteServer()
 
-        # send toplogy
-        send_msg(self.s, pickle.dumps(self.topology.networkGraph.keepRoutersAndNormalSwitches()))
+        # Send the topology
+        send_msg(self.s, pickle.dumps(self.topology.networkGraph))
 
-        # send positions
-        send_msg(self.s, pickle.dumps(self.topology.networkGraph.getFatTreePositions(self.k, True)))
+        # Send node positions in the graph
+        send_msg(self.s, pickle.dumps(self.topology.getFatTreePositions(self.k)))
 
     def run(self):
-
-        #
-        # graphPlotterThread = Thread(target=self.topology.networkGraph.plotGraphAnimated,args=(4,self.queue))
-        # graphPlotterThread.setDaemon(True)
-        # graphPlotterThread.start()
-
-        # connect to the remote server that will plot data
+        # Connect to the remote server that will plot data
         try:
             self.handShake()
-
         except Exception, e:
-
-            print e
+            print "Exception on handshake:  {0}".format(e)
+            import ipdb; ipdb.set_trace()
+        else:
+            print("Connected to remote plot server")
 
         start_time = time.time()
         i = 1
         interval = self.time_interval
 
-        # file for the in/out traffic
-        in_out_file = open("in_out_file_{0}.txt".format(self.k), "w")
-
         while True:
-
             time.sleep(max(0, start_time + i * interval - time.time()))
             i += 1
             now = time.time()
 
-            # loads self.link_loads
+            # Loads self.link_loads
             try:
-                self.getParsedLoads_with_bridges()
+                self.getParsedLoads()
             except:
                 continue
-            # print {x: y for x, y in self.link_loads.items() if any("sw" in e for e in x)}
 
-            # send link_load
+            # Send link_load
             try:
                 send_msg(self.s, pickle.dumps(self.link_loads))
 
                 in_traffic, out_traffic = self.getInOutTraffic()
                 print "in traffic:", in_traffic, "out traffic: ", out_traffic
 
-                # save in_out traffic
-                in_out_file.write("{0},{1}\n".format(in_traffic, out_traffic))
-                in_out_file.flush()
-                # save link loads
-
-                # with open("getLoads_linkLoad_{0}".format(self.k),"w") as f:
-                #     pickle.dump(self.link_loads,f)
-
             except socket.error:
-                # try to reconnect again
+                # Try to reconnect again
                 try:
                     print "Trying to connect with the server again"
-                    self.connectToRemoteServer()
-                    # send toplogy
-                    send_msg(self.s, pickle.dumps(self.topology.networkGraph.keepRoutersAndNormalSwitches()))
-                    # send positions
-                    send_msg(self.s, pickle.dumps(self.topology.networkGraph.getFatTreePositions(self.k, True)))
+                    self.handShake()
                 except:
                     pass
+
             except Exception, e:
                 print e
                 break
-
-            # queue new loads
-            # self.sendLoadToThread()
 
             print time.time() - now
 
@@ -201,10 +172,15 @@ if __name__ == "__main__":
                         type=int,
                         default=4)
 
-    parser.add_argument('-p', '--remote_port',
+    parser.add_argument('-p', '--port',
                         help='Port at which the remoteDrow is listening',
                         type=int,
-                        default=5010 )
+                        default=5010)
+
+    parser.add_argument('--ip',
+                        help='Ip of the remote host',
+                        type=str,
+                        default="192.168.33.1")
 
     parser.add_argument('-i', '--time_interval',
                         help='Polling interval',
@@ -213,4 +189,4 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    sendLoads = SendLoads(args.remote_port, args.k, time_interval=args.time_interval).run()
+    sendLoads = SendLoads(args.ip, args.port, args.k, time_interval=args.time_interval).run()

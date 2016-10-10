@@ -95,58 +95,6 @@ class NetworkGraph(object):
             if self.graph.node[node]['type'] == type:
                 self.setNodeColor(node, color)
 
-    def getFatTreePositions(self, k=4, normalSwitches=True):
-        # assume that g is already the reduced graph
-        # assume that we named the nodes using the fat tree "structure"
-        # assume that we know k
-
-        positions = {}
-
-        normalSwitchStartPos = (1, 0)
-        edgeStartPos = (1, 1)
-        aggStartPos = (1, 2)
-
-        normalSwitchBaseName = "sw_{0}_{1}"
-        edgeBaseName = "r_{0}_e{1}"
-        aggBaseName = "r_{0}_a{1}"
-        coreBaseName = "r_c{0}"
-
-        if normalSwitches:
-            # allocate switches
-            for pod in range(k):
-                for sub_pod in range(k / 2):
-                    positions[normalSwitchBaseName.format(pod, sub_pod)] = normalSwitchStartPos
-                    normalSwitchStartPos = (normalSwitchStartPos[0] + 3, normalSwitchStartPos[1])
-                normalSwitchStartPos = (normalSwitchStartPos[0] + 2.5, normalSwitchStartPos[1])
-
-        # allocate edge routers
-        for pod in range(k):
-            for sub_pod in range(k / 2):
-                positions[edgeBaseName.format(pod, sub_pod)] = edgeStartPos
-                edgeStartPos = (edgeStartPos[0] + 3, edgeStartPos[1])
-            edgeStartPos = (edgeStartPos[0] + 2.5, edgeStartPos[1])
-
-        # allocate aggregation routers
-        for pod in range(k):
-            for sub_pod in range(k / 2):
-                positions[aggBaseName.format(pod, sub_pod)] = aggStartPos
-                aggStartPos = (aggStartPos[0] + 3, aggStartPos[1])
-            aggStartPos = (aggStartPos[0] + 2.5, aggStartPos[1])
-
-        totalDistance = positions[edgeBaseName.format(k - 1, (k / 2) - 1)][0] - 1
-        print totalDistance
-        step = totalDistance / float(((k / 2) ** 2))
-        print step
-        coreStartPos = (1 + step / 2, 3.5)
-
-        # allocate core routers
-        for pod in range((k / 2) ** 2):
-            positions[coreBaseName.format(pod)] = (coreStartPos[0], coreStartPos[1])
-            coreStartPos = (coreStartPos[0] + step, coreStartPos[1])
-
-        print positions
-        return positions
-
     def setEdgeWeights(self, link_loads={}):
         pass
 
@@ -181,9 +129,7 @@ class NetworkGraph(object):
         plt.show()
 
 class TopologyGraph(TopologyDB):
-    def __init__(self, getIfindexes=True, interfaceToRouterName=False, *args,
-                 **kwargs):
-
+    def __init__(self, getIfindexes=True, interfaceToRouterName=False, *args, **kwargs):
         super(TopologyGraph, self).__init__(*args, **kwargs)
 
         # Router interface name to interface index mappings
@@ -261,6 +207,9 @@ class TopologyGraph(TopologyDB):
 
                 elif 'r_c' in node:
                     g.node[node]['core'] = True
+
+                elif 'h_' in node:
+                    g.node[node]['host'] = True
 
                 for itf in self.network[node]:
                     # we should ignore routerid, type.
@@ -682,8 +631,8 @@ class TopologyGraph(TopologyDB):
                      if routersUsage[router]["out"].has_key(intfData["ifname"]):
 
                          link_loads[(router, self.network[router][intfData["ifname"]]["connectedTo"])] = round(routersUsage[router]["out"][intfData['ifname']], 3)
-                         # however if it connect to a switch (sw, or ovs) we get the input value of that ifindex and compute the link cost (switch/ovs -> router)
 
+                         # however if it connect to a switch (sw, or ovs) we get the input value of that ifindex and compute the link cost (switch/ovs -> router)
                          if self.network[self.network[router][intfData["ifname"]]["connectedTo"]]["type"] == "switch":
                              link_loads[(self.network[router][intfData["ifname"]]["connectedTo"], router)] = round(routersUsage[router]["in"][intfData['ifname']], 3)
                 elif isAggr:
@@ -695,7 +644,9 @@ class TopologyGraph(TopologyDB):
                 else:
                     # Only for countersDev class
                     if routersUsage[router]["out"].has_key(intfData["ifname"]):
-                        link_loads[(router, self.network[router][intfData["ifname"]]["connectedTo"])] = round(routersUsage[router]["out"][intfData['ifname']], 3)
+                        # Avoid adding fibbing controller here
+                        if self.network[router][intfData["ifname"]]['connectedTo'] != 'c1':
+                            link_loads[(router, self.network[router][intfData["ifname"]]["connectedTo"])] = round(routersUsage[router]["out"][intfData['ifname']], 3)
 
     def isEdgeRouter(self, router):
         """
@@ -764,6 +715,61 @@ class TopologyGraph(TopologyDB):
 
     def areNeighbors(self, node1, node2):
         return node1 in self.networkGraph.adj[node2]
+
+    def getFatTreePositions(self, k=4):
+        # assume that g is already the reduced graph
+        # assume that we named the nodes using the fat tree "structure"
+        # assume that we know k
+
+        positions = {}
+
+        hostStartPos = (1, 0)
+        edgeStartPos = (1, 1)
+        aggStartPos = (1, 2)
+
+        hostBaseName = "h_{0}_{1}"
+        edgeBaseName = "r_{0}_e{1}"
+        aggBaseName = "r_{0}_a{1}"
+        coreBaseName = "r_c{0}"
+
+        # allocate hosts
+        for pod in range(k):
+            for sub_pod in range(k / 2):
+                for hn in range(k / 2):
+                    positions[hostBaseName.format(pod, sub_pod+hn)] = hostStartPos
+                    hostStartPos = (hostStartPos[0] + 3, hostStartPos[1])
+
+            hostStartPos = (hostStartPos[0] + 2.5, hostStartPos[1])
+
+        # allocate edge routers
+        for pod in range(k):
+            for sub_pod in range(k / 2):
+                positions[edgeBaseName.format(pod, sub_pod)] = edgeStartPos
+                edgeStartPos = (edgeStartPos[0] + 3, edgeStartPos[1])
+            edgeStartPos = (edgeStartPos[0] + 2.5, edgeStartPos[1])
+
+        # allocate aggregation routers
+        for pod in range(k):
+            for sub_pod in range(k / 2):
+                positions[aggBaseName.format(pod, sub_pod)] = aggStartPos
+                aggStartPos = (aggStartPos[0] + 3, aggStartPos[1])
+            aggStartPos = (aggStartPos[0] + 2.5, aggStartPos[1])
+
+        totalDistance = positions[edgeBaseName.format(k - 1, (k / 2) - 1)][0] - 1
+        print totalDistance
+        step = totalDistance / float(((k / 2) ** 2))
+        print step
+        coreStartPos = (1 + step / 2, 3.5)
+
+        # allocate core routers
+        for pod in range((k / 2) ** 2):
+            positions[coreBaseName.format(pod)] = (coreStartPos[0], coreStartPos[1])
+            coreStartPos = (coreStartPos[0] + step, coreStartPos[1])
+
+#        print positions
+        return positions
+
+
 
 if __name__ == "__main__":
     topology = TopologyGraph(getIfindexes=True, db=os.path.join(tmp_files, db_topo))
