@@ -109,7 +109,7 @@ class RemoteDrawTopology(object):
         plt.tight_layout()
         plt.show(block=False)
 
-        plt.xlim([0, 120])
+        plt.xlim([0, k*10])
 
         ONEYEAR = 365 * 24 * 3600
         while True:
@@ -157,7 +157,8 @@ class RemoteDrawTopology(object):
             ax.cla()
             plt.show(block=False)
             plt.tight_layout()
-            plt.xlim([-5, 117])
+            #plt.xlim([-5, 117])
+            plt.xlim([-5, k*10])
 
             print "drawing", time.time() - tt
             time.sleep(1e-6)  # unnecessary, but useful
