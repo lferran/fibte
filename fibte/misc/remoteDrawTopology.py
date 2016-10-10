@@ -106,7 +106,7 @@ class RemoteDrawTopology(object):
         fig, ax = plt.subplots()
 
         # nx.draw(g,arrows = False,width=1.5,pos=pos, node_shape = 'o', node_color = 'b')
-        plt.tight_layout()
+        plt.tigunht_layout()
         plt.show(block=False)
 
         plt.xlim([0, 120])
@@ -118,11 +118,11 @@ class RemoteDrawTopology(object):
             while not self.queue.empty():
                 link_loads = self.queue.get(timeout=ONEYEAR)
 
-            import ipdb; ipdb.set_trace()
-
             # weights = {x:y for x,y in link_loads.items() if all("sw" not in e for e in x)}
             weights = link_loads
             tt = time.time()
+
+#            import ipdb; ipdb.set_trace()
 
             # Draw nodes and edges
             nx.draw_networkx_nodes(self.topology, ax=None, nodelist=self.hosts, pos=self.pos, node_shape='o',
