@@ -91,7 +91,7 @@ class LBController(object):
         HAS_INITIAL_GRAPH.wait()
         log.info("Initial graph received from SouthBound Controller")
 
-        # Remoeve old DAG requirements
+        # Remove old DAG requirements
         self.sbmanager.remove_all_dag_requirements()
 
         # Load the topology
@@ -108,7 +108,7 @@ class LBController(object):
         self.dc_graph_elep = DCGraph(k=self.k, prefix_type='primary')
         self.dc_graph_mice = DCGraph(k=self.k, prefix_type='secondary')
 
-        # Here we store the current dags for each destiantion
+        # Here we store the current DAGs for each destiantion
         self.current_elephant_dags = self._createInitialElephantDags()
         self.current_mice_dags = self._createInitialMiceDags()
 
@@ -120,7 +120,7 @@ class LBController(object):
         self.ospf_prefixes = self._fillInitialOSPFPrefixes()
 
         # Flow to path allocations
-        self.flow_to_paths = {}
+        self.flows_to_paths = {}
         self.new_flow_allocations_queue = Queue.Queue()
 
         # Start getLoads thread that reads from counters
@@ -169,24 +169,15 @@ class LBController(object):
             self.r_c2 = self.topology.getRouterId('r_c2')
             self.r_c3 = self.topology.getRouterId('r_c3')
 
-        # FOR DEBUGGING MICE ETIMATOR THREAD --------------------------------------------------------->
-        # Crete sample
-        sample_path = [self.r_0_e0, self.r_0_a0, self.r_c0, self.r_3_a0, self.r_3_e0]
-        #sample_path = [self.r_3_a0, self.r_3_e0]
-        #sample_path = [self.r_c3, self.r_3_a1]
-        #sample_path = [self.r_0_a0, self.r_c0]
-        #sample_path = [self.r_0_e0, self.r_0_a0]
-        # Add it in the capacities graph
-        for (u,v) in self.get_links_from_path(sample_path):
-            self.mice_caps_graph[u][v]['elephants_capacity'] = LINK_BANDWIDTH
-
-        order = {'type':'adapt_mice_to_elephants', 'path': sample_path}
-        self.miceEstimatorThread.orders_queue.put(order)
-        time.sleep(3000)
-
     @staticmethod
     def get_links_from_path(path):
         return zip(path[:-1], path[1:])
+
+    @staticmethod
+    def flowToKey(flow):
+        """Fastest way to create a dictionary key out of a dictionary
+        """
+        return tuple(sorted(flow.items()))
 
     def _startMiceEstimatorThread(self):
         # Here we store the estimated mice levels
@@ -223,18 +214,17 @@ class LBController(object):
             # Get a new route
             try:
                 # Reads from the
-                traceroutes = json.loads(self.traceroute_server.sock.recv(65536))
+                traceroute_data = json.loads(self.traceroute_server.sock.recv(65536))
 
                 # Extract flow
-                flow = traceroutes['flow']
+                flow = traceroute_data['flow']
 
-                # Gets the traceroute information convers it from ip to names and adds the information in the cache memory
-                route = self.ipPath_to_namePath(traceroutes)
+                # Extracts route from traceroute data
+                route_names = self.ipPath_to_namePath(traceroute_data)
+                route_ips = [self.topology.getRouterId(rname) for rname in route_names]
 
                 # Put result into queue
-                self.new_flow_allocations_queue.put({'flow': flow, 'route': route})
-
-                import ipdb; ipdb.set_trace()
+                self.new_flow_allocations_queue.put({'flow': flow, 'route_names': route_names, 'route_ips': route_ips})
 
             except Exception:
                 import traceback
@@ -249,12 +239,16 @@ class LBController(object):
                 continue
         return ValueError("{0} is neither a private ip, router id or interface ip".format(addr))
 
-    def ipPath_to_namePath(self, event):
-        #Used to convert traceroute information from ip to router names so we get the path
-        route = event['route']
-        elephant_flow = event["flow"]
+    def ipPath_to_namePath(self, traceroute_data):
+        """
+        Converts traceroute information from ip to router names so we get the path
+        """
+
+        route = traceroute_data['route']
+        elephant_flow = traceroute_data["flow"]
 
         path = []
+
         notComplete=False
         if route:
             srcRouter = self.get_router_name(route[0])
@@ -265,23 +259,24 @@ class LBController(object):
             dst_gw_ok = self.topology.getGatewayRouter(self.topology.getHostName(elephant_flow["dst"])) == dstRouter
             if src_gw_ok and dst_gw_ok:
                 for i, router_ip in enumerate(route):
-
-                    # Get router
-                    router = self.get_router_name(router_ip)
+                    # Get router name
+                    router_name = self.get_router_name(router_ip)
 
                     # If we are not the first or last router
-                    if not(router == srcRouter):
+                    if not(router_name == srcRouter):
                         # Check connectivity
-                        if self.topology.areNeighbors(router, path[-1]):
-                            path.append(router)
+                        if self.topology.areNeighbors(router_name, path[-1]):
+                            path.append(router_name)
                         else:
                             notComplete = True
                             break
+
                     # Source router
                     else:
-                        path.append(router)
+                        path.append(router_name)
+
+                # Return path if complete
                 if not(notComplete):
-                    #log.debug("Found a new path using traceroute: {0} for header: {1}".format(path, elephant_flow))
                     return path
         return None
 
@@ -517,7 +512,7 @@ class LBController(object):
         log.debug("Flow FINISHED: {0}".format(flow))
 
     @time_func
-    def getFlowPath(self, flow):
+    def tracerouteFlow(self, flow):
         """Starts a traceroute"""
         # Get prefix from host ip
         src_name = self.topology.getHostName(flow['src'])
@@ -526,7 +521,13 @@ class LBController(object):
         self.traceroute_client.send(json.dumps(flow), src_name)
 
         try:
-            return self.new_flow_allocations_queue.get(timeout=2)
+            route_data = self.new_flow_allocations_queue.get(timeout=2)
+            if route_data['flow'] == flow:
+                return route_data
+            else:
+                log.error("Traceroute gave data from another flow")
+                import ipdb; ipdb.set_trace()
+                return None
         except:
             return None
 
@@ -536,7 +537,6 @@ class LBController(object):
          :param event:
          :return:
          """
-        log.info("Event to handle received: {0}".format(event["type"]))
         if event["type"] == 'startingFlow':
             flow = event['flow']
             self.allocateFlow(flow)
@@ -545,9 +545,6 @@ class LBController(object):
             flow = event['flow']
             self.deallocateFlow(flow)
 
-        elif event['type'] == 'miceEstimation':
-            estimation_data = event['data']
-            self.handleMiceEstimation(estimation_data)
         else:
             log.error("Unknown event type: {0}".format(event['type']))
             import ipdb; ipdb.set_trace()
@@ -559,6 +556,7 @@ class LBController(object):
         src_mice_px = ipalias.get_secondary_ip_prefix(src_px)
         if src_mice_px in self.hosts_notified:
             log.error("Notification catch up!")
+            self.notified_flows = []
 
         self.hosts_notified.append(src_mice_px)
 
@@ -614,17 +612,6 @@ class LBController(object):
 
             # Sleep remaining interval time
             time.sleep(max(0, t - (time.time() - now)))
-
-    def _getStats(self, t):
-        """
-        Function that periodically updates the statistics gathered
-        from the edge of the network.
-
-        :param t:
-        :return:
-        """
-        # TODO
-        pass
 
     def exitGracefully(self):
         """
@@ -688,6 +675,79 @@ class LBController(object):
 class ECMPController(LBController):
     def __init__(self, doBalance=True, k=4):
         super(ECMPController, self).__init__(doBalance=doBalance, k=k, algorithm='ecmp')
+
+    def allocateFlow(self, flow):
+        """Just checks the default route for this path,
+        and uptades a flow->path data structure"""
+        super(ECMPController, self).allocateFlow(flow)
+
+        # Get default path of flow
+        traceroute_result = self.tracerouteFlow(flow)
+        if traceroute_result['route_ips']:
+            path = traceroute_result['route_ips']
+            path_names = traceroute_result['route_names']
+        else:
+            log.error("Couldn't finde default path for flow")
+            return
+
+        # Get key from flow
+        fkey = self.flowToKey(flow)
+        
+        # Update flows_to_paths
+        if fkey not in self.flows_to_paths.keys():
+            self.flows_to_paths[fkey] = path
+        else:
+            log.error("Weird: flow was already in the data structure {0}".format(flow))
+
+        # Update mice estimator structure
+        with self.mice_caps_lock:
+            for (u,v) in self.get_links_from_path(path):
+                self.mice_caps_graph[u][v]['elephants_capacity'] += flow['size']
+
+        # Log a bit
+        [src, dst] = [self.topology.getHostName(a) for a in [flow['src'], flow['dst']]]
+        log.info("Flow {0} -> {1} ({2}) allocated to {3}".format(src, dst, flow['size'], path_names))
+
+    def deallocateFlow(self, flow):
+        """Removes flow from flow->path data structure"""
+        super(ECMPController, self).deallocateFlow(flow)
+
+         # Get key from flow
+        fkey = self.flowToKey(flow)
+
+        # Update data structures
+        if fkey in self.flows_to_paths.keys():
+            path = self.flows_to_paths.pop(fkey)
+        else:
+            log.error("Weird: flow wasn't in data structure")
+            path = None
+
+        # Update mice estimator structure
+        with self.mice_caps_lock:
+            for (u,v) in self.get_links_from_path(path):
+                self.mice_caps_graph[u][v]['elephants_capacity'] -= flow['size']
+
+        # Log a bit
+        path_names = [self.topology.getRouterId(r) for r in path]
+        [src, dst] = [self.topology.getHostName(a) for a in [flow['src'], flow['dst']]]
+        log.info("Flow {0} -> {1} ({2}) allocated to {3}".format(src, dst, flow['size'], path_names))
+        log.info("Flow {0} removed from {1}".format(flow, path))
+
+
+
+class DAGShifterController(LBController):
+    def __init__(self, doBalance=True, k=4, congestion_threshold=0.9):
+        super(DAGShifterController, self).__init__(doBalance=doBalance, k=k, algorithm='dag-shifter')
+
+        # We consider congested a link more than threshold % of its capacity
+        self.capacity_threshold = congestion_threshold
+
+
+
+
+
+
+## Past controllers ######################################################################################
 
 class RandomUplinksController(LBController):
     def __init__(self, doBalance=True, k=4):
@@ -1122,11 +1182,6 @@ class CoreChooserController(LBController):
     def allocateFlow(self, flow):
         # Check for which cores I can send (must remove those
         # ones that would collide with already ongoing flows
-
-        path = self.getFlowPath(flow)
-
-
-        import ipdb; ipdb.set_trace()
 
         src_gw = self.getGatewayRouter(flow['src'])
         src_gw_name = self.dc_graph_elep.get_router_name(src_gw)
