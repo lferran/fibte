@@ -106,7 +106,7 @@ class RemoteDrawTopology(object):
         fig, ax = plt.subplots()
 
         # nx.draw(g,arrows = False,width=1.5,pos=pos, node_shape = 'o', node_color = 'b')
-        plt.tigunht_layout()
+        plt.tight_layout()
         plt.show(block=False)
 
         plt.xlim([0, 120])
