@@ -723,7 +723,7 @@ class TopologyGraph(TopologyDB):
 
         positions = {}
 
-        hostStartPos = (1, 0)
+        hostStartPos = (0, 0)
         edgeStartPos = (1, 1)
         aggStartPos = (1, 2)
 
@@ -734,11 +734,22 @@ class TopologyGraph(TopologyDB):
 
         # allocate hosts
         for pod in range(k):
-            for sub_pod in range(k / 2):
-                for hn in range(k / 2):
-                    positions[hostBaseName.format(pod, sub_pod+hn)] = hostStartPos
-                    hostStartPos = (hostStartPos[0] + 3, hostStartPos[1])
+            host_index = 0
+            for edge_index in range(k / 2):
+                for sub_edge_index in range(k / 2):
+                    # Compute current host index
+                    positions[hostBaseName.format(pod, host_index)] = hostStartPos
 
+                    # Compute next host position
+                    hostStartPos = (hostStartPos[0] + 2, hostStartPos[1])
+
+                    # Increase host index
+                    host_index += 1
+
+                # Set position of first host in next edge
+                hostStartPos = (hostStartPos[0] - 1, hostStartPos[1])
+
+            # Set position of first host in next pod
             hostStartPos = (hostStartPos[0] + 2.5, hostStartPos[1])
 
         # allocate edge routers

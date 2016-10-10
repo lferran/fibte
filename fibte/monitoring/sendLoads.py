@@ -121,7 +121,6 @@ class SendLoads(object):
             self.handShake()
         except Exception, e:
             print "Exception on handshake:  {0}".format(e)
-            import ipdb; ipdb.set_trace()
         else:
             print("Connected to remote plot server")
 
