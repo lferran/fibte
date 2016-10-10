@@ -1,6 +1,5 @@
 from fibte.misc.dc_graph import DCGraph, DCDag
 import numpy as np
-import scipy.stats as stats
 from fibte import  LINK_BANDWIDTH
 import threading
 import random
@@ -252,11 +251,11 @@ class MiceEstimatorThread(threading.Thread):
         return any([data['changed'] == True for ((u, v), data) in link_probs.iteritems()])
 
     @time_func
-    def modify_dags(self, caps_graph):
+    def avoid_most_congested_links(self, caps_graph):
         """
-        Adapts mice traffic to capacities left by elephant flows
-        :return:
+        Modifies mice dags such that the most congested links are avoided
         """
+
         # Accumulate here the links with higher congestion probability
         congested_links = []
         for (u, v, data) in self.propagated_mice_levels.edges_iter(data=True):
@@ -409,18 +408,6 @@ class MiceEstimatorThread(threading.Thread):
                 # Generate new random dag
                 new_random_dag = self.choose_random_dag(prefix, link_probabilities)
 
-                #edges = self.print_stuff(new_random_dag.edges())
-                #edge_edges = [(a,b) for (a,b) in edges if 'e' in a or 'e' in b]
-                #core_edges = [(a,b) for (a,b) in edges if 'c' in a or 'c' in b]
-
-                #log.info("Edge-Aggr links")
-                #for i, edge in enumerate(edge_edges):
-                #    log.info("{0}:\t{1}".format(i, edge))
-
-                #log.info("Aggr-Core links")
-                #for i, edge in enumerate(core_edges):
-                #    log.info("{0}:\t{1}".format(i, edge))
-
                 new_dags[prefix] = new_random_dag
                 self.dags[prefix]['dag'] = new_random_dag
 
@@ -439,32 +426,35 @@ class MiceEstimatorThread(threading.Thread):
 
             # Checked received order
             order_type = order['type']
-            if order_type == 'compute_congestion_probability':
-                tcp = self.totalCongestionProbability(threshold=order['threshold'])
-                self.results_queue.put(tcp)
 
-            elif order_type == 'propagate_new_distributions':
+            if order_type == 'compute_mice_congestion_probability':
                 # Create copy of dc_graph first
                 with self.caps_lock:
                     caps_graph = self.caps_graph.copy()
 
-                # Take new samples based on new distributions
-                self.takePropagationSamples()
-
-                # Compute congestion probability on propagated mice levels
+                # Compute it
                 congProb = self.totalCongestionProbability(caps_graph, threshold=self.congestion_threshold)
 
+                # Return result to main thread
+                self.results_queue.put(congProb)
+
+                # Log a bit
                 log.info("Mice congestion probability: {0} \t --threshold = {1}".format(congProb, self.max_mice_cong_prob))
 
                 # If congestion is over the threshold
                 if congProb >= self.max_mice_cong_prob:
-                    log.info("Modifying mice dags...")
-                    self.modify_dags(caps_graph)
+                    log.info("Modifying mice DAGs to avoid most congested links...")
+                    self.avoid_most_congested_links(caps_graph)
+                # TODO: Increase probabilities of not-loaded paths such that they are also chosen
+
+            elif order_type == 'propagate_new_distributions':
+                # Take new samples based on new distributions
+                self.takePropagationSamples()
 
             elif order_type == 'adapt_mice_to_elephants':
+                # Extract path first
                 flow_path = order['path']
-                self.adapt_mice_dags(flow_path)
-                import ipdb; ipdb.set_trace()
+                self.adapt_mice_dags(path=flow_path)
 
             elif order_type == 'terminate':
                 log.info("Self-shutting down...")
