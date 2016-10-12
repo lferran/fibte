@@ -141,8 +141,8 @@ def launch_network(k=4, bw=10, ip_alias=False):
     # Topology
     #topo = TestTopo1()
     #topo = TestTopo2()
-    topo = TestTopo3()
-    #topo = FatTree(k=k, sflow=False, ovs_switches=False)
+    #topo = TestTopo3()
+    topo = FatTree(k=k, sflow=False, ovs_switches=False)
 
     # Interfaces
     intf = custom(DCTCIntf, bw=bw)

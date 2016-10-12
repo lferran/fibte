@@ -16,7 +16,10 @@ if __name__ == '__main__':
                         default = False)
 
     args = parser.parse_args()
-    hosts = args.hosts.split(',')
+    if args.hosts:
+        hosts = args.hosts.split(',')
+    else:
+        hosts = []
 
     print('*** Start Flow Servers and Learning Servers')
     topology = TopologyGraph(getIfindexes=False, db=os.path.join(tmp_files,db_topo))

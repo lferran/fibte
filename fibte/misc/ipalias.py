@@ -18,7 +18,7 @@ def setup_alias(host):
 
     command = "ifconfig {0}:0 {1} netmask 255.255.255.0".format(hintf, alias_ip)
 
-    print ("{0} ({1})\t miceIP: {2}\t elephIP: {3}".format(host.name, str(hintf), host.IP() ,alias_ip))
+    print ("{0} ({1})\t primary ip: {2}\t secondary ip: {3}".format(host.name, str(hintf), host.IP(), alias_ip))
 
     # Run command
     host.cmd(command)
