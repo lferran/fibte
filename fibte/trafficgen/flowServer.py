@@ -130,7 +130,7 @@ class FlowServer(object):
         route_info = {'flow': flow, 'route': []}
 
         # If flowServer hasn't received initial data
-        if not self.own_pod_destinations:
+        if not self.own_pod_hosts:
             # Compute slow version of traceroute
             hops = 6
 
@@ -139,7 +139,7 @@ class FlowServer(object):
             traceroute_type = 'slow'
 
         else:
-            if flow['dst'] in self.own_pod_destinations:
+            if flow['dst'] in self.own_pod_hosts:
                 hops = 2
             else:
                 hops = 3
@@ -189,7 +189,7 @@ class FlowServer(object):
                 log.info("{0}: list of own pod hosts received: {1}".format(self.name, own_pods_hosts))
                 continue
 
-            else:
+            elif command['type'] == 'flow':
                 # Extract flow
                 flow = command['data']
 
@@ -199,6 +199,9 @@ class FlowServer(object):
 
                 # thread.setDaemon(True)
                 thread.start()
+
+            else:
+                continue
 
     def setStartTime(self, starttime):
         if time.time() < starttime:

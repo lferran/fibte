@@ -249,14 +249,25 @@ class LBController(object):
                 flow = traceroute_data['flow']
 
                 # Extracts the router traceroute data
-                router_name = self.get_router_name(traceroute_data['route'])
+                route = traceroute_data['route']
 
-                # Convert it to ip
-                router_ip = self.topology.getRouterId(router_name)
+                # traceroute fast is used
+                if len(route) == 1:
+                    router_name = self.get_router_name(route[0])
 
-                # Compute whole path
-                path = self.computeCompletePath(flow=flow, router=router_ip)
+                    # Convert it to ip
+                    router_ip = self.topology.getRouterId(router_name)
 
+                    # Compute whole path
+                    path = self.computeCompletePath(flow=flow, router=router_ip)
+
+                # complete traceroute is used
+                else:
+                    # Extracts route from traceroute data
+                    route_names = self.ipPath_to_namePath(traceroute_data)
+                    path = [self.topology.getRouterId(rname) for rname in route_names]
+
+                # Add flow->path allocation
                 if not self.isOngoingFlow(flow):
                     # Add flow to path
                     self.addFlowToPath(flow, path)
@@ -287,8 +298,9 @@ class LBController(object):
         dst_gw = self.getGatewayRouter(dst_px)
 
         # Compute path
-        complete_path = nx.shortest_path(self.dc_graph_elep, src_gw, dst_gw)
-        import ipdb; ipdb.set_trace()
+        src_to_core = nx.shortest_path(self.dc_graph_elep, src_gw, router)
+        core_to_dst = nx.shortest_path(self.dc_graph_elep, router, dst_gw)
+        complete_path = src_to_core + core_to_dst[1:]
         return complete_path
 
     def isInterPodFlow(self, flow):
@@ -623,9 +635,15 @@ class LBController(object):
             for (u, v) in self.get_links_from_path(path):
                 self.mice_caps_graph[u][v]['elephants_capacity'] += flow['size']
 
+        # Log a bit
+        src_n = self.topology.getHostName(flow['src'])
+        dst_n = self.topology.getHostName(flow['dst'])
+        size_n = self.base.setSizeToStr(flow['size'])
+        path_n = [self.topology.getRouterName(r) for r in path]
+        log.info("Flow({0}->{1}: {2}) added to path ({3})".format(src_n, dst_n, size_n, ' -> '.join(path_n)))
+
     def updateFlowPath(self, flow, new_path):
         """Updates path from an already existing flow"""
-
         # Get key from flow
         fkey = self.flowToKey(flow)
 
@@ -672,6 +690,14 @@ class LBController(object):
             for (u, v) in self.get_links_from_path(new_path):
                 self.mice_caps_graph[u][v]['elephants_capacity'] += flow['size']
 
+        # Log a bit
+        src_n = self.topology.getHostName(flow['src'])
+        dst_n = self.topology.getHostName(flow['dst'])
+        size_n = self.base.setSizeToStr(flow['size'])
+        new_path_n = [self.topology.getRouterName(r) for r in new_path]
+        old_path_n = [self.topology.getRouterName(r) for r in old_path]
+        log.info("Flow({0}->{1}: {2}) changed path from ({3}) to ({4})".format(src_n, dst_n, size_n, ' -> '.join(old_path_n), ' -> '.join(new_path_n)))
+
     def delFlowFromPath(self, flow):
         """Removes an ongoing flow from path"""
 
@@ -703,6 +729,13 @@ class LBController(object):
             for (u, v) in self.get_links_from_path(path):
                 self.mice_caps_graph[u][v]['elephants_capacity'] -= flow['size']
 
+        # Log a bit
+        src_n = self.topology.getHostName(flow['src'])
+        dst_n = self.topology.getHostName(flow['dst'])
+        size_n = self.base.setSizeToStr(flow['size'])
+        path_n = [self.topology.getRouterId(r) for r in path]
+        log.info("Flow({0}->{1}: {2}) deleted from path ({3})".format(src_n, dst_n, size_n, ' -> '.join(path_n)))
+
         return path
 
     def allocateFlow(self, flow):
@@ -717,7 +750,6 @@ class LBController(object):
         """
         log.debug("Flow FINISHED: {0}".format(flow))
 
-    @time_func
     def tracerouteFlow(self, flow):
         """Starts a traceroute"""
         # Get prefix from host ip
@@ -880,23 +912,8 @@ class ECMPController(LBController):
         and uptades a flow->path data structure"""
         super(ECMPController, self).allocateFlow(flow)
 
-        import ipdb; ipdb.set_trace()
-
         # Get default path of flow
-        traceroute_result = self.tracerouteFlow(flow)
-        if traceroute_result['route_ips']:
-            path = traceroute_result['route_ips']
-            path_names = traceroute_result['route_names']
-        else:
-            log.error("Couldn't finde default path for flow")
-            return
-
-        # Add it to data structures
-        self.addFlowToPath(flow, path)
-
-        # Log a bit
-        [src, dst] = [self.topology.getHostName(a) for a in [flow['src'], flow['dst']]]
-        log.info("Flow {0} -> {1} ({2}) allocated to {3}".format(src, dst, flow['size'], path_names))
+        self.tracerouteFlow(flow)
 
     def deallocateFlow(self, flow):
         """Removes flow from flow->path data structure"""
