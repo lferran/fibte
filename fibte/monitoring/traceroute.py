@@ -281,7 +281,6 @@ def check_valid_icmp(src, dst, sport, dport, proto, data):
 
 def traceroute(src=None, dst=None, sport=5001, dport=5002, proto="udp", hops=5, **kwargs):
     """src and dst are supposed to be either ip addresses or interface names"""
-
     proto = proto.lower()
 
     #dest can be an ip or a domain name
@@ -400,6 +399,111 @@ def traceroute(src=None, dst=None, sport=5001, dport=5002, proto="udp", hops=5, 
             send_socket.close()
             recv_socket.close()
 
+def traceroute_fast(src=None, dst=None, sport=5001, dport=5002, proto="udp", hops=5, **kwargs):
+    """src and dst are supposed to be either ip addresses or interface names"""
+    proto = proto.lower()
+
+    #dest can be an ip or a domain name
+    dst =  socket.gethostbyname(dst)
+    icmp = socket.getprotobyname('icmp')
+    proto = socket.getprotobyname(proto)
+    src_port = sport
+    dst_port = dport
+    if src == None:
+        interface_name = getInterfaceName()
+        src = get_ip_address(interface_name)
+
+    recv_socket = socket.socket(socket.AF_INET, socket.SOCK_RAW, icmp)
+    recv_socket.settimeout(0.3)
+
+    #route we return with routers interface IPS, we have to use the topology to get from which router is that ip,
+    #since it could be from any of its interfaces
+    route = []
+
+    # UDP
+    if proto == socket.getprotobyname("udp"):
+        send_socket = socket.socket(socket.AF_INET, socket.SOCK_RAW, proto)
+        send_socket.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, 1)
+        #send_socket.bind(("",src_port))
+        try:
+            curr_addr = None
+            udp_h = udp_header(src_port,dst_port)
+            # Only one packet sent now
+            ttl = hops
+            packet = ip_header(src, dst, ttl, "udp") + udp_h
+            send_socket.sendto(packet, (dst, 0))
+            #send_socket.setsockopt(socket.SOL_IP, socket.IP_TTL, ttl)
+            #send_socket.sendto("", (dst, dst_port))
+
+            try:
+                #gets data until its a valid icmp packet
+                data, curr_addr = recv_socket.recvfrom(512)
+                #if timeout already we return
+                while not check_valid_icmp(src,dst,sport,dport,proto, data):
+                    #if timeout already we return
+                    data, curr_addr = recv_socket.recvfrom(512)
+
+            except socket.error:
+                traceback.print_exc()
+
+            # if we are here and curr_addr is none it means that a timeout occurred
+            if curr_addr:
+                curr_addr = curr_addr[0]
+                route.append(curr_addr)
+
+            else:
+                # Timeout!
+                return []
+
+            send_socket.close()
+            recv_socket.close()
+            return route
+
+        except Exception:
+            traceback.print_exc()
+            send_socket.close()
+            recv_socket.close()
+
+    # TCP
+    elif proto ==  socket.getprotobyname("tcp"):
+        send_socket = socket.socket(socket.AF_INET, socket.SOCK_RAW, proto)
+        # tell kernel not to put in headers, since we are providing it
+        send_socket.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, 1)
+        #src = get_ip_address("h_0_0-eth0")
+
+        try:
+            curr_addr = None
+            tcp_h = tcp_header(src,dst,src_port,dst_port)
+            ttl = hops
+            packet = ip_header(src, dst, ttl,"tcp") + tcp_h
+            send_socket.sendto(packet, (dst, 0))
+            try:
+                # gets data until its a valid icmp packet
+                data, curr_addr = recv_socket.recvfrom(512)
+                # if timeout already we return
+                while not check_valid_icmp(src, dst, sport, dport, proto, data):
+                    # if timeout already we return
+                    data, curr_addr = recv_socket.recvfrom(512)
+            except socket.error:
+                traceback.print_exc()
+
+            # if we are here and curr_addr is none it means that a timeout occurred
+            if curr_addr:
+                curr_addr = curr_addr[0]
+                route.append(curr_addr)
+            else:
+                # Timeout!
+                return []
+
+            send_socket.close()
+            recv_socket.close()
+            return route
+
+        finally:
+            send_socket.close()
+            recv_socket.close()
+
+
 if __name__ == '__main__':
     import ipdb; ipdb.set_trace()
-    route = traceroute(hops=5, src=None, dst='192.127.239.2')
+    route = traceroute_fast(hops=5, src=None, dst='192.127.239.2')

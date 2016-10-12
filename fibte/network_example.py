@@ -2,9 +2,6 @@ import argparse
 import signal
 import subprocess
 
-from mininet.clean import cleanup, sh
-from mininet.util import custom
-
 from fibbingnode import CFG
 from fibbingnode.misc.mininetlib.cli import FibbingCLI
 from fibbingnode.misc.mininetlib.ipnet import IPNet, TopologyDB
@@ -12,6 +9,10 @@ from fibbingnode.misc.mininetlib.iptopo import IPTopo
 from fibbingnode.algorithms.southbound_interface import SouthboundManager
 from fibbingnode.algorithms.ospf_simple import OSPFSimple
 import fibbingnode.misc.mininetlib as _lib
+
+from mininet.clean import cleanup, sh
+from mininet.util import custom
+from mininet.link import TCIntf
 
 from fibte.fattree import FatTree, FatTreeOOB
 from fibte.misc.DCTCInterface import DCTCIntf
@@ -82,6 +83,50 @@ class TestTopo2(IPTopo):
         c1 = self.addController(cfg.C1, cfg_path=cfg.C1_cfg)
         self.addLink(c1, r1, cost=1000)
 
+
+class TestTopo3(IPTopo):
+    def build(self, *args, **kwargs):
+        """
+        Used to test Fibbing in longer prefixes
+                     r6
+                      | \
+                      |  \______
+                 ___ r3___ ___  |
+               /             \  |
+        s1-- r1---------------r5 --d1
+              \____r2____r4__/
+        """
+        r1 = self.addRouter('r1')
+        r2 = self.addRouter('r2')
+        r3 = self.addRouter('r3')
+        r4 = self.addRouter('r4')
+        r5 = self.addRouter('r5')
+        r6 = self.addRouter('r6')
+
+        # Add links to make ECMP in the three paths
+        self.addLink(r1, r3, cost=3)
+        self.addLink(r3, r5, cost=3)
+
+        self.addLink(r1, r5, cost=6)
+
+        self.addLink(r1, r2, cost=2)
+        self.addLink(r2, r4, cost=2)
+        self.addLink(r4, r5, cost=2)
+
+        self.addLink(r6, r3, cost=2)
+        self.addLink(r6, r5, cost=2)
+
+        s1 = self.addHost('s1')
+        d1 = self.addHost('d1')
+
+        self.addLink(s1, r1)
+        self.addLink(d1, r5)
+
+        # Adding Fibbing Controller
+        c1 = self.addController(cfg.C1, cfg_path=cfg.C1_cfg)
+        self.addLink(c1, r1, cost=1000)
+
+
 def launch_network(k=4, bw=10, ip_alias=False):
     signal.signal(signal.SIGTERM, signal_term_handler)
 
@@ -96,10 +141,12 @@ def launch_network(k=4, bw=10, ip_alias=False):
     # Topology
     #topo = TestTopo1()
     #topo = TestTopo2()
-    topo = FatTree(k=k, sflow=False, ovs_switches=False)
+    topo = TestTopo3()
+    #topo = FatTree(k=k, sflow=False, ovs_switches=False)
 
     # Interfaces
     intf = custom(DCTCIntf, bw=bw)
+    #intf = custom(TCIntf, bw=bw)
 
     # Network
     net = IPNet(topo=topo, debug=_lib.DEBUG_FLAG, intf=intf)

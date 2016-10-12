@@ -14,7 +14,7 @@ import numpy as np
 from threading import Thread, Lock
 
 import flowGenerator
-from fibte.monitoring.traceroute import traceroute
+from fibte.monitoring.traceroute import traceroute, traceroute_fast
 from fibte.misc.unixSockets import UnixServerTCP, UnixClientTCP, UnixServer, UnixClient
 from fibte.trafficgen import isElephant
 from fibte.misc.ipalias import get_secondary_ip
@@ -70,11 +70,6 @@ class FlowServer(object):
         self.scheduler_process = Process(target=self.scheduler.run)
         self.scheduler_process.daemon = False
 
-        # Create the topology object
-        self.topology = TopologyGraph(getIfindexes=False,
-                                      interfaceToRouterName=False,
-                                      db=os.path.join(tmp_files, db_topo))
-
         # Weather secondary ip's are present at the host or not
         self.ip_alias = ip_alias
         log.debug("Is ip alias for elephants is active? {0}".format(str(self.ip_alias)))
@@ -91,14 +86,18 @@ class FlowServer(object):
 
         # Unix Client to communicate to controller
         self.client_to_controller = UnixClientTCP("/tmp/controllerServer")
+
+        # Traceroute sockets
         self.traceroute_server_name = "/tmp/tracerouteServer_{0}".format(name)
         self.traceroute_server = UnixServer("/tmp/tracerouteServer_{0}".format(name))
+        self.own_pod_destinations = []
+
         # Client that sends to the server -- we must have one like this in the controller
         self.traceroute_client = UnixClient(self.traceroute_server_name)
 
         # Start process that listens from server
-
         process = multiprocessing.Process(target=self.tracerouteServer)
+
         # process.daemon = True
         process.start()
 
@@ -129,28 +128,46 @@ class FlowServer(object):
 
         # Result is stored here
         route_info = {'flow': flow, 'route': []}
-        log.info("FLOW: {0}".format(flow))
 
-        # Gets hop count for traceroute
-        hops = self.topology.getHopsBetweenHosts(self.topology.getHostName(flow["src"]), self.topology.getHostName(flow["dst"]))
+        # If flowServer hasn't received initial data
+        if not self.own_pod_destinations:
+            # Compute slow version of traceroute
+            hops = 6
 
-        if hops < 3:
-            return
+            # Use traceroute (original)
+            traceroute_fun = traceroute
+            traceroute_type = 'slow'
 
-        # Traceroute original flow
-        route = traceroute(hops = hops, **flow)
-        original_try_again = 3
-        while not route and original_try_again > 0:
+        else:
+            if flow['dst'] in self.own_pod_destinations:
+                hops = 2
+            else:
+                hops = 3
+
+            # use traceroute (fast version)
+            traceroute_fun = traceroute_fast
+            traceroute_type = 'fast'
+
+        # Run function
+        route = traceroute_fun(hops=hops, **flow)
+
+        try_again = 3
+        while not route and try_again > 0:
             # Try it again
-            route = traceroute(hops=hops, **flow)
-            original_try_again -= 1
+            route = traceroute_fun(hops=hops, **flow)
+            try_again -= 1
+
+        # How many trials needed?
+        n_trials = 3 - try_again
 
         # Add found route
         route_info['route'] = route
-        log.debug("Original route: {0}".format(route_info["route"]))
+
+        # Send the result back
         client.send(json.dumps(route_info), "")
 
-        print "Server {1}, time doing traceroute {0}".format(time.time() - now, self.name)
+        # Log a bit
+        print "Server {1}: time doing {2}-traceroute: {0} (trials: {3})".format(time.time() - now, self.name, traceroute_type, n_trials)
 
     def tracerouteServer(self):
         """
@@ -169,6 +186,7 @@ class FlowServer(object):
             # Start traceroute in a dedicated thread!
             thread = multiprocessing.Process(target=self.tracerouteThread, args=(client,), kwargs=(flow))
             thread.daemon = True
+
             # thread.setDaemon(True)
             thread.start()
 

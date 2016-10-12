@@ -121,7 +121,9 @@ class LBController(object):
 
         # Flow to path allocations
         self.flows_to_paths = {}
-        self.new_flow_allocations_queue = Queue.Queue()
+        self.edges_to_flows = {(a, b): [] for (a, b) in self.dc_graph_elep.edges()}
+        # Lock used to modify these two variables
+        self.add_del_flow_lock = threading.Lock()
 
         # Start getLoads thread that reads from counters
         self.p_getLoads = subprocess.Popen([getLoads_path, '-k', str(self.k), '-a', self.algorithm], shell=False)
@@ -203,6 +205,12 @@ class LBController(object):
         # Start the thread
         self.miceEstimatorThread.start()
 
+    def sendInitialStateToTracerouteServers(self):
+        """
+        :return:
+        """
+        #TODO
+
     def traceroute_listener(self):
         """
         This function is meant to be executed in a separate thread.
@@ -219,16 +227,60 @@ class LBController(object):
                 # Extract flow
                 flow = traceroute_data['flow']
 
-                # Extracts route from traceroute data
-                route_names = self.ipPath_to_namePath(traceroute_data)
-                route_ips = [self.topology.getRouterId(rname) for rname in route_names]
+                # Extracts the router traceroute data
+                router_name = self.get_router_name(traceroute_data['route'])
 
-                # Put result into queue
-                self.new_flow_allocations_queue.put({'flow': flow, 'route_names': route_names, 'route_ips': route_ips})
+                # Convert it to ip
+                router_ip = self.topology.getRouterId(router_name)
+
+                # Compute whole path
+                path = self.computeCompletePath(flow=flow, router=router_ip)
+
+                if not self.isOngoingFlow(flow):
+                    # Add flow to path
+                    self.addFlowToPath(flow, path)
+                else:
+                    # Update its path
+                    self.updateFlowPath(flow, path)
 
             except Exception:
                 import traceback
                 print traceback.print_exc()
+
+    def computeCompletePath(self, flow, router):
+        """
+        Given a flow and a router, which can be either a core or aggregation router, returns the complete path of
+        that flow in case that router was traversed.
+        """
+        if self.isInterPodFlow(flow):
+            if not self.dc_graph_elep.is_core(routerid=router):
+                raise ValueError("Can't compute complete path from inter-pod flow if given router is not core: {0}".format(router))
+
+        else:
+            if not self.dc_graph_elep.is_aggregation(routerid=router):
+                raise ValueError("Can't compute complete path from intra-pod flow if given router is not aggregation: {0}".format(router))
+
+        # Compute first gateway routers
+        src_px, dst_px = self.getPrefixesFromFlow(flow)
+        src_gw = self.getGatewayRouter(src_px)
+        dst_gw = self.getGatewayRouter(dst_px)
+
+        # Compute path
+        complete_path = nx.shortest_path(self.dc_graph_elep, src_gw, dst_gw)
+        import ipdb; ipdb.set_trace()
+        return complete_path
+
+    def isInterPodFlow(self, flow):
+        """Returns true if flow is an inter-pod router,
+         and False if it is intra pod router
+        """
+
+        # Compute first gateway routers
+        src_px, dst_px = self.getPrefixesFromFlow(flow)
+        src_gw = self.getGatewayRouter(src_px)
+        dst_gw = self.getGatewayRouter(dst_px)
+
+        return self.dc_graph_elep.get_router_pod(src_gw) != self.dc_graph_elep.get_router_pod(dst_gw)
 
     def get_router_name(self, addr):
         """Addr can either the router id, the interface ip or the private ip"""
@@ -243,7 +295,6 @@ class LBController(object):
         """
         Converts traceroute information from ip to router names so we get the path
         """
-
         route = traceroute_data['route']
         elephant_flow = traceroute_data["flow"]
 
@@ -257,6 +308,7 @@ class LBController(object):
             # Check if the first and last routers are the correct gateways:
             src_gw_ok = self.topology.getGatewayRouter(self.topology.getHostName(elephant_flow["src"])) == srcRouter
             dst_gw_ok = self.topology.getGatewayRouter(self.topology.getHostName(elephant_flow["dst"])) == dstRouter
+
             if src_gw_ok and dst_gw_ok:
                 for i, router_ip in enumerate(route):
                     # Get router name
@@ -350,6 +402,16 @@ class LBController(object):
             ipe = prefix
             ipe_prefix = self.getMatchingPrefix(ipe)
             return self.getGatewayRouter(ipe_prefix)
+
+    def getCurrentDag(self, prefix):
+        """"""
+        return self.current_elephant_dags[prefix]['dag']
+
+    def saveCurrentDag(self, prefix, dag, fib=False):
+        """"""
+        self.current_elephant_dags[prefix]['dag'] = dag
+        if fib:
+            self.sbmanager.add_dag_requirement(prefix, dag)
 
     def getMatchingPrefix(self, hostip):
         """
@@ -499,6 +561,129 @@ class LBController(object):
 
         return reset_start_time
 
+    def getLinkCapacity(self, link):
+        """Returns the difference between link bandwidth and
+        the sum of all flows going through the link"""
+        return LINK_BANDWIDTH - sum([f['size'] for f in self.edges_to_flows[link]])
+
+    def isOngoingFlow(self, flow):
+        """Returns True if flow is in the data structures,
+         meaning that the flow is still ongoing"""
+        fkey = self.flowToKey(flow)
+
+        with self.add_del_flow_lock:
+            return fkey in self.flows_to_paths.keys()
+
+    def addFlowToPath(self, flow, path):
+        """Adds a new flow to path datastructures"""
+        # Get key from flow
+        fkey = self.flowToKey(flow)
+
+        # Get lock
+        with self.add_del_flow_lock:
+            # Update flows_to_paths
+            if fkey not in self.flows_to_paths.keys():
+                self.flows_to_paths[fkey] = path
+
+            else:
+                self.flows_to_paths[fkey] = path
+                log.error("Weird: flow was already in the data structure {0}... updating it".format(flow))
+
+            # Upadte links too
+            for link in self.get_links_from_path(path):
+                if link in self.edges_to_flows.keys():
+                    self.edges_to_flows[link].append(fkey)
+                else:
+                    self.edges_to_flows[link] = [fkey]
+                    log.warning("Weird: edge {0} didn't exist...".format(link))
+
+        # Get lock
+        with self.mice_caps_lock:
+            for (u, v) in self.get_links_from_path(path):
+                self.mice_caps_graph[u][v]['elephants_capacity'] += flow['size']
+
+    def updateFlowPath(self, flow, new_path):
+        """Updates path from an already existing flow"""
+
+        # Get key from flow
+        fkey = self.flowToKey(flow)
+
+        with self.add_del_flow_lock:
+            # Remove flow from old path first
+            if fkey in self.flows_to_paths.keys():
+                old_path = self.flows_to_paths.pop(fkey)
+            else:
+                old_path = []
+
+            if old_path:
+                for link in self.get_links_from_path(old_path):
+                    if link in self.edges_to_flows.keys():
+                        if fkey in self.edges_to_flows[link]:
+                            self.edges_to_flows[link].remove(fkey)
+                        else:
+                            log.warning("Weird: flow wasn't in the data structure {0}".format(flow))
+                            pass
+                    else:
+                        log.warning("Weird: link {0} not in the data structure".format(link))
+                        self.edges_to_flows[link] = []
+            else:
+                log.warning("Weird: flow wasn't in the data structure {0}".format(flow))
+
+            # Add it to the new path
+            if fkey not in self.flows_to_paths.keys():
+                self.flows_to_paths[fkey] = new_path
+
+            # Upadte links too
+            for link in self.get_links_from_path(new_path):
+                if link in self.edges_to_flows.keys():
+                    self.edges_to_flows[link].append(fkey)
+                else:
+                    self.edges_to_flows[link] = [fkey]
+                    log.warning("Weird: edge {0} didn't exist...".format(link))
+
+        # Update mice estimator structure
+        with self.mice_caps_lock:
+            # Remove flow from edges of old path
+            for (u, v) in self.get_links_from_path(old_path):
+                self.mice_caps_graph[u][v]['elephants_capacity'] -= flow['size']
+
+            # Add it to new ones
+            for (u, v) in self.get_links_from_path(new_path):
+                self.mice_caps_graph[u][v]['elephants_capacity'] += flow['size']
+
+    def delFlowFromPath(self, flow):
+        """Removes an ongoing flow from path"""
+
+        # Get key from flow
+        fkey = self.flowToKey(flow)
+
+        with self.add_del_flow_lock:
+            # Update data structures
+            if fkey in self.flows_to_paths.keys():
+                path = self.flows_to_paths.pop(fkey)
+            else:
+                path = []
+
+            if path:
+                for link in self.get_links_from_path(path):
+                    if link in self.edges_to_flows.keys():
+                        if fkey in self.edges_to_flows[link]:
+                            self.edges_to_flows[link].remove(fkey)
+                        else:
+                            log.error("Weird: flow wasn't in the data structure {0}".format(flow))
+                    else:
+                        log.error("Weird: link {0} not in the data structure".format(link))
+            else:
+                log.error("Weird: flow wasn't in the data structure {0}".format(flow))
+
+
+        # Update mice estimator structure
+        with self.mice_caps_lock:
+            for (u, v) in self.get_links_from_path(path):
+                self.mice_caps_graph[u][v]['elephants_capacity'] -= flow['size']
+
+        return path
+
     def allocateFlow(self, flow):
         """
         Subclass this method
@@ -516,20 +701,12 @@ class LBController(object):
         """Starts a traceroute"""
         # Get prefix from host ip
         src_name = self.topology.getHostName(flow['src'])
-
-        # Send instruction to start traceroute
-        self.traceroute_client.send(json.dumps(flow), src_name)
-
         try:
-            route_data = self.new_flow_allocations_queue.get(timeout=2)
-            if route_data['flow'] == flow:
-                return route_data
-            else:
-                log.error("Traceroute gave data from another flow")
-                import ipdb; ipdb.set_trace()
-                return None
-        except:
-            return None
+            # Send instruction to start traceroute to specific flowServer
+            self.traceroute_client.send(json.dumps(flow), src_name)
+
+        except Exception as e:
+            log.error("{0} could not be reached. Exception: {1}".format(src_name, e))
 
     def handleFlow(self, event):
         """
@@ -690,19 +867,8 @@ class ECMPController(LBController):
             log.error("Couldn't finde default path for flow")
             return
 
-        # Get key from flow
-        fkey = self.flowToKey(flow)
-        
-        # Update flows_to_paths
-        if fkey not in self.flows_to_paths.keys():
-            self.flows_to_paths[fkey] = path
-        else:
-            log.error("Weird: flow was already in the data structure {0}".format(flow))
-
-        # Update mice estimator structure
-        with self.mice_caps_lock:
-            for (u,v) in self.get_links_from_path(path):
-                self.mice_caps_graph[u][v]['elephants_capacity'] += flow['size']
+        # Add it to data structures
+        self.addFlowToPath(flow, path)
 
         # Log a bit
         [src, dst] = [self.topology.getHostName(a) for a in [flow['src'], flow['dst']]]
@@ -712,20 +878,8 @@ class ECMPController(LBController):
         """Removes flow from flow->path data structure"""
         super(ECMPController, self).deallocateFlow(flow)
 
-         # Get key from flow
-        fkey = self.flowToKey(flow)
-
-        # Update data structures
-        if fkey in self.flows_to_paths.keys():
-            path = self.flows_to_paths.pop(fkey)
-        else:
-            log.error("Weird: flow wasn't in data structure")
-            path = None
-
-        # Update mice estimator structure
-        with self.mice_caps_lock:
-            for (u,v) in self.get_links_from_path(path):
-                self.mice_caps_graph[u][v]['elephants_capacity'] -= flow['size']
+        # Remove flow from path
+        path = self.delFlowFromPath(flow)
 
         # Log a bit
         path_names = [self.topology.getRouterId(r) for r in path]
@@ -733,14 +887,110 @@ class ECMPController(LBController):
         log.info("Flow {0} -> {1} ({2}) allocated to {3}".format(src, dst, flow['size'], path_names))
         log.info("Flow {0} removed from {1}".format(flow, path))
 
-
-
 class DAGShifterController(LBController):
-    def __init__(self, doBalance=True, k=4, congestion_threshold=0.9):
+    def __init__(self, doBalance=True, k=4, capacity_threshold=1, congProb_threshold=0.5):
         super(DAGShifterController, self).__init__(doBalance=doBalance, k=k, algorithm='dag-shifter')
 
         # We consider congested a link more than threshold % of its capacity
-        self.capacity_threshold = congestion_threshold
+        self.capacity_threshold = capacity_threshold
+        self.congProb_threshold = congProb_threshold
+
+    def allocateFlow(self, flow):
+        super(DAGShifterController, self).allocateFlow(flow)
+        # Get matching destination
+        dst_px = self.getMatchingPrefix(flow['dst'])
+
+        # Compute congestion probability of current DAG with new flow
+        congProb = self.flowCongestionProbability(flow)
+
+        # If above the threshold
+        if congProb > self.congProb_threshold:
+            # Choose new DAG minimizing probability
+            #self.findBestSourcePodDag(dst_px)
+            pass
+        else:
+            # Leave current DAG
+            pass
+
+    def deallocateFlow(self, flow):
+        super(DAGShifterController, self).deallocateFlow(flow)
+        pass
+
+    def flowCongestionProbability(self, flow):
+        """"""
+        # Get matching destination
+        dst_px = self.getMatchingPrefix(flow['dst'])
+        dst_gw = self.getGatewayRouter(dst_px)
+
+        # Compute source gateway
+        src_px = self.getSourcePrefixFromFlow(flow)
+        src_gw = self.getGatewayRouter(src_px)
+
+        # Get current dag to destination
+        cDag = self.getCurrentDag(dst_px)
+
+        # Get all paths
+        paths = self.getAllPathsInDag(cDag, src_gw, dst_gw, k=0)
+
+        # Compute path capacities
+        paths_capacities = {tuple(path): self.getPathCapacities(path) for path in paths}
+
+
+        #for path, capacities in paths_capacities.iteritems():
+
+
+        #congProbability
+
+    def getPathCapacities(self, path):
+        """Returns current capacity used by the elephants in the path"""
+        # Get links in path
+        path_links = self.get_links_from_path(path)
+
+        # Get capacities of links
+        link_capacities = map(self.getLinkCapacity, path_links)
+
+        return link_capacities
+
+    def getAllPathsInDag(self, dag, start, end, k, path=[]):
+        """Recursive function that finds all paths from start node to end node
+        with maximum length of k.
+
+        If the function is called with k=0, returns all existing
+        loopless paths between start and end nodes.
+
+        :param dag: nx.DiGraph representing the current paths towards
+        a certain destination.
+
+        :param start, end: string representing the ip address of the
+        star and end routers (or nodes) (i.e:
+        10.0.0.3).
+
+        :param k: specified maximum path length (here means hops,
+        since the dags do not have weights).
+        """
+        # Accumulate nodes in path
+        path = path + [start]
+
+        if start == end:
+            # Arrived to the end. Go back returning everything
+            return [path]
+
+        if not start in dag:
+            return []
+
+        paths = []
+        for node in dag[start]:
+            if node not in path:  # Ommiting loops here
+                if k == 0:
+                    # If we do not want any length limit
+                    newpaths = self.getAllPathsInDag(dag, node, end, k, path=path)
+                    for newpath in newpaths:
+                        paths.append(newpath)
+                elif len(path) < k + 1:
+                    newpaths = self.getAllPathsInDag(dag, node, end, k, path=path)
+                    for newpath in newpaths:
+                        paths.append(newpath)
+        return paths
 
 
 
@@ -1408,8 +1658,26 @@ class TestController(object):
 
         self.print_all_ips()
 
+        upper = map(self.topology.getRouterId, ['r1', 'r3', 'r5'])
+        middle = map(self.topology.getRouterId, ['r1', 'r5'])
+        lower = map(self.topology.getRouterId, ['r1', 'r2', 'r4', 'r5'])
+
+        d1_ip = self.topology.getHostIp('d1')
+        d1_px = self.topology.hostsToNetworksMapping['hostToNetwork']['d1']['d1-eth0']
+
+        dag = nx.DiGraph()
+        dag.add_edges_from(self.get_links_from_path(path=upper))
+        dag.add_edges_from(self.get_links_from_path(path=middle))
+        self.sbmanager.add_dag_requirement(d1_px, dag)
+
+        import ipdb; ipdb.set_trace()
+
         # Here we store the mice levels from each host to all other hosts
         self.mice_dbs = {}
+
+    @staticmethod
+    def get_links_from_path(path):
+        return zip(path[:-1], path[1:])
 
     def print_all_ips(self):
         regex = "{0}\t->\t{1}"
