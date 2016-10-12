@@ -5,10 +5,19 @@ import os
 import random
 import networkx as nx
 import fibte.misc.ipalias as ipalias
+import itertools
 from fibte import log
 import logging
 import time
 import matplotlib.pyplot as plt
+
+def time_func(function):
+    def wrapper(*args,**kwargs):
+        t = time.time()
+        res = function(*args,**kwargs)
+        log.debug("{0} took {1}s to execute".format(function.func_name, time.time()-t))
+        return res
+    return wrapper
 
 """
 Module that defines the DCGraph object, which extends the nx.DiGraph class
@@ -824,7 +833,7 @@ class DCDag(DCDiGraph):
         towards the sink, and modifies the DAG accordingly.
         """
         # Generate random uplink choice from edge
-        (edge_to_aggr, aggr_to_core) = self._get_random_uplink_choice()
+        (edge_to_aggr, aggr_to_core) = self._get_random_uplink_choice_2()
 
         same_sink_pod = False
         if src_pod == self.get_sink_pod():
@@ -961,6 +970,7 @@ class DCDag(DCDiGraph):
                         if not self.has_edge(ar, cr):
                             self.add_uplink(ar, cr)
 
+    #@time_func
     def _get_random_uplink_choice(self):
         """
         Get random uplink DAG for a whole pod.
@@ -984,6 +994,57 @@ class DCDag(DCDiGraph):
             core_indexes = range((self.k / 2) * index, (index + 1) * (self.k / 2))
             random.shuffle(core_indexes)
             aggr_to_core[index] = core_indexes[:n_core]
+
+        return (edges_to_aggr, aggr_to_core)
+
+    #@time_func
+    def _get_random_uplink_choice_2(self):
+        """"""
+        # Initialize
+        edges_to_aggr = {i: [] for i in range(0, self.k / 2)}
+        aggr_to_core = {i: [] for i in range(0, self.k / 2)}
+
+        # Edge to aggr first
+        n_etoa_links = random.randint(self.k/2, (self.k/2)**2)
+
+        all_pairs_etoa = itertools.product(range(self.k/2), range(self.k/2))
+        all_pairs_etoa = set([p for p in all_pairs_etoa])
+
+        # Take one random first for each aggreagtion/edge router
+        for r in range(0, self.k/2):
+            # Take one aggregation and core at random
+            ar = random.randint(0, self.k/2 - 1)
+            new_edge = (r, ar)
+            edges_to_aggr[r].append(ar)
+            all_pairs_etoa = all_pairs_etoa - {new_edge}
+            n_etoa_links -= 1
+
+        all_pairs_etoa = list(all_pairs_etoa)
+        random.shuffle(all_pairs_etoa)
+        rem_edges = all_pairs_etoa[:n_etoa_links]
+        for (e, a) in rem_edges:
+            edges_to_aggr[e].append(a)
+
+        n_atoc_links = random.randint(self.k/2, (self.k/2)**2)
+
+        # Create the pairs
+        all_pairs_atoc = set()
+        for i in range(self.k/2):
+            pairs = [all_pairs_atoc.add(p) for p in itertools.product([i], range((self.k / 2) * i, (i + 1) * (self.k / 2)))]
+
+        for ar in range(0, self.k/2):
+            # Take one core at random
+            cr = random.randint((self.k / 2) * ar, (ar + 1) * (self.k / 2) - 1)
+            new_edge = (ar, cr)
+            aggr_to_core[ar].append(cr)
+            all_pairs_atoc = all_pairs_atoc - {new_edge}
+            n_atoc_links -= 1
+
+        all_pairs_atoc = list(all_pairs_atoc)
+        random.shuffle(all_pairs_atoc)
+        rem_edges = all_pairs_atoc[:n_atoc_links]
+        for (e, a) in rem_edges:
+            aggr_to_core[e].append(a)
 
         return (edges_to_aggr, aggr_to_core)
 
@@ -1105,16 +1166,53 @@ class DCDag(DCDiGraph):
 
         plt.show()
 
-
 if __name__ == "__main__":
+    #log.setLevel(logging.DEBUG)
+
     dcGraph = DCGraph(k=4, prefix_type='primary')
     prefixes = dcGraph.destination_prefixes()
     prefix = prefixes[random.randint(3, 7)]
     dcDag = dcGraph.get_default_ospf_dag(prefix=prefix)
-    dcDag.modify_random_uplinks(0)
-    dcDag.modify_random_uplinks(1)
-    dcDag.modify_random_uplinks(2)
-    dcDag.modify_random_uplinks(3)
+
+    iters = {}
+    counts = {}
+    for i in range(200):
+        dcDag.modify_random_uplinks(0)
+        edges_pod0 = [(a,b) for (a,b) in dcDag.edges_iter() if (dcDag.is_edge(a) or dcDag.is_edge(b) or (dcDag.is_aggregation(a) and dcDag.is_core(b))) and (dcDag.get_router_pod(a) == 0)]
+        iters[i] = edges_pod0
+        etoa = len([(a,b) for (a,b) in dcDag.edges_iter() if dcDag.is_edge(a) and dcDag.is_aggregation(b) and (dcDag.get_router_pod(a) == 0)])
+        atoc = len([(a,b) for (a,b) in dcDag.edges_iter() if dcDag.is_aggregation(a) and dcDag.is_core(b) and (dcDag.get_router_pod(a) == 0)])
+        counts[i] = {'etoa': etoa, 'atoc': atoc}
+
+    # Check that all links appear with same frequency
+    edges_count = {}
+    for i, edges in iters.iteritems():
+        for edge in edges:
+            if edge not in edges_count.keys():
+                edges_count[edge] = 1
+            else:
+                edges_count[edge] += 1
+
+    for (edge, freq) in edges_count.iteritems():
+        print(dcDag.print_stuff(edge), freq)
+
+    # Check that the number of uplinks has same probability
+    number_counts = {'atoc':{}, 'etoa':{}}
+    for i, count in counts.iteritems():
+        etoa_count = count['etoa']
+        if etoa_count not in number_counts['etoa'].keys():
+            number_counts['etoa'][etoa_count] = 1
+        else:
+            number_counts['etoa'][etoa_count] += 1
+
+        atoc_count = count['atoc']
+        if atoc_count not in number_counts['atoc'].keys():
+            number_counts['atoc'][atoc_count] = 1
+        else:
+            number_counts['atoc'][atoc_count] += 1
+
+    print number_counts
+    import ipdb; ipdb.set_trace()
     dcDag.plot()
 
 
