@@ -90,7 +90,7 @@ class FlowServer(object):
         # Traceroute sockets
         self.traceroute_server_name = "/tmp/tracerouteServer_{0}".format(name)
         self.traceroute_server = UnixServer("/tmp/tracerouteServer_{0}".format(name))
-        self.own_pod_destinations = []
+        self.own_pod_hosts = []
 
         # Client that sends to the server -- we must have one like this in the controller
         self.traceroute_client = UnixClient(self.traceroute_server_name)
@@ -175,20 +175,30 @@ class FlowServer(object):
         it receives orders from the controller to know
         the route taken by certain flows
         """
-
         # Results are sent to the controller
         client = UnixClient("/tmp/controllerServer_traceroute")
 
         while True:
             # Wait for traceroute commands
-            flow = json.loads(self.traceroute_server.receive())
+            command = json.loads(self.traceroute_server.receive())
 
-            # Start traceroute in a dedicated thread!
-            thread = multiprocessing.Process(target=self.tracerouteThread, args=(client,), kwargs=(flow))
-            thread.daemon = True
+            if not self.own_pod_hosts and command['type'] == 'own_pod_hosts':
+                # Update own pod hosts list
+                own_pods_hosts = command['data']
+                self.own_pod_hosts = own_pods_hosts
+                log.info("{0}: list of own pod hosts received: {1}".format(self.name, own_pods_hosts))
+                continue
 
-            # thread.setDaemon(True)
-            thread.start()
+            else:
+                # Extract flow
+                flow = command['data']
+
+                # Start traceroute in a dedicated thread!
+                thread = multiprocessing.Process(target=self.tracerouteThread, args=(client,), kwargs=(flow))
+                thread.daemon = True
+
+                # thread.setDaemon(True)
+                thread.start()
 
     def setStartTime(self, starttime):
         if time.time() < starttime:

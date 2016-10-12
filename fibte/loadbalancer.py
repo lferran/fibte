@@ -67,17 +67,6 @@ class LBController(object):
         self.q_server = Queue.Queue(0)
         self.server = UnixServerTCP(self._address_server, self.q_server)
 
-        # UDS server where we listen for the traceroute data
-        self.traceroute_server = UnixServer(os.path.join(tmp_files, UDS_server_traceroute))
-
-        # UDS client used to instruct host to start traceroute path discovery
-        self.traceroute_client = UnixClient(os.path.join(tmp_files, "/tmp/tracerouteServer_{0}"))
-
-        # Start thread that listends for results
-        thread = threading.Thread(target=self.traceroute_listener, args=())
-        thread.setDaemon(True)
-        thread.start()
-
         # Connects to the southbound controller. Must be called before
         # creating the instance of SouthboundManager
         CFG_fib.read(os.path.join(tmp_files, C1_cfg))
@@ -139,6 +128,20 @@ class LBController(object):
 
         # Start mice estimator thread
         self._startMiceEstimatorThread()
+
+        # UDS server where we listen for the traceroute data
+        self.traceroute_server = UnixServer(os.path.join(tmp_files, UDS_server_traceroute))
+
+        # UDS client used to instruct host to start traceroute path discovery
+        self.traceroute_client = UnixClient(os.path.join(tmp_files, "/tmp/tracerouteServer_{0}"))
+
+        # Start thread that listends for results
+        thread = threading.Thread(target=self.traceroute_listener, args=())
+        thread.setDaemon(True)
+        thread.start()
+
+        # Send initial data to flowServers
+        self.traceroute_sendInitialData()
 
         # This is for debugging purposes only --should be removed
         if load_variables == True and self.k == 4:
@@ -205,11 +208,29 @@ class LBController(object):
         # Start the thread
         self.miceEstimatorThread.start()
 
-    def sendInitialStateToTracerouteServers(self):
+    def traceroute_sendInitialData(self):
         """
         :return:
         """
-        #TODO
+        log.info("Sending initial data to traceroute servers")
+        hosts_couldnt_inform = []
+        for host in self.topology.getHosts().keys():
+            # Get hosts in the same pod
+            gw_name = self.topology.hostToGatewayMapping['hostToGateway'][host]
+            gw_pod = self.topology.getRouterPod(gw_name)
+            own_pod_ers = [r for r in self.topology.getRouters().keys() if self.topology.isEdgeRouter(r) and self.topology.getRouterPod(r) == gw_pod]
+            own_pod_hosts = [self.topology.getHostIp(h) for r in own_pod_ers for h in self.topology.hostToGatewayMapping['gatewayToHosts'][r]]
+
+            # Send list to traceroute client
+            try:
+                # Send command
+                command = {'type': 'own_pod_hosts', 'data': own_pod_hosts}
+                self.traceroute_client.send(json.dumps(command), host)
+            except Exception as e:
+                hosts_couldnt_inform.append(host)
+
+        if hosts_couldnt_inform:
+            log.error("The following flowServers could not be contacted: {0}".format(hosts_couldnt_inform))
 
     def traceroute_listener(self):
         """
@@ -703,7 +724,8 @@ class LBController(object):
         src_name = self.topology.getHostName(flow['src'])
         try:
             # Send instruction to start traceroute to specific flowServer
-            self.traceroute_client.send(json.dumps(flow), src_name)
+            command = {'type':'flow', 'data': flow}
+            self.traceroute_client.send(json.dumps(command), src_name)
 
         except Exception as e:
             log.error("{0} could not be reached. Exception: {1}".format(src_name, e))
@@ -858,6 +880,8 @@ class ECMPController(LBController):
         and uptades a flow->path data structure"""
         super(ECMPController, self).allocateFlow(flow)
 
+        import ipdb; ipdb.set_trace()
+
         # Get default path of flow
         traceroute_result = self.tracerouteFlow(flow)
         if traceroute_result['route_ips']:
@@ -991,10 +1015,6 @@ class DAGShifterController(LBController):
                     for newpath in newpaths:
                         paths.append(newpath)
         return paths
-
-
-
-
 
 
 ## Past controllers ######################################################################################

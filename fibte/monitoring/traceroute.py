@@ -7,6 +7,7 @@ import struct
 import fcntl
 timeout = struct.pack("ll", 0, 500)
 import traceback
+import time
 
 """
 Code adapted from Edgar Costa (https://github.com/edgarcosta92)
@@ -25,6 +26,15 @@ Optimizing this module is hard, i had to fix the hops. If its needed in the futu
 How to parse ICMP packets:
 First 14 bytes (ethernet), next 20 (IP), next 8 (icmp), next extended headers-> 20 more for ip and 8 or 20 more if udp/tcp
 """
+
+def time_func(function):
+    def wrapper(*args,**kwargs):
+        t = time.time()
+        res = function(*args,**kwargs)
+        print("{0} took {1}s to execute".format(function.func_name, time.time()-t))
+        return res
+    return wrapper
+
 
 #### DEFINITION OF TCP, UDP, ICMP, AND IP CLASSES. They are used to parse packet headers.
 
@@ -279,6 +289,7 @@ def check_valid_icmp(src, dst, sport, dport, proto, data):
 
     return True
 
+#@time_func
 def traceroute(src=None, dst=None, sport=5001, dport=5002, proto="udp", hops=5, **kwargs):
     """src and dst are supposed to be either ip addresses or interface names"""
     proto = proto.lower()
@@ -399,6 +410,7 @@ def traceroute(src=None, dst=None, sport=5001, dport=5002, proto="udp", hops=5, 
             send_socket.close()
             recv_socket.close()
 
+#@time_func
 def traceroute_fast(src=None, dst=None, sport=5001, dport=5002, proto="udp", hops=5, **kwargs):
     """src and dst are supposed to be either ip addresses or interface names"""
     proto = proto.lower()
