@@ -57,7 +57,7 @@ class SendLoads(object):
                     loads[router] = json.load(f)
             except IOError, e:
                 print("IOError: {0}".format(e))
-                import ipdb; ipdb.set_trace()
+                #import ipdb; ipdb.set_trace()
             except:
                 print("Error reading load file")
 

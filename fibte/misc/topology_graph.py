@@ -629,12 +629,11 @@ class TopologyGraph(TopologyDB):
                 if isEdge:
                      # Using /proc/net/dev
                      if routersUsage[router]["out"].has_key(intfData["ifname"]):
-
                          link_loads[(router, self.network[router][intfData["ifname"]]["connectedTo"])] = round(routersUsage[router]["out"][intfData['ifname']], 3)
 
-                         # however if it connect to a switch (sw, or ovs) we get the input value of that ifindex and compute the link cost (switch/ovs -> router)
-                         if self.network[self.network[router][intfData["ifname"]]["connectedTo"]]["type"] == "switch":
+                         if self.network[self.network[router][intfData["ifname"]]["connectedTo"]]["type"] == "host":
                              link_loads[(self.network[router][intfData["ifname"]]["connectedTo"], router)] = round(routersUsage[router]["in"][intfData['ifname']], 3)
+
                 elif isAggr:
                     # Using /proc/net/dev
                     if routersUsage[router]["out"].has_key(intfData["ifname"]):
@@ -779,7 +778,6 @@ class TopologyGraph(TopologyDB):
 
 #        print positions
         return positions
-
 
 
 if __name__ == "__main__":
