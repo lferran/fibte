@@ -5,11 +5,13 @@ import os
 import random
 import networkx as nx
 import fibte.misc.ipalias as ipalias
-import itertools
+import itertools as it
 from fibte import log
 import logging
 import time
 import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.use("Qt4Agg")
 
 def time_func(function):
     def wrapper(*args,**kwargs):
@@ -909,6 +911,172 @@ class DCDag(DCDiGraph):
                         # Delete edge
                         if self.has_edge(er, m_aggr): self.remove_edge(er, m_aggr)
 
+    def modify_uplinks_from(self, edge_list):
+        """
+        Given a source pod, choses a random set of upwards paths
+        towards the sink, and modifies the DAG accordingly.
+        """
+        edge_list = set(edge_list)
+        no_need_to_add = set()
+
+        # Simply remove uplink edges that are not in edge_list,
+        for (u,v, data) in self.edges_iter(data=True):
+            edge = (u,v)
+            if data['direction'] == 'uplink':
+                if edge not in edge_list:
+                    self.remove_edge(u, v)
+                else:
+                    no_need_to_add.add(edge)
+
+        if len(no_need_to_add) != len(edge_list):
+            raise ValueError("Something is wrong!! in theory we were using complete dags...")
+        # Add the others
+        #for edge in edge_list - no_need_to_add:
+        #    (u,v) = edge
+        #    if self.is_valid_uplink(u, v):
+        #        self.add_edge(u, v)
+        #    else:
+        #        raise ValueError("Invalid uplink!")
+
+    def get_random_uplinks(self, src_pod):
+        """
+        Given a source pod, choses a random set of upwards paths
+        towards the sink, and returns the chosen edges.
+        """
+        # Generate random uplink choice from edge
+        (edge_to_aggr, aggr_to_core) = self._get_random_uplink_choice_2()
+
+        same_sink_pod = False
+        if src_pod == self.get_sink_pod():
+            same_sink_pod = True
+
+        # Accumulate result here
+        chosen_edges = []
+
+        # We are not in sink's pod
+        if not same_sink_pod:
+            # Iterate choice for edges and aggr uplinks
+            for index in edge_to_aggr.keys():
+                # Get edge router
+                er = self.get_router_from_position(type='edge', index=index, pod=src_pod)
+
+                # Add edge->aggr uplinks
+                for aggr_index in edge_to_aggr[index]:
+                    # Get chosen aggr
+                    aggr = self.get_router_from_position(type='aggregation', index=aggr_index, pod=src_pod)
+
+                    # Append edge
+                    chosen_edges.append((er, aggr))
+
+                # Make also the aggr->core ulinks
+                # Get aggregation router
+                ar = self.get_router_from_position(type='aggregation', index=index, pod=src_pod)
+                for core_index in aggr_to_core[index]:
+                    # Get the core
+                    core = self.get_router_from_position(type='core', index=core_index)
+                    # Make uplink
+                    chosen_edges.append((ar, core))
+
+        # We are in sink's pod
+        else:
+            # Iterate choice for edges and aggr uplinks
+            for index in edge_to_aggr.keys():
+                if index == self.get_sink_index():
+                    continue
+                else:
+                    # Get edge router
+                    er = self.get_router_from_position(type='edge', index=index, pod=src_pod)
+
+                    # Add edge->aggr uplinks
+                    for aggr_index in edge_to_aggr[index]:
+                        # Get chosen aggr
+                        aggr = self.get_router_from_position(type='aggregation', index=aggr_index, pod=src_pod)
+                        # Make uplink
+                        chosen_edges.append((er, aggr))
+
+        # Return the chosen edges
+        return chosen_edges
+
+    def all_random_uplinks_iter(self, src_pod):
+        already_seen = []
+
+        # Generate random uplink choice from edge
+        choices_list = all_possible_uplink_choices_gen(k=self.k)
+
+        same_sink_pod = False
+        if src_pod == self.get_sink_pod():
+            same_sink_pod = True
+
+        for choice in choices_list:
+            # Accumulate result here
+            chosen_edges = []
+
+            # Create dicts
+            edge_to_aggr = {i: list(c) for i, c in enumerate(choice[:self.k/2])}
+            aggr_to_core = {i: list(c) for i, c in enumerate(choice[self.k/2:])}
+
+            # Compute the aggr routers that have been chosen at least by one edge router
+            chosen_aggs_indexes = {a for e, alist in edge_to_aggr.iteritems() for a in alist}
+
+            edges_set = set()
+
+            # We are not in sink's pod
+            if not same_sink_pod:
+                # Iterate choice for edges and aggr uplinks
+                for index in edge_to_aggr.keys():
+                    # Get edge router
+                    er = self.get_router_from_position(type='edge', index=index, pod=src_pod)
+
+                    # Add edge->aggr uplinks
+                    for aggr_index in edge_to_aggr[index]:
+                        # Get chosen aggr
+                        aggr = self.get_router_from_position(type='aggregation', index=aggr_index, pod=src_pod)
+
+                        # Append edge
+                        chosen_edges.append((er, aggr))
+                        edges_set.add((er, aggr))
+
+                    # Make also the aggr->core ulinks
+                    # Get aggregation router
+                    if index in chosen_aggs_indexes:
+                        ar = self.get_router_from_position(type='aggregation', index=index, pod=src_pod)
+                        for core_index in aggr_to_core[index]:
+                            # Get the core
+                            core = self.get_router_from_position(type='core', index=core_index)
+                            # Make uplink
+                            chosen_edges.append((ar, core))
+                            edges_set.add((ar, core))
+
+            # We are in sink's pod
+            else:
+                # Iterate choice for edges and aggr uplinks
+                for index in edge_to_aggr.keys():
+                    if index == self.get_sink_index():
+                        continue
+                    else:
+                        # Get edge router
+                        er = self.get_router_from_position(type='edge', index=index, pod=src_pod)
+
+                        # Add edge->aggr uplinks
+                        for aggr_index in edge_to_aggr[index]:
+                            # Get chosen aggr
+                            aggr = self.get_router_from_position(type='aggregation', index=aggr_index, pod=src_pod)
+                            # Make uplink
+                            chosen_edges.append((er, aggr))
+                            edges_set.add((er, aggr))
+
+            # Check if set of chosen edges has already been seen
+            seen = any([True for eset in already_seen if edges_set.difference(eset) == set()])
+            if not seen:
+                # Append it
+                already_seen.append(edges_set)
+
+                # Return the chosen edges
+                yield chosen_edges
+
+            else:
+                continue
+
     def set_ecmp_uplinks_from_pod(self, src_pod):
         """
         Sets the original subdag from source pod to destination
@@ -1004,10 +1172,12 @@ class DCDag(DCDiGraph):
         edges_to_aggr = {i: [] for i in range(0, self.k / 2)}
         aggr_to_core = {i: [] for i in range(0, self.k / 2)}
 
+        chosen_agg_indexes = set()
+
         # Edge to aggr first
         n_etoa_links = random.randint(self.k/2, (self.k/2)**2)
 
-        all_pairs_etoa = itertools.product(range(self.k/2), range(self.k/2))
+        all_pairs_etoa = it.product(range(self.k/2), range(self.k/2))
         all_pairs_etoa = set([p for p in all_pairs_etoa])
 
         # Take one random first for each aggreagtion/edge router
@@ -1016,6 +1186,7 @@ class DCDag(DCDiGraph):
             ar = random.randint(0, self.k/2 - 1)
             new_edge = (r, ar)
             edges_to_aggr[r].append(ar)
+            chosen_agg_indexes.add(ar)
             all_pairs_etoa = all_pairs_etoa - {new_edge}
             n_etoa_links -= 1
 
@@ -1024,15 +1195,17 @@ class DCDag(DCDiGraph):
         rem_edges = all_pairs_etoa[:n_etoa_links]
         for (e, a) in rem_edges:
             edges_to_aggr[e].append(a)
+            chosen_agg_indexes.add(a)
 
-        n_atoc_links = random.randint(self.k/2, (self.k/2)**2)
+        max_atoc_links = len(chosen_agg_indexes)*self.k/2
+        n_atoc_links = random.randint(self.k/2, min((self.k/2)**2, max_atoc_links))
 
         # Create the pairs
         all_pairs_atoc = set()
         for i in range(self.k/2):
-            pairs = [all_pairs_atoc.add(p) for p in itertools.product([i], range((self.k / 2) * i, (i + 1) * (self.k / 2)))]
+            pairs = [all_pairs_atoc.add(p) for p in it.product([i], range((self.k / 2) * i, (i + 1) * (self.k / 2))) if i in chosen_agg_indexes]
 
-        for ar in range(0, self.k/2):
+        for ar in chosen_agg_indexes:
             # Take one core at random
             cr = random.randint((self.k / 2) * ar, (ar + 1) * (self.k / 2) - 1)
             new_edge = (ar, cr)
@@ -1132,7 +1305,7 @@ class DCDag(DCDiGraph):
 
         return positions
 
-    def plot(self):
+    def plot(self, plotname=None):
         """Plots himself!"""
         routers = [n for n in self.nodes_iter()]
 
@@ -1164,55 +1337,43 @@ class DCDag(DCDiGraph):
         # Draw edges of current dag
         nx.draw_networkx_edges(g, ax=None, width=1.0, arrows=False, edge_color='grey', style='dashdot', pos=self.plot_positions)
 
-        plt.show()
+        if plotname:
+            plt.savefig(plotname)
+        else:
+            plt.show()
+
+        plt.gcf().clear()
+
+# Auxiliary funcitions
+
+@time_func
+def all_possible_uplink_choices_gen(k):
+    # Accumulate choices here
+    edges_choice_lists = []
+
+    # For each edge router
+    for edge_index in range(k/2):
+        # Iterate range differently at every loop
+        edges_choice_lists.append([c for n_edges in range(1, k / 2 + 1) for c in it.combinations(range(k/2), n_edges)])
+
+    for aggr_index in range(k/2):
+        edges_choice_lists.append([c for n_edges in range(1, k/2 + 1) for c in it.combinations(range((k / 2) * aggr_index, (aggr_index + 1) * (k / 2)), n_edges)])
+
+    return it.product(*edges_choice_lists)
 
 if __name__ == "__main__":
     #log.setLevel(logging.DEBUG)
+
+    choices = all_possible_uplink_choices_gen(4)
+    import ipdb; ipdb.set_trace()
+
 
     dcGraph = DCGraph(k=4, prefix_type='primary')
     prefixes = dcGraph.destination_prefixes()
     prefix = prefixes[random.randint(3, 7)]
     dcDag = dcGraph.get_default_ospf_dag(prefix=prefix)
 
-    iters = {}
-    counts = {}
-    for i in range(200):
-        dcDag.modify_random_uplinks(0)
-        edges_pod0 = [(a,b) for (a,b) in dcDag.edges_iter() if (dcDag.is_edge(a) or dcDag.is_edge(b) or (dcDag.is_aggregation(a) and dcDag.is_core(b))) and (dcDag.get_router_pod(a) == 0)]
-        iters[i] = edges_pod0
-        etoa = len([(a,b) for (a,b) in dcDag.edges_iter() if dcDag.is_edge(a) and dcDag.is_aggregation(b) and (dcDag.get_router_pod(a) == 0)])
-        atoc = len([(a,b) for (a,b) in dcDag.edges_iter() if dcDag.is_aggregation(a) and dcDag.is_core(b) and (dcDag.get_router_pod(a) == 0)])
-        counts[i] = {'etoa': etoa, 'atoc': atoc}
 
-    # Check that all links appear with same frequency
-    edges_count = {}
-    for i, edges in iters.iteritems():
-        for edge in edges:
-            if edge not in edges_count.keys():
-                edges_count[edge] = 1
-            else:
-                edges_count[edge] += 1
-
-    for (edge, freq) in edges_count.iteritems():
-        print(dcDag.print_stuff(edge), freq)
-
-    # Check that the number of uplinks has same probability
-    number_counts = {'atoc':{}, 'etoa':{}}
-    for i, count in counts.iteritems():
-        etoa_count = count['etoa']
-        if etoa_count not in number_counts['etoa'].keys():
-            number_counts['etoa'][etoa_count] = 1
-        else:
-            number_counts['etoa'][etoa_count] += 1
-
-        atoc_count = count['atoc']
-        if atoc_count not in number_counts['atoc'].keys():
-            number_counts['atoc'][atoc_count] = 1
-        else:
-            number_counts['atoc'][atoc_count] += 1
-
-    print number_counts
-    import ipdb; ipdb.set_trace()
     dcDag.plot()
 
 
