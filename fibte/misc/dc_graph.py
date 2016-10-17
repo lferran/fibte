@@ -9,9 +9,8 @@ import itertools as it
 from fibte import log
 import logging
 import time
+
 import matplotlib.pyplot as plt
-import matplotlib
-matplotlib.use("Qt4Agg")
 
 def time_func(function):
     def wrapper(*args,**kwargs):
@@ -385,19 +384,35 @@ class DCDiGraph(DiGraph):
             ur_name = self.get_router_name(upper_rid)
             raise ValueError("This downlink is not valid: {0} -> {1}".format(ur_name, lr_name))
 
-    def print_stuff(self, listt):
-        if listt:
-            if isinstance(listt[0], list) or isinstance(listt[0], tuple):
-                new_list = type(listt)()
-                for a in listt:
-                    ep = map(self.get_router_name, a)
-                    new_list.append(ep)
-                return new_list
+    def print_stuff(self, to_print):
+        if to_print:
+            if isinstance(to_print[0], list) or isinstance(to_print[0], tuple):
+                new_to_print = type(to_print)()
+                for a in to_print:
+                    ep = []
+                    for inner in a:
+                        try:
+                            s = self.get_router_name(inner)
+                            ep.append(s)
+                        except:
+                            ep.append(inner)
+                    new_to_print.append(ep)
+                return new_to_print
             else:
-                if isinstance(listt, list) or isinstance(listt, tuple):
-                    return map(self.get_router_name, listt)
+                if isinstance(to_print, list) or isinstance(to_print, tuple):
+                    if isinstance(to_print, list):
+                        new_to_print = type(to_print)()
+                        for a in to_print:
+                            try:
+                                e = self.get_router_name(a)
+                                new_to_print.append(e)
+                            except:
+                                new_to_print.append(a)
+                        return new_to_print
+                    else:
+                        return map(self.get_router_name, to_print)
                 else:
-                    return self.get_router_name(listt)
+                    return self.get_router_name(to_print)
         else:
             return []
 
@@ -916,27 +931,20 @@ class DCDag(DCDiGraph):
         Given a source pod, choses a random set of upwards paths
         towards the sink, and modifies the DAG accordingly.
         """
-        edge_list = set(edge_list)
-        no_need_to_add = set()
+        # Simply remove uplink edges from source nodes in edge list
+        # that are not in edge_list,
+        for (u, v) in edge_list:
+            # Add it only if is a valid uplink
+            if self.is_valid_uplink(u, v):
+                if not self.has_edge(u, v):
+                    self.add_uplink(u, v)
+            else:
+                raise ValueError("Invalid uplink! {0}".format((u, v)))
 
-        # Simply remove uplink edges that are not in edge_list,
-        for (u,v, data) in self.edges_iter(data=True):
-            edge = (u,v)
-            if data['direction'] == 'uplink':
-                if edge not in edge_list:
-                    self.remove_edge(u, v)
-                else:
-                    no_need_to_add.add(edge)
-
-        if len(no_need_to_add) != len(edge_list):
-            raise ValueError("Something is wrong!! in theory we were using complete dags...")
-        # Add the others
-        #for edge in edge_list - no_need_to_add:
-        #    (u,v) = edge
-        #    if self.is_valid_uplink(u, v):
-        #        self.add_edge(u, v)
-        #    else:
-        #        raise ValueError("Invalid uplink!")
+            # Remove other outgoing edges from u that are not in edge list
+            for suc in self.successors(u):
+                if (u, suc) not in edge_list:
+                    self.remove_edge(u, suc)
 
     def get_random_uplinks(self, src_pod):
         """
@@ -1346,7 +1354,7 @@ class DCDag(DCDiGraph):
 
 # Auxiliary funcitions
 
-@time_func
+#@time_func
 def all_possible_uplink_choices_gen(k):
     # Accumulate choices here
     edges_choice_lists = []
