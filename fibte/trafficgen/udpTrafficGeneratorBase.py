@@ -39,7 +39,6 @@ def time_func(function):
         return res
     return wrapper
 
-
 def read_pid(n):
     """
     Extract a pid from a file
@@ -58,9 +57,9 @@ class TGParser(object):
         self.parser = argparse.ArgumentParser()
 
     def loadParser(self):
-        self.parser.add_argument('--pattern', help='Communication pattern: {random|staggered|bijection|stride}', type=str, default='random')
+        self.parser.add_argument('--pattern', help='Communication pattern', choices=['random','staggered','bijection','stride'], type=str, default='random')
         self.parser.add_argument('--pattern_args', help='Communication pattern arguments', type=json.loads, default='{}')
-        self.parser.add_argument('-t', '--time', help='Duration of the traffic generator', type=int, default=400)
+        self.parser.add_argument('-t', '--time', help='Duration of the traffic generator', type=int, default=120)
         self.parser.add_argument('-s', '--time_step', help="Granularity at which we inspect the generated traffic so that the rates are kept", type=int, default=1)
         self.parser.add_argument('--save_traffic', help='Saves traffic in a file so it can be repeated', action="store_true")
         self.parser.add_argument('--load_traffic', help='Load traffic from a file so it can be repeated', default="")
@@ -153,14 +152,30 @@ class udpTrafficGeneratorBase(Base):
     def get_filename(self):
         """Returns the filename to save the traffic to"""
 
-    def get_flow_duration(self, flow_type):
+    def get_pattern_args_filename(self):
+        if self.pattern == 'random':
+            return None
+
+        elif self.pattern == 'staggered':
+            sameEdge = self.pattern_args.get('sameEdge')
+            samePod = self.pattern_args.get('samePod')
+            return "se{0}sp{1}".format(sameEdge, samePod)
+
+        elif self.pattern == 'bijection':
+            return None
+
+        elif self.pattern == 'stride':
+            i = self.pattern_args.get('i')
+            return "i{0}".format(i)
+
+    @staticmethod
+    def get_flow_duration(flow_type):
         """
         Makes a choice on the flow duration, depending on the flow_type
         :param flow_type: 'm' (mice) or 'e' (elephant)
 
         :return: integer representing the flow duration in seconds
         """
-
         # Flow duration ranges
         min_len_elephant = 20
         max_len_elephant = 50#500
@@ -180,7 +195,8 @@ class udpTrafficGeneratorBase(Base):
         else:
             raise ValueError("Unknown flow type: {0}".format(flow_type))
 
-    def get_flow_size(self, flow_type, distribution='exponential'):
+    @staticmethod
+    def get_flow_size(flow_type, distribution='exponential'):
         """
         :param flow_type:
         :return:
@@ -188,6 +204,7 @@ class udpTrafficGeneratorBase(Base):
         if flow_type == 'e':
             if distribution == 'uniform':
                 return random.randrange(ELEPHANT_SIZE_RANGE[0], ELEPHANT_SIZE_RANGE[1] + ELEPHANT_SIZE_STEP, ELEPHANT_SIZE_STEP)
+
             elif distribution == 'exponential':
                 size_range = range(int(ELEPHANT_SIZE_RANGE[0]), int(ELEPHANT_SIZE_RANGE[1] + ELEPHANT_SIZE_STEP), int(ELEPHANT_SIZE_STEP))
                 # Draw exponential sample
@@ -197,8 +214,12 @@ class udpTrafficGeneratorBase(Base):
                 point_index = min(point_index, len(size_range) - 1)
                 return size_range[point_index]
 
+            elif distribution == 'constant':
+                return int(ELEPHANT_SIZE_RANGE[0])
+
         elif flow_type == 'm':
             return random.randrange(MICE_SIZE_RANGE[0], MICE_SIZE_RANGE[1]+MICE_SIZE_STEP, MICE_SIZE_STEP)
+
         else:
             raise ValueError("Unknown flow type: {0}".format(flow_type))
 
@@ -293,9 +314,10 @@ class udpTrafficGeneratorBase(Base):
             otherPod_p = max(0, 1 - sameEdge_p - samePod_p)
 
             # Make a weighted choice
-            choice = self.weighted_choice([('sameEdge', sameEdge_p), ('samePod', samePod_p), ('otherPod', otherPod_p)])
+            choice = self.weighted_choice([('sameEdge', sameEdge_p),
+                                           ('samePod', samePod_p),
+                                           ('otherPod', otherPod_p)])
 
-            #import ipdb; ipdb.set_trace()
             # Choose host at random within chosen group
             # Remove excluded
             receivers_choice = receivers[choice]
@@ -339,33 +361,30 @@ class udpTrafficGeneratorBase(Base):
             log.error("Controller is not connected/present")
 
         # Wait a bit
-        time.sleep(1)
+        time.sleep(0.5)
 
         # Set sync. delay
-        SYNC_DELAY = 3
+        SYNC_DELAY = 2
 
         # Schedule all the flows
-        try:
-            for sender, flowlist in traffic_per_host.iteritems():
-
+        for sender, flowlist in traffic_per_host.iteritems():
+            try:
                 # Sends flowlist to the sender's server
                 self.unixClient.send(json.dumps({"type": "flowlist", "data": flowlist}), sender)
 
-        except Exception as e:
-            log.error("Host {0} could not be informed about flowlist. Error: {1}".format(sender, e))
+            except Exception as e:
+                log.error("Host {0} could not be informed about flowlist.".format(sender))
 
-        try:
-            # Set traffic start time -- same time for everyone!
-            traffic_start_time = time.time() + SYNC_DELAY
+        # Set traffic start time -- same time for everyone!
+        traffic_start_time = time.time() + SYNC_DELAY
 
-            for sender in traffic_per_host.keys():
-
+        for sender in traffic_per_host.keys():
+            try:
                 # Send traffic starting time
                 self.unixClient.send(json.dumps({"type": "starttime", "data": traffic_start_time}), sender)
 
-        except Exception as e:
-
-            log.error("Host {0} could not be informed about starttime. Error: {1}".format(sender, e))
+            except Exception as e:
+                log.error("Host {0} could not be informed about starttime.".format(sender))
 
     def plan_from_flows_file(self, flows_file):
         """Opens the flows file and schedules the specified flows
