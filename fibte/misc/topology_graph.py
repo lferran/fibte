@@ -779,6 +779,29 @@ class TopologyGraph(TopologyDB):
 #        print positions
         return positions
 
+class NamesToIps(dict):
+    def __init__(self, db_path='/tmp/topo.db'):
+        super(NamesToIps, self).__init__()
+
+        self['nameToIp'] = {}
+        self['ipToName'] = {}
+
+        with open(db_path, 'r') as f:
+            network = json.load(f)
+
+        for n, data in network.iteritems():
+            is_host = 'h' in n
+            if is_host:
+                h_ip = self.getPrimaryIp(network, n)
+                self['nameToIp'][n] = h_ip
+                self['ipToName'][h_ip] = n
+
+    def getPrimaryIp(self, network, h):
+        data = network[h]
+        for k, v in data.iteritems():
+            if isinstance(v, dict):
+                iface_ip = ipaddress.ip_interface(v['ip'])
+                return iface_ip.ip.compressed
 
 if __name__ == "__main__":
     topology = TopologyGraph(getIfindexes=True, db=os.path.join(tmp_files, db_topo))
