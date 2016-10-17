@@ -143,10 +143,8 @@ def sendFlowNotifyController(**flow):
 
     # Tell controller that flow will start
     try:
-        log.debug("Flow is STARTING: to {0} {1}(bps) during {2}".format(flow['dst'], flow['size'], flow['duration']))
         # Notify controller that an elephant flow started
         client.send(json.dumps({"type": "startingFlow", "flow": flow}), "")
-
     except Exception as e:
         log.error("Controller cound not be informed about startingFlow event")
 
@@ -155,21 +153,22 @@ def sendFlowNotifyController(**flow):
 
     # Start sending flow
     sendFlow(**flow)
+
+    sys.exit(0)
     
 def stopFlowNotifyController(**flow):
     # Open socket with controller
     client = UnixClientTCP("/tmp/controllerServer")
-
-    log.debug("Flow is STOPPING: to {0} {1}(bps) during {2}".format(flow['dst'], flow['size'], flow['duration']))
     try:
         # Notify controller that elephant flow finished
         client.send(json.dumps({"type": "stoppingFlow", "flow": flow}), "")
-
     except Exception as e:
         log.error("Controller cound not be informed about stoppingFlow event")
 
     # Close socket
-    client.close()    
+    client.close()
+
+    sys.exit(0)
 
 if __name__ == "__main__":
 

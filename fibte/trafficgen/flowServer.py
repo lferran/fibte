@@ -19,7 +19,8 @@ from fibte.misc.unixSockets import UnixServerTCP, UnixClientTCP, UnixServer, Uni
 from fibte.trafficgen import isElephant
 from fibte.misc.ipalias import get_secondary_ip
 from fibte.logger import log
-from fibte.misc.topology_graph import TopologyGraph
+from fibte.trafficgen.flow import Base
+from fibte.misc.topology_graph import NamesToIps
 from fibte import tmp_files, db_topo
 
 def time_func(function):
@@ -97,9 +98,12 @@ class FlowServer(object):
 
         # Start process that listens from server
         process = multiprocessing.Process(target=self.tracerouteServer)
-
         # process.daemon = True
         process.start()
+
+        self.base = Base()
+
+        self.namesToIps = NamesToIps(os.path.join(tmp_files, db_topo))
 
     def setup_logging(self):
         """"""
@@ -151,14 +155,14 @@ class FlowServer(object):
         # Run function
         route = traceroute_fun(hops=hops, **flow)
 
-        try_again = 3
+        try_again = 10
         while not route and try_again > 0:
             # Try it again
             route = traceroute_fun(hops=hops, **flow)
             try_again -= 1
 
         # How many trials needed?
-        n_trials = 3 - try_again
+        n_trials = 10 - try_again
 
         # Add found route
         route_info['route'] = route
@@ -167,7 +171,7 @@ class FlowServer(object):
         client.send(json.dumps(route_info), "")
 
         # Log a bit
-        print "Server {1}: time doing {2}-traceroute: {0} (trials: {3})".format(time.time() - now, self.name, traceroute_type, n_trials)
+        #print "Server {1}: time doing {2}-traceroute: {0} (trials: {3})".format(time.time() - now, self.name, traceroute_type, n_trials)
 
     def tracerouteServer(self):
         """
@@ -220,6 +224,12 @@ class FlowServer(object):
             process.daemon = True
             process.start()
 
+            # Log a bit
+            size = self.base.setSizeToStr(flow['size'])
+            duration = self.base.setTimeToStr(flow['duration'])
+            dst = self.namesToIps['ipToName'][flow['dst']]
+            log.debug("{0} : Flow is STARTING: to {1} {2} during {3}".format(self.name, dst, size, duration))
+
         # if is Elephant
         else:
             # Start flow without notifying controller
@@ -235,6 +245,9 @@ class FlowServer(object):
         Stop flow
         """
         if isElephant(flow):
+            size = self.base.setSizeToStr(flow['size'])
+            dst = self.namesToIps['ipToName'][flow['dst']]
+            log.debug("{0} : Flow is STOPPING: to {1} {2}".format(self.name, dst, size))
             process = Process(target=flowGenerator.stopFlowNotifyController, kwargs=flow)
             process.daemon = True
             process.start()
@@ -279,7 +292,7 @@ class FlowServer(object):
                 else:
                     mice_estimation_samples[dst] = [load]
 
-    @time_func
+    #@time_func
     def takeMiceLoadSample(self):
         """Start process that takes sample"""
         try:
@@ -333,7 +346,7 @@ class FlowServer(object):
         for st in np.arange(self.starttime + self.notify_period, endtime, self.notify_period):
             self.scheduler.enterabs(float(st), 1, self.notifyMiceLoads, [])
 
-    @time_func
+    #@time_func
     def notifyMiceLoads(self):
         """Send samples from last period to controller"""
         try:
@@ -353,12 +366,15 @@ class FlowServer(object):
         # No need to terminate startFlow processes, since they are killed when
         # the scheduler process is terminated!
 
+        log.info("{0} : Canceling events...".format(self.name))
         # Cancel all upcoming scheduler events
         action = [self.scheduler.cancel(e) for e in self.scheduler.queue]
 
+        log.info("{0} : Killing scheduler process...".format(self.name))
         # Terminate old scheduler process if alive
         if self.scheduler_process.is_alive(): self.scheduler_process.terminate()
 
+        log.info("{0} : Creating new scheduler process".format(self.name))
         # Create a new instance of the process
         self.scheduler_process = Process(target=self.scheduler.run)
 
@@ -417,8 +433,8 @@ class FlowServer(object):
                 flow_count = {'elephant': 0, 'mice': 0}
                 if self.received_flowlist and self.received_starttime:
                     # Schedule mice sampling and notifications
-                    self.scheduleSamplings()
-                    self.scheduleNotifyMiceLoads()
+                    #self.scheduleSamplings()
+                    #self.scheduleNotifyMiceLoads()
 
                     # Iterate flowlist
                     for flow in self.flowlist:
@@ -438,7 +454,7 @@ class FlowServer(object):
 
                         if isElephant(flow):
                             flow_count['elephant'] += 1
-                            log.debug("ELEPHANT flow to {0} with {1} (bps) will start in {2} and last for {3}".format(flow['dst'], flow['size'], flow['start_time'], flow["duration"]))
+                            #log.debug("ELEPHANT flow to {0} with {1} (bps) will start in {2} and last for {3}".format(flow['dst'], flow['size'], flow['start_time'], flow["duration"]))
 
                         else:
                             flow_count['mice'] += 1
