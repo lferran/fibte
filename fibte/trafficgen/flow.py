@@ -22,6 +22,9 @@ class Base(object):
         """
         if isinstance(size, int):
             return size
+
+        if isinstance(size, float):
+            return int(size)
         try:
             conversions = {'B': 1, 'K': 1e3, 'M': 1e6, 'G': 1e9}
             digits_list = range(48,58) + [ord(".")]
