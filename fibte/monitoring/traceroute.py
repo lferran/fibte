@@ -517,5 +517,31 @@ def traceroute_fast(src=None, dst=None, sport=5001, dport=5002, proto="udp", hop
 
 
 if __name__ == '__main__':
-    import ipdb; ipdb.set_trace()
-    route = traceroute_fast(hops=5, src=None, dst='192.127.239.2')
+    import argparse
+    from fibte.misc.topology_graph import TopologyGraph
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument('-s', '--source', default='h_0_0')
+    parser.add_argument('-d','--destination', help='Specify the host towards you want to traceroute', type=str, default='h_3_3')
+    parser.add_argument('--sport', default=5000, type=int)
+    parser.add_argument('--dport', default=5000, type=int)
+    parser.add_argument('--proto', default='udp')
+    args = parser.parse_args()
+
+    # Start topo
+    topo = TopologyGraph(getIfindexes=True, interfaceToRouterName=True, db='/tmp/db.topo' )
+
+    # Get host
+    source = args.source
+    destination = args.destination
+    hops = topo.getHopsBetweenHosts(source, destination)
+    src_ip = topo.getHostIp(source)
+    dst_ip = topo.getHostIp(destination)
+
+    # Generate flow
+    flow = {'src': None, 'sport': args.sport, 'dst': dst_ip, 'dport': args.dport, 'proto': args.proto}
+
+    # Call traceroute
+    route = traceroute(hops=hops, **flow)
+    print "ROUTE FOUND: {0}".format(map(topo.guess_router_name, route))
