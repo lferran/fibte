@@ -17,7 +17,7 @@ import numpy as np
 import sys
 import itertools as it
 
-from fibbingnode.algorithms.southbound_interface import SouthboundManager
+from fibbingnode.algorithms.southbound_interface import SouthboundManager, DstSpecificSouthboundManager
 from fibbingnode import CFG as CFG_fib
 
 from fibte.misc.unixSockets import UnixServerTCP, UnixServer, UnixClient, UnixClientTCP
@@ -50,6 +50,15 @@ class MyGraphProvider(SouthboundManager):
         super(MyGraphProvider, self).received_initial_graph()
         HAS_INITIAL_GRAPH.set()
 
+class MyGraphProvider2(DstSpecificSouthboundManager):
+    """Uses the optimized version of the Southbound Manager"""
+    def __init__(self):
+        super(MyGraphProvider2, self).__init__()
+
+    def received_initial_graph(self):
+        super(MyGraphProvider2, self).received_initial_graph()
+        HAS_INITIAL_GRAPH.set()
+
 class LBController(object):
     def __init__(self, doBalance = True, k=4, algorithm=None, load_variables=True):
         # Set fat-tree parameter
@@ -75,6 +84,7 @@ class LBController(object):
 
         # Start the Southbound manager in a different thread
         self.sbmanager = MyGraphProvider()
+        #self.sbmanager = MyGraphProvider2()
         t = threading.Thread(target=self.sbmanager.run, name="Southbound Manager")
         t.start()
 
@@ -112,18 +122,21 @@ class LBController(object):
 
         # Flow to path allocations
         self.flows_to_paths = {}
-        self.edges_to_flows = {(a, b): [] for (a, b) in self.dc_graph_elep.edges()}
+        self.edges_to_flows = {(a, b): {} for (a, b) in self.dc_graph_elep.edges()}
         # Lock used to modify these two variables
         self.add_del_flow_lock = threading.Lock()
 
+        # Get the name of the GetLoads result file
+        in_out_name = self._getAlgorithmName()
+
         # Start getLoads thread that reads from counters
-        self.p_getLoads = subprocess.Popen([getLoads_path, '-k', str(self.k), '-a', self.algorithm], shell=False)
+        self.p_getLoads = subprocess.Popen([getLoads_path, '-k', str(self.k), '-a', in_out_name], shell=False)
         #os.system(getLoads_path + ' -k {0} &'.format(self.k))
 
         # Start getLoads thread reads from link usage
-        thread = threading.Thread(target=self._getLoads, args=([1]))
-        thread.setDaemon(True)
-        thread.start()
+        #thread = threading.Thread(target=self._getLoads, args=([1]))
+        #thread.setDaemon(True)
+        #thread.start()
 
         # Object useful to make some unit conversions
         self.base = Base()
@@ -144,6 +157,10 @@ class LBController(object):
 
         # Send initial data to flowServers
         self.traceroute_sendInitialData()
+
+        # Data structure where we store the flows waiting for traceroute answer
+        self.waiting_tr_lock = threading.Lock()
+        self.waiting_traceroutes = []
 
         # This is for debugging purposes only --should be removed
         if load_variables == True and self.k == 4:
@@ -190,6 +207,10 @@ class LBController(object):
     def keyToFlow(key):
         """Given a flow key, returns the flow as a dictionary"""
         return dict(key)
+
+    @abc.abstractmethod
+    def _getAlgorithmName(self):
+        """Returns a string with the name of the algorithm!"""
 
     def _startMiceEstimatorThread(self):
         # Here we store the estimated mice levels
@@ -239,6 +260,12 @@ class LBController(object):
         if hosts_couldnt_inform:
             log.error("The following flowServers could not be contacted: {0}".format(hosts_couldnt_inform))
 
+    def isTracerouteWaitingForFlow(self, flow):
+        """Check if traceroute is still waiting for flow's result"""
+        fkey = self.flowToKey(flow)
+        with self.waiting_tr_lock:
+            return fkey in self.waiting_traceroutes
+
     def traceroute_listener(self):
         """
         This function is meant to be executed in a separate thread.
@@ -257,12 +284,24 @@ class LBController(object):
 
                 # Extract flow
                 flow = traceroute_data['flow']
+                fkey = self.flowToKey(flow)
+
+                if not self.isTracerouteWaitingForFlow(flow):
+                    # Omit the data
+                    log.debug("discarded data!")
+                    continue
+
+                src_n = self.topology.getHostName(flow['src'])
+                dst_n = self.topology.getHostName(flow['dst'])
+                size_n = self.base.setSizeToStr(flow['size'])
+                sport = flow['sport']
+                dport = flow['dport']
 
                 # Extracts the router traceroute data
                 route = traceroute_data['route']
 
-                # Traceroute fast is used
                 if route:
+                    # Traceroute fast is used
                     if len(route) == 1:
                         router_name = self.get_router_name(route[0])
 
@@ -278,21 +317,22 @@ class LBController(object):
                         route_names = self.ipPath_to_namePath(traceroute_data)
                         path = [self.topology.getRouterId(rname) for rname in route_names]
 
-                    # Add flow->path allocation
+                    # Remove it from the waiting list
+                    with self.waiting_tr_lock:
+                        self.waiting_traceroutes.remove(fkey)
+
+                    # Add flow -> path allocation
                     if not self.isOngoingFlow(flow):
                         # Add flow to path
                         self.addFlowToPath(flow, path)
-                    else:
-                        # Log a bit
-                        src_n = self.topology.getHostName(flow['src'])
-                        dst_n = self.topology.getHostName(flow['dst'])
-                        size_n = self.base.setSizeToStr(flow['size'])
-                        log.warning("Path couldn't be found for Flow({0} -> {1}: {2}). Traceroute again!".format(src_n, dst_n, size_n))
 
+                    else:
                         # Update its path
                         self.updateFlowPath(flow, path)
-
                 else:
+                    # Log a bit
+                    log.warning("Path couldn't be found yet for Flow({0}:({1}) -> {2}:({3}) #{4}). Traceroute again!".format(src_n, sport, dst_n, dport, size_n))
+
                     # Couldn't find route for flow yet...
                     self.tracerouteFlow(flow)
 
@@ -626,14 +666,18 @@ class LBController(object):
 
         with self.add_del_flow_lock:
             self.flows_to_paths = {}
-            self.edges_to_flows = {(a, b): [] for (a, b) in self.dc_graph_elep.edges()}
+            self.edges_to_flows = {(a, b): {} for (a, b) in self.dc_graph_elep.edges()}
+
+        with self.mice_caps_lock:
+            for (u,v,data) in self.mice_caps_graph.edges_iter(data=True):
+                data['elephants_capacity'] = 0.0
 
         return reset_start_time
 
     def getLinkCapacity(self, link):
         """Returns the difference between link bandwidth and
         the sum of all flows going through the link"""
-        return LINK_BANDWIDTH - sum([f['size'] for f in self.edges_to_flows[link]])
+        return LINK_BANDWIDTH - sum([data['flow']['size'] for fkey, data in self.edges_to_flows[link].iteritems()])
 
     def getLinkLoad(self, link, exclude=[]):
         """
@@ -643,10 +687,13 @@ class LBController(object):
         Counts only the sizes of the flows that are not present
         in the exclude list.
         """
-        if self.edges_to_flows[link]:
-            return sum([self.keyToFlow(f)['size'] for f in self.edges_to_flows[link] if f not in exclude])
+        if link in self.edges_to_flows.keys():
+            if self.edges_to_flows[link] != {}:
+                return sum([data['flow']['size'] for fkey, data in self.edges_to_flows[link].iteritems() if fkey not in exclude])
+            else:
+                return 0.0
         else:
-            return 0.0
+            raise ValueError("Link doesn't exist {0}".format(self.dc_graph_elep.print_stuff(link)))
 
     def isOngoingFlow(self, flow):
         """Returns True if flow is in the data structures,
@@ -656,7 +703,54 @@ class LBController(object):
         with self.add_del_flow_lock:
             return fkey in self.flows_to_paths.keys()
 
-    def addFlowToPath(self, flow, path):
+    def logFlowToPath(self, action, flow, path, old_path=None):
+        """Log action"""
+        src_n = self.topology.getHostName(flow['src'])
+        dst_n = self.topology.getHostName(flow['dst'])
+        size_n = self.base.setSizeToStr(flow['size'])
+        path_n = [self.topology.getRouterName(r) for r in path]
+        sport = flow['sport']
+        dport = flow['dport']
+        path_str = ', '.join(path_n)
+
+        if action == 'add':
+            log.info("Flow({0}:({1}) -> {2}:({3}) #{4}) added to path ({5})".format(src_n, sport, dst_n, dport, size_n, path_str))
+
+        elif action == 'delete':
+            log.info("Flow({0}:({1}) -> {2}:({3}) #{4}) deleted from path ({5})".format(src_n, sport, dst_n, dport, size_n, path_str))
+
+        elif action == 'update' and old_path:
+            old_path_n = [self.topology.getRouterName(r) for r in old_path]
+            old_path_str = ', '.join(old_path_n)
+            log.info("Flow({0}:({1}) -> {2}:({3}) #{4}) changed path from ({5}) to ({6})".format(src_n, sport, dst_n, dport, size_n, old_path_str, path_str))
+        else:
+            raise ValueError("Check the arguments...")
+
+    def setFlowToUpdateStatus(self, flow):
+        """"""
+        # Get key from flow
+        fkey = self.flowToKey(flow)
+
+        # Get lock
+        with self.add_del_flow_lock:
+            # Update flows_to_paths
+            if fkey in self.flows_to_paths.keys():
+                self.flows_to_paths[fkey]['to_update'] = True
+                path = self.flows_to_paths[fkey]['path']
+            else:
+                raise ValueError("Weird: flow isn't in the data structure")
+
+            # Upadte links too
+            for link in self.get_links_from_path(path):
+                if link in self.edges_to_flows.keys():
+                    if fkey in self.edges_to_flows[link]:
+                        self.edges_to_flows[link][fkey]['to_update'] = True
+                    else:
+                        raise ValueError("Weird: fkey not in link")
+                else:
+                    raise ValueError("Weird: flow was already in the data structure")
+
+    def addFlowToPath(self, flow, path, do_log=True):
         """Adds a new flow to path datastructures"""
         # Get key from flow
         fkey = self.flowToKey(flow)
@@ -665,23 +759,16 @@ class LBController(object):
         with self.add_del_flow_lock:
             # Update flows_to_paths
             if fkey not in self.flows_to_paths.keys():
-                self.flows_to_paths[fkey] = path
-
+                self.flows_to_paths[fkey] = {'path': path, 'to_update': False}
             else:
-                log.error("Weird: flow was already in the data structure {0}... updating it".format(flow))
-                self.client_to_self.send(json.dumps({"type": "sleep", 'data': 2000}), "")
-                import ipdb; ipdb.set_trace()
-                self.flows_to_paths[fkey] = path
+                raise ValueError("Weird: flow was already in the data structure")
 
             # Upadte links too
             for link in self.get_links_from_path(path):
                 if link in self.edges_to_flows.keys():
-                    self.edges_to_flows[link].append(fkey)
+                    self.edges_to_flows[link][fkey] = {'flow': flow, 'to_update': False}
                 else:
-                    self.edges_to_flows[link] = [fkey]
-                    log.warning("Weird: edge {0} didn't exist...".format(link))
-                    self.client_to_self.send(json.dumps({"type": "sleep", 'data': 2000}), "")
-                    import ipdb; ipdb.set_trace()
+                    raise ValueError("Weird: flow was already in the data structure")
 
         # Get lock
         with self.mice_caps_lock:
@@ -689,120 +776,56 @@ class LBController(object):
                 self.mice_caps_graph[u][v]['elephants_capacity'] += flow['size']
 
         # Log a bit
-        src_n = self.topology.getHostName(flow['src'])
-        dst_n = self.topology.getHostName(flow['dst'])
-        size_n = self.base.setSizeToStr(flow['size'])
-        path_n = [self.topology.getRouterName(r) for r in path]
-        log.info("Flow({0} -> {1}: {2}) added to path ({3})".format(src_n, dst_n, size_n, ' -> '.join(path_n)))
+        if do_log:
+            self.logFlowToPath(action='add', flow=flow, path=path)
 
-    def updateFlowPath(self, flow, new_path):
-        """Updates path from an already existing flow"""
-        # Get key from flow
-        fkey = self.flowToKey(flow)
-
-        with self.add_del_flow_lock:
-            # Remove flow from old path first
-            if fkey in self.flows_to_paths.keys():
-                old_path = self.flows_to_paths.pop(fkey)
-            else:
-                old_path = []
-
-            if old_path:
-                for link in self.get_links_from_path(old_path):
-                    if link in self.edges_to_flows.keys():
-                        if fkey in self.edges_to_flows[link]:
-                            self.edges_to_flows[link].remove(fkey)
-                        else:
-                            log.warning("Weird: flow wasn't in the data structure {0}".format(flow))
-                            self.client_to_self.send(json.dumps({"type": "sleep", 'data': 2000}), "")
-                            import ipdb; ipdb.set_trace()
-                            pass
-                    else:
-                        log.warning("Weird: link {0} not in the data structure".format(link))
-                        self.client_to_self.send(json.dumps({"type": "sleep", 'data': 2000}), "")
-                        import ipdb;ipdb.set_trace()
-                        self.edges_to_flows[link] = []
-            else:
-                log.warning("Weird: flow wasn't in the data structure {0}".format(flow))
-                self.client_to_self.send(json.dumps({"type": "sleep", 'data': 2000}), "")
-                import ipdb;ipdb.set_trace()
-
-            # Add it to the new path
-            if fkey not in self.flows_to_paths.keys():
-                self.flows_to_paths[fkey] = new_path
-
-            # Upadte links too
-            for link in self.get_links_from_path(new_path):
-                if link in self.edges_to_flows.keys():
-                    self.edges_to_flows[link].append(fkey)
-                else:
-                    self.edges_to_flows[link] = [fkey]
-                    log.warning("Weird: edge {0} didn't exist...".format(link))
-                    self.client_to_self.send(json.dumps({"type": "sleep", 'data': 2000}), "")
-                    import ipdb;ipdb.set_trace()
-
-        # Update mice estimator structure
-        with self.mice_caps_lock:
-            # Remove flow from edges of old path
-            for (u, v) in self.get_links_from_path(old_path):
-                self.mice_caps_graph[u][v]['elephants_capacity'] -= flow['size']
-
-            # Add it to new ones
-            for (u, v) in self.get_links_from_path(new_path):
-                self.mice_caps_graph[u][v]['elephants_capacity'] += flow['size']
-
-        # Log a bit
-        src_n = self.topology.getHostName(flow['src'])
-        dst_n = self.topology.getHostName(flow['dst'])
-        size_n = self.base.setSizeToStr(flow['size'])
-        new_path_n = [self.topology.getRouterName(r) for r in new_path]
-        old_path_n = [self.topology.getRouterName(r) for r in old_path]
-        log.info("Flow({0} -> {1}: {2}) changed path from ({3}) to ({4})".format(src_n, dst_n, size_n, ' -> '.join(old_path_n), ' -> '.join(new_path_n)))
-
-    def delFlowFromPath(self, flow):
+    def delFlowFromPath(self, flow, do_log=True):
         """Removes an ongoing flow from path"""
-
         # Get key from flow
         fkey = self.flowToKey(flow)
 
         with self.add_del_flow_lock:
             # Update data structures
             if fkey in self.flows_to_paths.keys():
-                path = self.flows_to_paths.pop(fkey)
+                old_path = self.flows_to_paths[fkey]['path']
+                self.flows_to_paths.pop(fkey)
             else:
-                path = []
+                raise ValueError("Flow wasn't in data structure")
 
-            if path:
-                for link in self.get_links_from_path(path):
-                    if link in self.edges_to_flows.keys():
-                        if fkey in self.edges_to_flows[link]:
-                            self.edges_to_flows[link].remove(fkey)
-                        else:
-                            log.error("Weird: flow wasn't in the data structure {0}".format(flow))
-                            self.client_to_self.send(json.dumps({"type": "sleep", 'data': 2000}), "")
-                            import ipdb; ipdb.set_trace()
+            for link in self.get_links_from_path(old_path):
+                if link in self.edges_to_flows.keys():
+                    if fkey in self.edges_to_flows[link]:
+                        self.edges_to_flows[link].pop(fkey)
                     else:
-                        log.error("Weird: link {0} not in the data structure".format(link))
-                        self.client_to_self.send(json.dumps({"type": "sleep", 'data': 2000}), "")
-                        import ipdb;ipdb.set_trace()
-            else:
-                log.error("Weird: flow wasn't in the data structure {0}".format(flow))
-                self.client_to_self.send(json.dumps({"type": "sleep", 'data': 2000}), "")
-                import ipdb;ipdb.set_trace()
+                        raise ValueError("Flow wasn't in data structure")
+                else:
+                    raise ValueError("Weird: link not in the data structure")
 
         # Update mice estimator structure
         with self.mice_caps_lock:
-            for (u, v) in self.get_links_from_path(path):
+            for (u, v) in self.get_links_from_path(old_path):
                 self.mice_caps_graph[u][v]['elephants_capacity'] -= flow['size']
 
         # Log a bit
-        src_n = self.topology.getHostName(flow['src'])
-        dst_n = self.topology.getHostName(flow['dst'])
-        size_n = self.base.setSizeToStr(flow['size'])
-        path_n = [self.topology.getRouterName(r) for r in path]
-        log.info("Flow({0} -> {1}: {2}) deleted from path ({3})".format(src_n, dst_n, size_n, ' -> '.join(path_n)))
+        if do_log:
+            self.logFlowToPath(action='delete', flow=flow, path=old_path)
 
-        return path
+        return old_path
+
+    def updateFlowPath(self, flow, new_path, do_log=True):
+        """Updates path from an already existing flow"""
+        if not self.isOngoingFlow(flow):
+            raise ValueError("We are updating a flow that is not yet registered!!!")
+
+        # Delete it first
+        old_path = self.delFlowFromPath(flow, do_log=False)
+
+        # Add it to the new path
+        self.addFlowToPath(flow, new_path, do_log=False)
+
+        # Log a bit
+        if do_log:
+            self.logFlowToPath(action='update', flow=flow, path=new_path, old_path=old_path)
 
     def allocateFlow(self, flow):
         """
@@ -811,7 +834,9 @@ class LBController(object):
         src = self.topology.getHostName(flow['src'])
         dst = self.topology.getHostName(flow['dst'])
         size = self.base.setSizeToStr(flow['size'])
-        log.debug("New flow STARTED: Flow({0} -> {1}: {2})".format(src, dst, size))
+        sport = flow['sport']
+        dport = flow['dport']
+        log.debug("New flow STARTED: Flow({0}:({1}) -> {2}:({3}) | #{4})".format(src, sport, dst, dport, size))
 
     def deallocateFlow(self, flow):
         """
@@ -820,19 +845,27 @@ class LBController(object):
         src = self.topology.getHostName(flow['src'])
         dst = self.topology.getHostName(flow['dst'])
         size = self.base.setSizeToStr(flow['size'])
-        log.debug("Flow FINISHED: Flow({0} -> {1}: {2})".format(src, dst, size))
+        sport = flow['sport']
+        dport = flow['dport']
+        log.debug("Flow FINISHED: Flow({0}:({1}) -> {2}:({3}) | #{4})".format(src, sport, dst, dport, size))
 
     def tracerouteFlow(self, flow):
         """Starts a traceroute"""
-        # Get prefix from host ip
+        # Get source hostname from ip
         src_name = self.topology.getHostName(flow['src'])
+
+        # Compute flow key
+        fkey = self.flowToKey(flow)
         try:
             # Send instruction to start traceroute to specific flowServer
-            command = {'type':'flow', 'data': flow}
+            command = {'type': 'flow', 'data': flow}
             self.traceroute_client.send(json.dumps(command), src_name)
-
         except Exception as e:
             log.error("{0} could not be reached. Exception: {1}".format(src_name, e))
+        finally:
+            with self.waiting_tr_lock:
+                if fkey not in self.waiting_traceroutes:
+                    self.waiting_traceroutes.append(fkey)
 
     def handleFlow(self, event):
         """
@@ -927,8 +960,6 @@ class LBController(object):
         log.info("Cleaning up the network from fake LSAs ...")
         self.sbmanager.remove_all_dag_requirements()
 
-        # self.p_getLoads.terminate()
-
         # Finally exit
         os._exit(0)
 
@@ -983,6 +1014,9 @@ class ECMPController(LBController):
     def __init__(self, doBalance=True, k=4):
         super(ECMPController, self).__init__(doBalance=doBalance, k=k, algorithm='ecmp')
 
+    def _getAlgorithmName(self):
+        return "ecmp_k_{0}".format(self.k)
+
     def allocateFlow(self, flow):
         """Just checks the default route for this path,
         and uptades a flow->path data structure"""
@@ -1011,14 +1045,27 @@ class ECMPController(LBController):
         path = self.delFlowFromPath(flow)
 
 class DAGShifterController(LBController):
-    def __init__(self, doBalance=True, k=4, capacity_threshold=1, congProb_threshold=0.20):
-        super(DAGShifterController, self).__init__(doBalance=doBalance, k=k, algorithm='dag-shifter')
-
+    def __init__(self, capacity_threshold=1, congProb_threshold=0.0, sample=False, *args, **kwargs):
         # We consider congested a link more than threshold % of its capacity
         self.capacity_threshold = capacity_threshold
         self.congestion_threshold = self.capacity_threshold*LINK_BANDWIDTH
         self.congProb_threshold = congProb_threshold
-        self.dag_samples = 81
+        self.sample = sample
+
+        # Call init of subclass
+        super(DAGShifterController, self).__init__(algorithm='dag-shifter', *args, **kwargs)
+
+    def _getAlgorithmName(self):
+        """"""
+        return "dag-shifter_k_{3}_cap_{0}_cong_{1}_sample_{2}".format(self.capacity_threshold, self.congProb_threshold, self.sample, self.k)
+
+    @time_func
+    def addDagRequirement(self, dst, dag):
+        # Force DAG with fibbing
+        self.sbmanager.add_dag_requirement(dst, dag)
+
+        # Save DAG
+        self.current_elephant_dags[dst]['dag'] = dag
 
     @time_func
     def allocateFlow(self, flow):
@@ -1046,42 +1093,95 @@ class DAGShifterController(LBController):
             src_pod = self.getSourcePodFromFlow(flow)
 
             # Get the flows originating at same pod towards same destination
-            dst_ongoing_flows = self.getOngoingFlowsToDst(dst=dst_px, from_pod=src_pod)
+            dst_ongoing_flowkeys = self.getOngoingFlowKeysToDst(dst=dst_px, from_pod=src_pod)
+
+            dst_name = self.topology.getHostName(flow['dst'])
+            log.info("{0} more flows from pod{2} are currently ongoing towards {1}".format(len(dst_ongoing_flowkeys), dst_name, src_pod))
 
             # Get dag with spare capacities
-            idag = self.getInitialDagWithoutFlows(src_pod=src_pod, dst_px=dst_px, ongoing_flows=dst_ongoing_flows)
+            idag = self.getInitialDagWithoutFlows(dst_px=dst_px, ongoing_flow_keys=dst_ongoing_flowkeys)
 
-            # Add current flow to computations too
-            dst_ongoing_flows = [self.keyToFlow(fkey) for fkey in dst_ongoing_flows]
+            # Convert them to keys and add current flow to computations too
+            dst_ongoing_flows = [self.keyToFlow(fkey) for fkey in dst_ongoing_flowkeys]
             dst_ongoing_flows.append(flow)
 
             # Choose new DAG minimizing probability
-            (best_dag, best_dag_cost) = self.findBestSourcePodDag(src_pod, idag, dst_ongoing_flows) or idag
+            if self.sample:
+                log.info("Sampling on DAG space...")
+                (best_dag, best_assessment) = self.getBestOfDagSamples(src_pod, idag, dst_ongoing_flows)
+            else:
+                log.info("Iterating ALL DAG space...")
+                (best_dag, best_assessment) = self.findBestSourcePodDag(src_pod, idag, dst_ongoing_flows)
+
+            # Extract cost and karma expected values
+            dagcost = best_assessment['cost']['mean']
+            dagkarma = best_assessment['karma']['mean']
 
             # Plot it
             src_name = self.topology.getHostName(flow['src'])
             dst_name = self.topology.getHostName(flow['dst'])
+            sport = flow['sport']
+            dport = flow['dport']
             size = self.base.setSizeToStr(flow['size'])
-
-            img_name = './images/bestDag{0}_{1}_{2}.png'.format(src_name, dst_name, size)
+            img_name = './images/bestSampledDag{0}_{1}_{2}_{3}_{4}___C{5}___K{6}.png'.format(src_name, sport, dst_name, dport, size, dagcost, dagkarma)
             #best_dag.plot(img_name)
 
             # Log a bit
-            log.info("Best DAG was found with a cost of: {0}".format(best_dag_cost))
+            log.info("Best DAG was found with a cost: {0} and karma: {1} (img: {2})".format(dagcost, dagkarma, img_name))
 
             # Force it with Fibbing
-            self.sbmanager.add_dag_requirement(dst_px, best_dag)
+            self.addDagRequirement(dst_px, best_dag)
 
+            # Wait for fibbing to apply the dag and the new requirements to propagate
+            WAIT_PROPAGATION_TIME_MS = 100
+            time.sleep(WAIT_PROPAGATION_TIME_MS/1000.0)
 
-            time.sleep(0.02)
-
-            # Finnally find new paths taken by flows in DAG
-            for f in dst_ongoing_flows:
-                self.tracerouteFlow(f)
+            # Find new paths for flows
+            self.findNewPathsForFlows(dst_ongoing_flows)
 
         else:
-            # Traceroute path taken by flow
-            self.tracerouteFlow(flow)
+            # Get flow's path
+            self.findNewPathsForFlows([flow])
+
+    @time_func
+    def findNewPathsForFlows(self, flows):
+        """This function only returns if the path for all flows in the input were found"""
+        # Set flows state to be updates
+        for f in flows:
+            if self.isOngoingFlow(f):
+                self.setFlowToUpdateStatus(f)
+
+        # Send traceroutes
+        self.tracerouteFlows(flows)
+
+        # Wait for flows to finish
+        self.waitForTraceroutes(flows)
+
+    def tracerouteFlows(self, flows):
+        """Send traceroutes for flows"""
+        for f in flows:
+            self.tracerouteFlow(f)
+
+    def waitForTraceroutes(self, ongoing_flows):
+        """Waits for traceroutes to have finished"""
+        found_all_paths = all([True if self.isFlowPathUpdated(f) else False for f in ongoing_flows])
+        i = 0
+        while not found_all_paths:
+            found_all_paths = all([True if self.isFlowPathUpdated(f) else False for f in ongoing_flows])
+            i += 1
+        log.debug("{0} iterations needed".format(i))
+
+    def isFlowPathUpdated(self, flow):
+        """"""
+        fkey = self.flowToKey(flow)
+
+        with self.add_del_flow_lock:
+            if fkey not in self.flows_to_paths.keys():
+                return False
+            elif self.flows_to_paths[fkey]['to_update'] == False:
+                return True
+            else:
+                return False
 
     def deallocateFlow(self, flow):
         super(DAGShifterController, self).deallocateFlow(flow)
@@ -1098,48 +1198,147 @@ class DAGShifterController(LBController):
     @time_func
     def findBestSourcePodDag(self, src_pod, complete_dag, ongoing_flows):
         """"""
+        # Compute edge indexes for which no flows are starting towards dst
+        to_exclude = self.getExcludedEdgeIndexes(ongoing_flows)
+
         # Start the generator of all possible random edge choices
-        all_edge_choices = complete_dag.all_random_uplinks_iter(src_pod=src_pod)
+        all_edge_choices = complete_dag.all_random_uplinks_iter(src_pod=src_pod,
+                                                                exclude_edge_indexes=to_exclude)
 
         # Accumulate best result here
-        best_dag = None
-        best_eFlowCost = 0
+        best_assessment = {}
+        best_uplinks = []
 
         # Get egress router
         dst_gw = self.getGatewayRouter(self.getDestinationPrefixFromFlow(ongoing_flows[0]))
 
-        # for i in range(20):
-        #     ndag = complete_dag.copy()
-        #
-        #     # Modify corresponding uplinks
-        #     ndag.modify_random_uplinks(src_pod=src_pod)
-        #     ndag.plot('./images/random/epa_{0}.png'.format(i))
-
-        # For each dag sample
+        # Create a new dag of the complete dag with these edges only
+        ndag = complete_dag.copy()
 
         for i, edges_choice in enumerate(all_edge_choices):
-            # Create a new dag of the complete dag with these edges only
-            ndag = complete_dag.copy()
-
             # Modify corresponding uplinks
             ndag.modify_uplinks_from(edges_choice)
 
-            # Compute
-            eFlowCost = self.computeExpectedFlowsCost(ndag, dst_gw, ongoing_flows)
+            # Compute dag assessment
+            dagAssessment = self.computeExpectedFlowsCost(complete_dag, ndag, dst_gw, ongoing_flows)
 
-            if not best_dag:
-                best_dag = ndag
-                best_eFlowCost = eFlowCost
+            #log.info("DAG {0} -> cost {1}".format(i, eFlowCost))
+            cost = dagAssessment['cost']['mean']
+            karma = dagAssessment['karma']['mean']
+            #ndag.plot("./images/dag_{0}_C{1}_K{2}.png".format(i, float(cost), float(karma)))
+
+            # If we find one with cost == 0, return it directly!
+            #if dagAssessment['cost']['mean'] == 0.0:
+            #    return (ndag, dagAssessment)
+
+            if self.isBetterAssessment(dagAssessment, best_assessment):
+                # Update max
+                best_uplinks = edges_choice
+                best_assessment = dagAssessment
+
+        # Modify finally the dag with the best uplinks found
+        ndag.modify_uplinks_from(best_uplinks)
+
+        # Return the best one!
+        return (ndag, best_assessment)
+
+    @time_func
+    def getBestOfDagSamples(self, src_pod, complete_dag, ongoing_flows):
+        """"""
+        # Compute edge indexes for which no flows are starting towards dst
+        to_exclude = self.getExcludedEdgeIndexes(ongoing_flows)
+
+        # Accumulate best result here
+        best_assessment = {}
+        best_uplinks = []
+
+        # Get egress router
+        dst_gw = self.getGatewayRouter(self.getDestinationPrefixFromFlow(ongoing_flows[0]))
+
+        # Create a new dag of the complete dag with these edges only
+        ndag = complete_dag.copy()
+
+        # Compute how many DAG samples to perform
+        if len(to_exclude) == 1:
+            # Out of 15
+            n_samples = 15
+        else:
+            # Out of 225
+            n_samples = 100
+
+        log.info("Taking {0} DAG samples...".format(n_samples))
+
+        # Compute n samples at random
+        for i in range(n_samples):
+
+            # Generate random uplinks
+            ruplinks = ndag.get_random_uplinks(src_pod, exclude_edge_indexes=to_exclude)
+
+            # Modify dag
+            ndag.modify_uplinks_from(ruplinks)
+
+            # Compute dag assessment
+            dagAssessment = self.computeExpectedFlowsCost(complete_dag, ndag, dst_gw, ongoing_flows)
+
+            #log.info("DAG {0} -> cost {1}".format(i, eFlowCost))
+            cost = dagAssessment['cost']['mean']
+            karma = dagAssessment['karma']['mean']
+            #ndag.plot("./images/dag_{0}_C{1}_K{2}.png".format(i, float(cost), float(karma)))
+            # If we find one with cost == 0, return it directly!
+            #if dagAssessment['cost']['mean'] == 0.0:
+            #    return (ndag, dagAssessment)
+
+            if self.isBetterAssessment(dagAssessment, best_assessment):
+                # Update max
+                best_uplinks = ruplinks
+                best_assessment = dagAssessment
+
+        # Modify finally the dag with the best uplinks found
+        ndag.modify_uplinks_from(best_uplinks)
+
+        # Return the best one!
+        return (ndag, best_assessment)
+
+    @staticmethod
+    def isBetterAssessment(a, b):
+        """
+        Returns True if assessment a is better than assessment b
+        """
+        if not b:
+            return True
+
+        if not a:
+            return False
+
+        acost = a['cost']['mean']
+        bcost = b['cost']['mean']
+
+        # If different cost
+        if acost != bcost:
+            return acost < bcost
+
+        # Check karma if equal
+        else:
+            akarma = a['karma']['mean']
+            bkarma = b['karma']['mean']
+
+            # If different karma
+            if akarma != bkarma:
+                return akarma > bkarma
 
             else:
-                if eFlowCost < best_eFlowCost:
-                    best_dag = ndag
-                    best_eFlowCost = eFlowCost
+                return True
 
-        return (best_dag, best_eFlowCost)
+    def getExcludedEdgeIndexes(self, ongoing_flows):
+        """
+        Compute edge indexes for which no flows are starting towards dst
+        """
+        all_indexes_set = set(range(0, self.k/2))
+        used_indexes_set = {self.dc_graph_elep.get_router_index(self.getGatewayRouter(self.getSourcePrefixFromFlow(flow))) for flow in ongoing_flows}
+        return list(all_indexes_set.difference(used_indexes_set))
 
     #@time_func
-    def computeExpectedFlowsCost(self, ndag, dst_gw, ongoing_flows):
+    def computeExpectedFlowsCost(self, complete_dag, ndag, dst_gw, ongoing_flows):
         """
         Given a dag, and a set of ongoing flows, computes the expected sum of flow rates
         of these flows going through the dag
@@ -1154,55 +1353,84 @@ class DAGShifterController(LBController):
         all_paths_flow = [nx.all_simple_paths(ndag, flows_src_gws[i], dst_gw) for i, flow in enumerate(ongoing_flows)]
         all_path_combinations = it.product(*all_paths_flow)
 
-        # FlowsCost
+        # Accumulate flows cost and karma for all path combinations in the given DAG
         flows_cost = []
+        flows_karma = []
 
         # For each path combination
         for pcomb in all_path_combinations:
 
             # Compute flow congestion
-            flowsCost = self.computeFlowsCost(ndag, ongoing_flows, pcomb)
+            (flowsCost, flowsKarma) = self.computeFlowsCost(complete_dag, ongoing_flows, pcomb)
 
             # Append it
             flows_cost.append(flowsCost)
+            flows_karma.append(flowsKarma)
 
         # Convert it to a numpy array
         flows_cost = np.asarray(flows_cost)
+        flows_karma = np.asarray(flows_karma)
 
-        # Return expected value
-        return flows_cost.mean()
+        # Return expected values
+        return {'cost': {'mean': flows_cost.mean(), 'std': flows_cost.std()},
+                'karma': {'mean': flows_karma.mean(), 'std': flows_karma.std()}}
 
-    def computeFlowsCost(self, ndag, ongoing_flows, path_combination):
-        """Given a list of flows and a list repersentinc a path taken by each flow, returns
-        the total overflow observed by the flows"""
-
+    def computeFlowsCost(self, complete_dag, ongoing_flows, path_combination):
+        """Given a list of flows and a list representing a path taken by each flow, returns
+        the total overflow observed by the flows
+        """
         # Add the flow sizes to their paths first
         for i, flow in enumerate(ongoing_flows):
             fpath = path_combination[i]
-            for (u, v) in self.get_links_from_path(fpath):
-                # Remove previous one
-                if i == 0 and ndag[u][v].has_key('virtual'):
-                    ndag[u][v]['virtual'] = 0
+            links_from_path = self.get_links_from_path(fpath)
+            if i == 0:
+                # Set all current dag loads to zero
+                for (u, v) in complete_dag.edges_iter():
+                    if complete_dag[u][v]['current_dag_load'] != 0.0:
+                        complete_dag[u][v]['current_dag_load'] = 0.0
 
-                elif not ndag[u][v].has_key('virtual'):
-                    # Add new one
-                    ndag[u][v]['virtual'] = flow['size']
+                    if (u, v) in links_from_path:
+                        complete_dag[u][v]['current_dag_load'] = flow['size']
+            else:
+                for (u, v) in links_from_path:
+                    complete_dag[u][v]['current_dag_load'] += flow['size']
 
-                else:
-                    ndag[u][v]['virtual'] += flow['size']
-
+        # Here we acumulate the two measures to asess DAGs
+        totalKarma = 0
         totalCost = 0
+
         # Compute overload on the flow paths
         for fpath in path_combination:
-            for (u,v) in self.get_links_from_path(fpath):
-                totalLoad = ndag[u][v]['load'] + ndag[u][v]['virtual']
-                overLoad = abs(min(0, LINK_BANDWIDTH - totalLoad))
+
+            # Iterate links
+            for (u, v) in self.get_links_from_path(fpath):
+
+                # Compute total load used by flows in these paths
+                totalLoad = complete_dag[u][v]['fixed_load'] + complete_dag[u][v]['current_dag_load']
+
+                # Compute capacity threshold
+                capThreshold = LINK_BANDWIDTH*self.capacity_threshold
+
+                # Compute the spare capacity after the flows are allocated
+                spareCapacity = capThreshold - totalLoad
+
+                # Compute values
+                if spareCapacity >= 0:
+                    overLoad = 0.0
+                    underLoad = spareCapacity
+
+                else:
+                    overLoad = abs(spareCapacity)
+                    underLoad = 0.0
+
                 totalCost += overLoad
+                totalKarma += underLoad
 
-        return totalCost
+        # Return both measures
+        return (totalCost, totalKarma)
 
-    @time_func
-    def getInitialDagWithoutFlows(self, src_pod, dst_px, ongoing_flows):
+    #@time_func
+    def getInitialDagWithoutFlows(self, dst_px, ongoing_flow_keys):
         """
         Returns the dag that we need in order to compute the
         best dag search from a certain pod to a certain destination
@@ -1219,23 +1447,21 @@ class DAGShifterController(LBController):
         # Insert current loads into the edges of the graph
         with self.add_del_flow_lock:
             # Iterkeys
-            for edge in self.edges_to_flows.iterkeys():
+            for edge in idag_c.edges_iter():
                 # Check src and dst
                 (u, v) = edge
 
-                # Check if edge is from initial dag
-                if edge in idag.edges():
+                # Get all the loads except those of ongoing flows
+                edge_load = self.getLinkLoad(edge, exclude=ongoing_flow_keys)
 
-                    # Get all the loads except those of ongoing flows
-                    edge_load = self.getLinkLoad(edge, exclude=ongoing_flows)
-
-                    # Insert it in the new dag
-                    idag_c[u][v]['load'] = edge_load
+                # Insert it in the new dag
+                idag_c[u][v]['fixed_load'] = edge_load
+                idag_c[u][v]['current_dag_load'] = 0.0
 
         # Return the dag
         return idag_c
 
-    def getOngoingFlowsToDst(self, dst, from_pod=None):
+    def getOngoingFlowKeysToDst(self, dst, from_pod=None):
         """
         Return a list of flow keys that are going towards dst.
         If from_pod is none, it returs all the flows in the network.
@@ -1256,18 +1482,23 @@ class DAGShifterController(LBController):
             # no pod filter
             if not from_pod:
                 # All flows
-                fws = [fkey for edge in incoming_edges for fkey in self.edges_to_flows[edge]
-                       if self.getDestinationPrefixFromFlow(self.keyToFlow(fkey)) == dst]
-
+                fws = []
+                for edge in incoming_edges:
+                    for fkey, data in self.edges_to_flows[edge].iteritems():
+                        if self.getDestinationPrefixFromFlow(data['flow']) == dst:
+                            fws.append(fkey)
             else:
                 # Only flows from source pod
-                fws = [fkey for edge in incoming_edges for fkey in self.edges_to_flows[edge]
-                       if self.getSourcePodFromFlow(self.keyToFlow(fkey)) == from_pod
-                       and self.getDestinationPrefixFromFlow(self.keyToFlow(fkey)) == dst]
-
+                fws = []
+                for edge in incoming_edges:
+                    for fkey, data in self.edges_to_flows[edge].iteritems():
+                        flow = data['flow']
+                        if self.getDestinationPrefixFromFlow(flow) == dst:
+                            if self.getSourcePodFromFlow(flow) == from_pod:
+                                fws.append(flow)
             return fws
 
-    @time_func
+    #@time_func
     def flowCongestionProbability(self, flow, dag):
         """"""
         paths_to_loads = self.pathLoadsAfterFlowInDag(flow, dag)
@@ -1538,16 +1769,25 @@ if __name__ == '__main__':
                         choices=["ecmp", "dag-shifter"],
                         default = 'ecmp')
 
+    # General arguments
     parser.add_argument('-k', '--k', help='Fat-Tree parameter', type=int, default=4)
-
     parser.add_argument('-t', '--test', help='Test controller', action="store_true", default=False)
 
-    parser.add_argument('--cong_prob', help='Threshold of congestion probability', type=float, default=0.1)
+
+    # DAG-shifter arguments
+    parser.add_argument('--cong_prob', help='Threshold of congestion probability', type=float, default=0.0)
+    parser.add_argument('--cap_threshold', help='Capacity threshold at which we consider congestion', type=float, default=1)
+    parser.add_argument('--sample', help='Wether to sample on DAGs or always find the best DAG', action="store_true", default=False)
+
 
     args = parser.parse_args()
 
     log.setLevel(logging.DEBUG)
     log.info("Starting Controller - k = {0} , algorithm = {1}".format(args.k, args.algorithm))
+    if args.algorithm == 'dag-shifter':
+        log.info("Capacity threshold: {0}".format(args.cap_threshold))
+        log.info("Max congestion probability: {0}".format(args.cong_prob))
+        log.info("Sample on DAGs? {0}".format(args.sample))
 
     if args.test == True:
         lb = TestController()
@@ -1556,7 +1796,10 @@ if __name__ == '__main__':
         lb = ECMPController(doBalance = args.doBalance, k=args.k)
 
     elif args.algorithm == 'dag-shifter':
-        lb = DAGShifterController(doBalance= args.doBalance, k=args.k, congProb_threshold=args.cong_prob)
+        lb = DAGShifterController(doBalance= args.doBalance, k=args.k,
+                                  congProb_threshold=args.cong_prob,
+                                  capacity_threshold=args.cap_threshold,
+                                  sample=args.sample)
 
 
     # Run the controller
