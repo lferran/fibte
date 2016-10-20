@@ -10,25 +10,28 @@ class TGFillerParser(TGParser):
 
         # Load additional arguments
         self.parser.add_argument('--elephant_load', help='Level of elephant load', type=float, default=0.8)
+        self.parser.add_argument('--n_flows', help='Number of elephant flows to maintain', type=int, default=16)
         self.parser.add_argument('--mice_load', help='Level of mice load', type=float, default=0.2)
 
 class udpTrafficGeneratorFiller(udpTrafficGeneratorBase):
-    def __init__(self, elephant_load=0.8, mice_load=0.2, *args, **kwargs):
+    def __init__(self, elephant_load=0.8, n_flows=16, mice_load=0.2, *args, **kwargs):
         super(udpTrafficGeneratorFiller, self).__init__(*args, **kwargs)
 
         # Set target link load
         self.elephant_load = elephant_load
+        self.n_flows = 16
         self.mice_load = mice_load
 
     def get_filename(self):
         """Return filename sample pattern"""
         pattern_args_fn = self.get_pattern_args_filename()
         filename = '{0}'.format(self.saved_traffic_dir)
-        anames = ['tgf', '{0}', pattern_args_fn, 'el{1}', 'ml{2}', 't{2}', 'ts{3}']
+        anames = ['tgf', '{0}', pattern_args_fn, 'el{1}', 'nf{2}', 'ml{3}', 't{4}', 'ts{5}']
         filename += '_'.join([a for a in anames if a != None])
 
         filename = filename.format(self.pattern,
                         str(self.elephant_load).replace('.', ','),
+                        str(self.n_flows),
                         str(self.mice_load).replace('.', ','),
                         self.totalTime, self.timeStep)
 
@@ -102,7 +105,6 @@ class udpTrafficGeneratorFiller(udpTrafficGeneratorBase):
 
         :return:
         """
-
         # The resulting traffic is stored here
         flows_per_sender = {s: [] for s in self.senders}
 
@@ -112,9 +114,11 @@ class udpTrafficGeneratorFiller(udpTrafficGeneratorBase):
         # Initial flow id
         next_id = 0
 
+        fws_per_host = self.n_flows/float(len(self.senders))
+        fw_size = (self.elephant_load*LINK_BANDWIDTH)/fws_per_host
+
         ## Schedule first elephant flows #############################
         if self.elephant_load > 0.0:
-
             # Allocate elephant flows
             for i in range(0, self.totalTime, self.timeStep):
                 # Iterate all senders
@@ -122,11 +126,12 @@ class udpTrafficGeneratorFiller(udpTrafficGeneratorBase):
                     # Check if they can send some more elephant flows
                     if self.can_send_more(all_elep_flows, sender, period=i):
                         # Get a new elephant flow
-                        size = self.get_flow_size(flow_type='e', distribution='constant')
+                        #size = self.get_flow_size(flow_type='e', distribution='uniform')
+                        size = fw_size
                         duration = self.get_flow_duration(flow_type='e')
                         destination = self.get_flow_destination(sender)
                         fid = next_id
-                        f = {'startTime': random.uniform(i, i+1), 'id': fid,
+                        f = {'startTime': random.uniform(i, i+self.timeStep), 'id': fid,
                              'srcHost': sender, 'dstHost': destination,
                              'type': 'e', 'size': size, 'duration': duration}
                         flows_per_sender[sender].append(f)
@@ -213,6 +218,7 @@ if __name__ == "__main__":
 
     # Start the TG object
     tgf = udpTrafficGeneratorFiller(elephant_load=args.elephant_load,
+                                    n_flows=args.n_flows,
                                     mice_load=args.mice_load,
                                     pattern=args.pattern,
                                     pattern_args=args.pattern_args,
@@ -249,8 +255,13 @@ if __name__ == "__main__":
 
                 # If it must be saved
                 if args.save_traffic:
+                    if not args.file_name:
+                        filename = tgf.get_filename()
+                    else:
+                        filename = args.file_name
+
+                    # Log it
                     msg = "Saving traffic file -> {0}"
-                    filename = tgf.get_filename()
                     print msg.format(filename)
 
                     # Convert current ip's to hostnames

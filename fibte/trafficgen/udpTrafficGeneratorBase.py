@@ -61,7 +61,8 @@ class TGParser(object):
         self.parser.add_argument('--pattern_args', help='Communication pattern arguments', type=json.loads, default='{}')
         self.parser.add_argument('-t', '--time', help='Duration of the traffic generator', type=int, default=120)
         self.parser.add_argument('-s', '--time_step', help="Granularity at which we inspect the generated traffic so that the rates are kept", type=int, default=1)
-        self.parser.add_argument('--save_traffic', help='Saves traffic in a file so it can be repeated', action="store_true")
+        self.parser.add_argument('--save_traffic', help='Saves traffic in a file so it can be repeated',action="store_true")
+        self.parser.add_argument('--file_name', help='Specify the filename for the traffic file', action="store_true", default=False)
         self.parser.add_argument('--load_traffic', help='Load traffic from a file so it can be repeated', default="")
         self.parser.add_argument('--flows_file', help="Schedule the flows specified in file", default=False)
         self.parser.add_argument('--terminate', help='Terminate any ongoing traffic', action='store_true')
@@ -69,7 +70,6 @@ class TGParser(object):
     def parseArgs(self):
         # Parse the arguments and return them
         args = self.parser.parse_args()
-
         return args
 
     def printArgs(self, args):
@@ -254,8 +254,8 @@ class udpTrafficGeneratorBase(Base):
 
         elif self.pattern == 'bijection':
             # Create random pairs
-            import ipdb; ipdb.set_trace()
-            random_hosts_list = random.shuffle(rcvs)
+            random_hosts_list = rcvs[:]
+            random.shuffle(random_hosts_list)
             for index, h in enumerate(random_hosts_list):
                 r_index = (index + 1) % len(random_hosts_list)
                 r = random_hosts_list[r_index]
