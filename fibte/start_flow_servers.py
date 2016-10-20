@@ -25,13 +25,22 @@ if __name__ == '__main__':
     topology = TopologyGraph(getIfindexes=False, db=os.path.join(tmp_files,db_topo))
     for h in topology.getHosts().keys():
         if hosts:
-            if h in hosts:
-                if args.ip_alias:
-                    command = "mx {0} {1} {0} {2} &"
-                    os.system(command.format(h, flowServer_path, args.ip_alias))
-                else:
-                    command = "mx {0} {1} {0} &"
-                    os.system(command.format(h, flowServer_path))
+            if len(hosts) != 1:
+                if h in hosts:
+                    if args.ip_alias:
+                        command = "mx {0} {1} {0} {2} &"
+                        os.system(command.format(h, flowServer_path, args.ip_alias))
+                    else:
+                        command = "mx {0} {1} {0} &"
+                        os.system(command.format(h, flowServer_path))
+            else:
+                if h in hosts:
+                    if args.ip_alias:
+                        command = "mx {0} {1} {0} {2}"
+                        os.system(command.format(h, flowServer_path, args.ip_alias))
+                    else:
+                        command = "mx {0} {1} {0}"
+                        os.system(command.format(h, flowServer_path))
         else:
             if args.ip_alias:
                 command = "mx {0} {1} {0} {2} &"

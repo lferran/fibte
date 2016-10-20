@@ -140,7 +140,6 @@ class FlowServer(object):
 
             # Use traceroute (original)
             traceroute_fun = traceroute
-            traceroute_type = 'slow'
 
         else:
             if flow['dst'] in self.own_pod_hosts:
@@ -150,7 +149,6 @@ class FlowServer(object):
 
             # use traceroute (fast version)
             traceroute_fun = traceroute_fast
-            traceroute_type = 'fast'
 
         # Run function
         route = traceroute_fun(hops=hops, **flow)
