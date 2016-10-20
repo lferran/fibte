@@ -22,7 +22,7 @@ import os
 results_folder = os.path.join(os.path.dirname(__file__), 'results/')
 
 class GetLoads(object):
-    def __init__(self, k=4, time_interval=1, algorithm=None):
+    def __init__(self, k=4, time_interval=1, lb_algorithm=None):
 
         # Config logging to dedicated file for this thread
         handler = logging.FileHandler(filename='{0}getLoads_thread.log'.format(tmp_files))
@@ -48,7 +48,7 @@ class GetLoads(object):
         self.k = k
 
         # Algorithm that the LB is using
-        self.lb_algorithm = algorithm
+        self.lb_algorithm = lb_algorithm
 
         # Load read-outs intervalt
         self.time_interval = time_interval
@@ -170,7 +170,7 @@ class GetLoads(object):
         #bb_file = open("{1}bisection_bw_file_{0}_{2}.txt".format(self.k, results_folder, self.lb_algorithm), "w")
 
         # File for aggregation traffic
-        agg_file = open("{1}aggregation_traffic_{0}_{2}.txt".format(self.k, results_folder, self.lb_algorithm), "w")
+        agg_file = open("{1}bb_{0}_{2}.txt".format(self.k, results_folder, self.lb_algorithm), "w")
 
         while True:
             try:
@@ -250,5 +250,5 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    gl = GetLoads(k=args.k, time_interval=args.time_interval, algorithm=args.algorithm)
+    gl = GetLoads(k=args.k, time_interval=args.time_interval, lb_algorithm=args.algorithm)
     gl.run()

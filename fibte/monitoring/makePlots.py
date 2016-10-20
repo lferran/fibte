@@ -2,7 +2,6 @@ import json
 import os
 from fibte.misc.topology_graph import TopologyGraph
 import numpy as np
-from cycler import cycler
 from fibte import CFG, LINK_BANDWIDTH
 
 import matplotlib.pyplot as plt
@@ -20,6 +19,8 @@ algo_styles = {'ecmp':
                    {'color':'green', 'linestyle':'-'},
 
                'random-core':
+                   {'color':'blue', 'linestyle':'-'},
+               'dag-shifter':
                    {'color':'blue', 'linestyle':'-'},
                }
 

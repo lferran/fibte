@@ -182,6 +182,14 @@ class TopologyGraph(TopologyDB):
                 bindings['privateToPublic'][private_ip] = rid
         return bindings
 
+    def guess_router_name(self, ip):
+        for fun in [self.getRouterName, self.getRouterFromPrivateIp, self.getRouterFromInterfaceIp]:
+            try:
+                return fun(ip)
+            except KeyError:
+                continue
+        return ip
+
     def getRouterIdFromPrivateIp(self, private_ip):
         return self.private_ip_binding['privateToPublic'][private_ip]
 
@@ -791,10 +799,14 @@ class NamesToIps(dict):
 
         for n, data in network.iteritems():
             is_host = 'h' in n
+            is_router = 'r' in n
             if is_host:
                 h_ip = self.getPrimaryIp(network, n)
                 self['nameToIp'][n] = h_ip
                 self['ipToName'][h_ip] = n
+            if is_router:
+                pass
+
 
     def getPrimaryIp(self, network, h):
         data = network[h]
