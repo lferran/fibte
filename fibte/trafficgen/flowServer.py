@@ -401,6 +401,7 @@ class FlowServer(object):
         tcp_server_thread.setDaemon(True)
         tcp_server_thread.start()
 
+        last_ending_time = 0
         while True:
             # No simulation ongoing -- waiting for events
             if not self.scheduler_process.is_alive():
@@ -460,8 +461,15 @@ class FlowServer(object):
                         # Schedule stopFlow function
                         self.scheduler.enterabs(ending_time, 1, self.stopFlow, [flow])
 
+                        if ending_time > last_ending_time:
+                            last_ending_time = ending_time
+
                     log.debug("All flows were scheduled! Let's run the scheduler (in a different thread)")
                     log.debug("A total of {0} flows will be started at host. {1} MICE | {2} ELEPHANT".format(sum(flow_count.values()), flow_count['mice'], flow_count['elephant']))
+
+                    # Schedule dummy function to avoid last flow crash
+                    fun = lambda(x): x+1
+                    self.scheduler.enterabs(last_ending_time + 2, 1, fun, [2])
 
                     # Run scheduler in another thread
                     self.scheduler_process.start()
