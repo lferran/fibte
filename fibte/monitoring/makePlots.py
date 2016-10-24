@@ -9,20 +9,12 @@ import matplotlib.pyplot as plt
 tmp_files = CFG.get("DEFAULT", "tmp_files")
 db_topo = CFG.get("DEFAULT", "db_topo")
 
-algo_styles = {'ecmp':
-                   {'color': 'red', 'linestyle':'-'},
-
-               'random-dags':
-                   {'color':'orange', 'linestyle':'-'},
-
-               'best-ranked-core':
-                   {'color':'green', 'linestyle':'-'},
-
-               'random-core':
-                   {'color':'blue', 'linestyle':'-'},
-               'dag-shifter':
-                   {'color':'blue', 'linestyle':'-'},
+algo_styles = {
+               'ecmp': {'color': 'red', 'linestyle':'-'},
+               'dag-shifter-best': {'color':'blue', 'linestyle':'-'},
+               'dag-shifter-sample': {'color':'orange', 'linestyle':'-'}
                }
+
 
 class AlgorithmsComparator(object):
     def __init__(self, k=4, file_list=[]):
@@ -37,6 +29,15 @@ class AlgorithmsComparator(object):
         # Load them
         self.algo_to_measurements = self.load_measurements()
 
+    def extractAlgoNameFromFilename(self, filename):
+        if 'ecmp' in filename:
+            return 'ecmp'
+        elif 'dag-shifter' in filename:
+            if 'True' in filename:
+                return 'dag-shifter-sample'
+            else:
+                return 'dag-shifter-best'
+
     def load_measurements(self):
         """
         Given a list of filenames, return a dictionary keyed by algorithm.
@@ -50,7 +51,7 @@ class AlgorithmsComparator(object):
 
         for filename in self.file_list:
             # Extract algorithm name
-            algo = filename.strip('txt').strip('.').split('_')[-1]
+            algo = self.extractAlgoNameFromFilename(filename)
             if algo == '': algo = 'None'
 
             # Extract measurements
@@ -279,8 +280,8 @@ class AlgorithmsComparator(object):
 
         # Divide it for the max
         #max_traffic = (LINK_BANDWIDTH*(self.k**2))/1e3
-        tout = np.asarray(tout)/(self.k**2)
-        tin = np.asarray(tin)/(self.k**2)
+        tout = np.asarray(tout)#/(self.k**2)
+        tin = np.asarray(tin)#/(self.k**2)
         return tin, tout
 
     def plot_in_out_abs_traffic(self):
@@ -315,7 +316,7 @@ class AlgorithmsComparator(object):
             # Set labels and limits
             sub.set_xlabel("Time (s)")
             sub.set_ylabel("Total Fat-Tree load")
-            sub.set_ylim([0, 1])
+            sub.set_ylim([0, 16.5])
 
             # Increment subplot index
             i = i + 1
@@ -339,7 +340,7 @@ class AlgorithmsComparator(object):
         fig.suptitle("Output/Input traffic ratio at the edge for different LB strategies", fontsize=20)
         plt.xlabel("Time (s)", fontsize=16)
         plt.ylabel("OUT/IN ratio", fontsize=16)
-        plt.ylim([0, 1])
+        plt.ylim([0, 1.05])
 
         for algo, measurements in self.algo_to_measurements.iteritems():
             (tin, tout) = self.get_in_out_metric(measurements)
