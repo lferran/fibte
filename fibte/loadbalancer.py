@@ -193,6 +193,7 @@ class LBController(object):
             self.r_c2 = self.topology.getRouterId('r_c2')
             self.r_c3 = self.topology.getRouterId('r_c3')
 
+
     @staticmethod
     def get_links_from_path(path):
         return zip(path[:-1], path[1:])
@@ -512,6 +513,23 @@ class LBController(object):
         self.current_elephant_dags[prefix]['dag'] = dag
         if fib:
             self.sbmanager.add_dag_requirement(prefix, dag)
+
+            # Wait for fibbing to apply the dag and the new requirements to propagate
+            WAIT_PROPAGATION_TIME_MS = 150
+            time.sleep(WAIT_PROPAGATION_TIME_MS/1000.0)
+
+    def resetToInitialDag(self, prefix, fib=False, src_pod=None):
+        """"""
+        if not src_pod:
+            self.current_elephant_dags[prefix]['dag'] = self.initial_elep_dags[prefix]['dag'].copy()
+            if fib:
+                self.sbmanager.remove_dag_requirement(prefix)
+
+        else:
+            cdag = self.current_elephant_dags[prefix]['dag']
+            cdag.set_ecmp_uplinks_from_pod(src_pod=src_pod)
+            if fib:
+                self.sbmanager.add_dag_requirement(prefix, cdag)
 
     def getMatchingPrefix(self, hostip):
         """
@@ -983,8 +1001,12 @@ class LBController(object):
                         log.info("LB not active - event received: {0}".format(json.loads(event)))
                 else:
                     # Read from TCP server's queue
-                    event = json.loads(self.q_server.get())
-                    self.q_server.task_done()
+                    try:
+                        event = json.loads(self.q_server.get())
+                        self.q_server.task_done()
+                    except TypeError:
+                        log.error("weird TypeError")
+                        import ipdb; ipdb.set_trace()
 
                     if event["type"] == "reset":
                         log.info("RESET event received")
@@ -1005,6 +1027,21 @@ class LBController(object):
                         log.info("WOKE UP!")
                     else:
                         log.error("Unknown event: {0}".format(event))
+
+                    # Copute the total number of ongoing flows
+                    n_ongoing_flows = len(self.flows_to_paths.keys())
+                    log.info("TOTAL ongoing flows: {0}".format(n_ongoing_flows))
+
+                    # Compute how many paths have more than 1 flow
+                    max_n_flows = [len(data.keys()) for (link, data) in self.edges_to_flows.iteritems()]
+                    log.info("Edges flow count: {0}".format(max_n_flows))
+                    if 2 in max_n_flows:
+                        log.info("CONGESTION DETECTED!")
+                        dst = self.getDestinationPrefixFromFlow(event['flow'])
+                        cdag = self.getCurrentDag(dst)
+                        cdag.plot('current_dag.png')
+                        import ipdb; ipdb.set_trace()
+
 
             except KeyboardInterrupt:
                 # Exit load balancer
@@ -1055,17 +1092,91 @@ class DAGShifterController(LBController):
         # Call init of subclass
         super(DAGShifterController, self).__init__(algorithm='dag-shifter', *args, **kwargs)
 
+        test_traceroute = True
+        if test_traceroute:
+            dst_px = self.topology.hostsToNetworksMapping['hostToNetwork']['h_3_3'].values()[0]
+            dst_ip = self.topology.getHostIp('h_3_3')
+            src_ip = self.topology.getHostIp('h_0_0')
+
+            src_pod = 0
+
+            initial_dag = self.current_elephant_dags[dst_px]['dag'].copy()
+
+            times = []
+            for sport in range(2000, 2010):
+                sport = 2000
+
+                import ipdb; ipdb.set_trace()
+
+                cdag = self.getCurrentDag(dst_px)
+                cdag.set_ecmp_uplinks_from_pod(src_pod=src_pod)
+                self.sbmanager.add_dag_requirement(dst_px, cdag)
+
+
+                flow = {'src':src_ip, 'sport': sport, 'dport': 1111, 'dst': dst_ip, 'proto': 'udp', 'size': 10000000.0, 'duration': 120}
+                fkey = self.flowToKey(flow)
+
+                #import ipdb; ipdb.set_trace()
+
+                self.findNewPathsForFlows([flow])
+
+                import ipdb; ipdb.set_trace()
+
+                default_path = self.flows_to_paths[self.flowToKey(flow)]['path']
+
+                #log.info("CURRENT PATH: {0}".format(self.dc_graph_elep.print_stuff(default_path)))
+
+                # Modify DAG
+                if default_path[1] == self.r_0_a0:
+                    edge = (default_path[0], self.r_0_a1)
+                else:
+                    edge = (default_path[0], self.r_0_a0)
+
+                # Compute new edge
+                cdag.modify_uplinks_from([edge])
+
+                # Save the new DAG
+                self.current_elephant_dags[dst_px]['dag'] = cdag
+                self.sbmanager.add_dag_requirement(dst_px, cdag)
+
+                time.sleep(1)
+
+                # Start counting propagation time
+                start = time.time()
+                found = False
+                i = 0
+                while not found and i < 100:
+                    # Find new path for flow
+                    self.findNewPathsForFlows([flow])
+
+                    # Extract new path
+                    new_path = self.flows_to_paths[fkey]['path']
+
+                    # If they are different, it has converged!
+                    if new_path != default_path:
+                        found = True
+                        break
+
+                    i = i + 1
+
+                if found:
+                    prp_time = time.time() - start
+                    log.warning("It took ~ {0}s to find new route in new DAG".format(prp_time))
+                    times.append(prp_time)
+
+                else:
+                    log.warning("Not found...")
+                    times.append(-1)
+
+                import ipdb; ipdb.set_trace()
+
+
+            import ipdb; ipdb.set_trace()
+
+
     def _getAlgorithmName(self):
         """"""
         return "dag-shifter_k_{3}_cap_{0}_cong_{1}_sample_{2}".format(self.capacity_threshold, self.congProb_threshold, self.sample, self.k)
-
-    @time_func
-    def addDagRequirement(self, dst, dag):
-        # Force DAG with fibbing
-        self.sbmanager.add_dag_requirement(dst, dag)
-
-        # Save DAG
-        self.current_elephant_dags[dst]['dag'] = dag
 
     @time_func
     def allocateFlow(self, flow):
@@ -1088,7 +1199,7 @@ class DAGShifterController(LBController):
         log.info("Flow congestion probability: {0}%".format(congProb*100))
 
         # If above the threshold
-        if congProb > self.congProb_threshold:
+        if congProb >= self.congProb_threshold:
             # Get source pod
             src_pod = self.getSourcePodFromFlow(flow)
 
@@ -1130,11 +1241,7 @@ class DAGShifterController(LBController):
             log.info("Best DAG was found with a cost: {0} and karma: {1} (img: {2})".format(dagcost, dagkarma, img_name))
 
             # Force it with Fibbing
-            self.addDagRequirement(dst_px, best_dag)
-
-            # Wait for fibbing to apply the dag and the new requirements to propagate
-            WAIT_PROPAGATION_TIME_MS = 100
-            time.sleep(WAIT_PROPAGATION_TIME_MS/1000.0)
+            self.saveCurrentDag(dst_px, best_dag, fib=True)
 
             # Find new paths for flows
             self.findNewPathsForFlows(dst_ongoing_flows)
@@ -1142,6 +1249,48 @@ class DAGShifterController(LBController):
         else:
             # Get flow's path
             self.findNewPathsForFlows([flow])
+
+    def deallocateFlow(self, flow, reset_dag=False):
+        super(DAGShifterController, self).deallocateFlow(flow)
+
+        # Get destination
+        dst = self.getDestinationPrefixFromFlow(flow)
+
+        # Check if flow is within same subnetwork
+        if self.isFlowToSameNetwork(flow):
+            # No need to loadbalance anything
+            # For TCP: we need to update the matrix
+            return
+
+        # Deallocate if from the network
+        old_path = self.delFlowFromPath(flow)[:]
+
+        # Traceroute flow
+        self.findNewPathsForFlows([flow])
+        tr_path = self.flows_to_paths[self.flowToKey(flow)]['path'][:]
+
+        if old_path != tr_path:
+            log.error("OLD PATH: {0}".format(self.dc_graph_elep.print_stuff(old_path)))
+            log.error("TRACEROUTED PATH: {0}".format(self.dc_graph_elep.print_stuff(tr_path)))
+
+        #    import ipdb; ipdb.set_trace()
+
+        # Deallocate if from the network
+        old_path = self.delFlowFromPath(flow)
+
+        if reset_dag:
+            # Reset to initial source-pod dag if no more flows are there
+            src_pod = self.getSourcePodFromFlow(flow)
+            if not self.getOngoingFlowKeysToDst(dst, src_pod):
+                if not self.getOngoingFlowKeysToDst(dst):
+                    log.info("Resetting the complete DAG to initial one")
+                    self.resetToInitialDag(dst, fib=True)
+                else:
+                    log.info("Resetting DAG from source pod {0}".format(src_pod))
+                    self.resetToInitialDag(dst, fib=True, src_pod=src_pod)
+
+            # LSA propagation time
+            #time.sleep(0.200)
 
     @time_func
     def findNewPathsForFlows(self, flows):
@@ -1169,7 +1318,7 @@ class DAGShifterController(LBController):
         while not found_all_paths:
             found_all_paths = all([True if self.isFlowPathUpdated(f) else False for f in ongoing_flows])
             i += 1
-        log.debug("{0} iterations needed".format(i))
+        #log.debug("{0} iterations needed".format(i))
 
     def isFlowPathUpdated(self, flow):
         """"""
@@ -1182,18 +1331,6 @@ class DAGShifterController(LBController):
                 return True
             else:
                 return False
-
-    def deallocateFlow(self, flow):
-        super(DAGShifterController, self).deallocateFlow(flow)
-
-        # Check if flow is within same subnetwork
-        if self.isFlowToSameNetwork(flow):
-            # No need to loadbalance anything
-            # For TCP: we need to update the matrix
-            return
-
-        # Deallocate if from the network
-        self.delFlowFromPath(flow)
 
     @time_func
     def findBestSourcePodDag(self, src_pod, complete_dag, ongoing_flows):
@@ -1222,9 +1359,13 @@ class DAGShifterController(LBController):
             # Compute dag assessment
             dagAssessment = self.computeExpectedFlowsCost(complete_dag, ndag, dst_gw, ongoing_flows)
 
+            # Add also the number of edges
+            dagAssessment.update({'edges': len(edges_choice)})
+
             #log.info("DAG {0} -> cost {1}".format(i, eFlowCost))
             cost = dagAssessment['cost']['mean']
             karma = dagAssessment['karma']['mean']
+
             #ndag.plot("./images/dag_{0}_C{1}_K{2}.png".format(i, float(cost), float(karma)))
 
             # If we find one with cost == 0, return it directly!
@@ -1279,6 +1420,7 @@ class DAGShifterController(LBController):
 
             # Compute dag assessment
             dagAssessment = self.computeExpectedFlowsCost(complete_dag, ndag, dst_gw, ongoing_flows)
+            dagAssessment.update({'edges': len(ruplinks)})
 
             #log.info("DAG {0} -> cost {1}".format(i, eFlowCost))
             cost = dagAssessment['cost']['mean']
@@ -1312,6 +1454,8 @@ class DAGShifterController(LBController):
 
         acost = a['cost']['mean']
         bcost = b['cost']['mean']
+        akarma = a['karma']['mean']
+        bkarma = b['karma']['mean']
 
         # If different cost
         if acost != bcost:
@@ -1319,15 +1463,29 @@ class DAGShifterController(LBController):
 
         # Check karma if equal
         else:
-            akarma = a['karma']['mean']
-            bkarma = b['karma']['mean']
-
             # If different karma
             if akarma != bkarma:
                 return akarma > bkarma
-
             else:
-                return True
+                acost_std = a['cost']['std']
+                bcost_std = b['cost']['std']
+                akarma_std = a['karma']['std']
+                bkarma_std = b['karma']['std']
+
+                # Check for the least std observed
+                if acost_std != bcost_std:
+                    return acost_std < bcost_std
+                elif akarma_std != bkarma_std:
+                    return akarma_std < bkarma_std
+                else:
+                    a_nedges = a['edges']
+                    b_nedges = b['edges']
+                    if a_nedges != b_nedges:
+                        return a_nedges < b_nedges
+
+                    else:
+                        log.warning("ALL equal! ...")
+                        return True
 
     def getExcludedEdgeIndexes(self, ongoing_flows):
         """
@@ -1666,8 +1824,12 @@ class TestController(object):
             try:
                 while True:
                     # Read from TCP server queue
-                    event = json.loads(self.q_server.get())
-                    self.q_server.task_done()
+                    try:
+                        event = json.loads(self.q_server.get())
+                        self.q_server.task_done()
+                    except TypeError:
+                        log.error("weird TypeError")
+                        import ipdb; ipdb.set_trace()
 
                     log.info("Event received: {0}".format(event))
                     if event["type"] == "reset":
