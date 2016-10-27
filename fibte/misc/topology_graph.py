@@ -8,8 +8,8 @@ import ipaddress
 import matplotlib.pyplot as plt
 import time
 
+import fibte.misc.ipalias as ipalias
 from fibbingnode.misc.mininetlib.ipnet import TopologyDB
-
 from fibte import CFG
 
 tmp_files = CFG.get("DEFAULT", "tmp_files")
@@ -802,8 +802,10 @@ class NamesToIps(dict):
             is_router = 'r' in n
             if is_host:
                 h_ip = self.getPrimaryIp(network, n)
-                self['nameToIp'][n] = h_ip
+                h_2ip = ipalias.get_secondary_ip(h_ip)
+                self['nameToIp'][n] = {'primary': h_ip, 'secondary': h_2ip}
                 self['ipToName'][h_ip] = n
+                self['ipToName'][h_2ip] = n
             if is_router:
                 pass
 
