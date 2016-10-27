@@ -11,17 +11,20 @@ import traceback
 import logging
 import Queue
 import numpy as np
+import subprocess
 from threading import Thread, Lock
 
 import flowGenerator
+from fibte.misc.kthread import KThread
 from fibte.monitoring.traceroute import traceroute, traceroute_fast
 from fibte.misc.unixSockets import UnixServerTCP, UnixClientTCP, UnixServer, UnixClient
-from fibte.trafficgen import isElephant
+from fibte.trafficgen import isElephant, isMice
 from fibte.misc.ipalias import get_secondary_ip
 from fibte.logger import log
 from fibte.trafficgen.flow import Base
 from fibte.misc.topology_graph import NamesToIps
 from fibte import tmp_files, db_topo
+
 
 def time_func(function):
     def wrapper(*args,**kwargs):
@@ -32,14 +35,32 @@ def time_func(function):
     return wrapper
 
 import select
+
 def my_sleep(seconds):
     select.select([], [], [], seconds)
 
-class FlowServer(object):
+class Joiner(Thread):
+    def __init__(self, q):
+        super(Joiner,self).__init__()
+        self.__q = q
+    def run(self):
+        while True:
+            child = self.__q.get()
+            if child == None:
+                return
+            child.join()
 
+class FlowServer(object):
     def __init__(self, name, ip_alias=False, sampling_rate=1, notify_period=10):
         # Setup flowServer name
         self.name = name
+
+        # Get parent pid
+        self.parentPid = os.getpid()
+
+        # Accumulate processes for TCP servers
+        self.popens = []
+        self.processes = []
 
         # Setup logging stuff
         self.setup_logging()
@@ -51,29 +72,20 @@ class FlowServer(object):
         self.q_server = Queue.Queue(0)
         self.server_from_tg = UnixServerTCP(self.address, self.q_server)
 
-        # Configure sigterm handler
-        signal.signal(signal.SIGTERM, self.signal_term_handler)
-
-        # Get own pid
-        self.parentPid = os.getpid()
-        log.debug("First time p:{0},{1}".format(os.getppid(), os.getpid()))
+        # Unix Client to communicate to controller
+        self.client_to_controller = UnixClientTCP("/tmp/controllerServer")
 
         # Flow generation start time
         self.starttime = 0
         self.received_starttime = False
 
-        # List of flows to start with their respective times []-> (t, flow)
-        self.flowlist = []
-        self.received_flowlist = False
-
         # Create the scheduler instance and run it in a separate process
         self.scheduler = sched.scheduler(time.time, my_sleep)
-        self.scheduler_process = Process(target=self.scheduler.run)
-        self.scheduler_process.daemon = False
+        self.scheduler_thread = Thread(target=self.scheduler.run)
+        self.scheduler_thread.setDaemon(True)
 
         # Weather secondary ip's are present at the host or not
         self.ip_alias = ip_alias
-        log.debug("Is ip alias for elephants is active? {0}".format(str(self.ip_alias)))
 
         # To store mice estimation
         self.estimation_lock = Lock()
@@ -85,8 +97,9 @@ class FlowServer(object):
         self.sampling_rate = sampling_rate
         self.notify_period = notify_period
 
-        # Unix Client to communicate to controller
-        self.client_to_controller = UnixClientTCP("/tmp/controllerServer")
+        # UnixUDPServer for mice start/stop notifications
+        self.own_mice_server_name = "/tmp/miceServer_{0}"
+        self.own_mice_server = UnixServer(self.own_mice_server_name.format(self.name))
 
         # Traceroute sockets
         self.traceroute_server_name = "/tmp/tracerouteServer_{0}".format(name)
@@ -97,13 +110,43 @@ class FlowServer(object):
         self.traceroute_client = UnixClient(self.traceroute_server_name)
 
         # Start process that listens from server
+        #process = multiprocessing.Process(target=self.tracerouteServer)
         process = multiprocessing.Process(target=self.tracerouteServer)
         # process.daemon = True
         process.start()
 
+        # Utilities
         self.base = Base()
-
         self.namesToIps = NamesToIps(os.path.join(tmp_files, db_topo))
+
+        # Start count of wrong notifications
+        self.controllerNotFoundCount = 0
+
+        # start joiner
+        self.queue = Queue.Queue(maxsize=0)
+        joiner = Joiner(self.queue)
+        joiner.setDaemon(True)
+        joiner.start()
+
+        # Configure sigterm handler
+        signal.signal(signal.SIGTERM, self.signal_term_handler)
+
+    def miceCounterServer(self):
+        """Thread that keeps track of the mice level observed by the host"""
+        while True:
+            # Wait until mice start/stop events arrive
+            data = json.loads(self.own_mice_server.receive())
+
+            if data['type'] == 'mice_stop':
+                mice_flow = data['flow']
+                # Decrease estimation
+                self.decreaseMiceLoad(mice_flow)
+
+            elif data['type'] == 'reset':
+                with self.estimation_lock:
+                    self.mice_estimation.clear()
+            else:
+                continue
 
     def setup_logging(self):
         """"""
@@ -119,11 +162,16 @@ class FlowServer(object):
     def signal_term_handler(self, signal, frame):
         # Only parent will do this
         if os.getpid() == self.parentPid:
-            #self.queue.put(None)
+            log.info("{0}: Parent exiting".format(self.name))
             self.traceroute_server.close()
             self.server_from_tg.close()
+            for process in self.processes:
+                log.info("{0} : Terminating pid: {1}".format(self.name, process))
+                process.terminate()
             sys.exit(0)
+
         else:
+            log.info("{0} : Children exiting!".format(self.name))
             sys.exit(0)
 
     def tracerouteThread(self, client, **flow):
@@ -180,30 +228,34 @@ class FlowServer(object):
         # Results are sent to the controller
         client = UnixClient("/tmp/controllerServer_traceroute")
 
-        while True:
-            # Wait for traceroute commands
-            command = json.loads(self.traceroute_server.receive())
+        try:
+            while True:
+                # Wait for traceroute commands
+                command = json.loads(self.traceroute_server.receive())
 
-            if not self.own_pod_hosts and command['type'] == 'own_pod_hosts':
-                # Update own pod hosts list
-                own_pods_hosts = command['data']
-                self.own_pod_hosts = own_pods_hosts
-                log.info("{0}: list of own pod hosts received: {1}".format(self.name, own_pods_hosts))
-                continue
+                if not self.own_pod_hosts and command['type'] == 'own_pod_hosts':
+                    # Update own pod hosts list
+                    own_pods_hosts = command['data']
+                    self.own_pod_hosts = own_pods_hosts
+                    log.info("{0}: list of own pod hosts received: {1}".format(self.name, own_pods_hosts))
+                    continue
 
-            elif command['type'] == 'flow':
-                # Extract flow
-                flow = command['data']
+                elif command['type'] == 'flow':
+                    # Extract flow
+                    flow = command['data']
 
-                # Start traceroute in a dedicated thread!
-                thread = multiprocessing.Process(target=self.tracerouteThread, args=(client,), kwargs=(flow))
-                thread.daemon = True
+                    # Start traceroute in a dedicated thread!
+                    thread = multiprocessing.Process(target=self.tracerouteThread, args=(client,), kwargs=(flow))
+                    thread.daemon = True
 
-                # thread.setDaemon(True)
-                thread.start()
+                    # thread.setDaemon(True)
+                    thread.start()
+                else:
+                    continue
 
-            else:
-                continue
+        except KeyboardInterrupt:
+            log.info("{0} : KeyboardInterrupt catched! Exiting".format(self.name))
+            sys.exit(0)
 
     def setStartTime(self, starttime):
         if time.time() < starttime:
@@ -218,79 +270,127 @@ class FlowServer(object):
         """
         if isElephant(flow):
             # Start flow notifying controller
-            process = Process(target=flowGenerator.sendFlowNotifyController, kwargs=flow)
+            process = Process(target=flowGenerator.sendElephantFlow, kwargs=flow)
             process.daemon = True
             process.start()
+
+            # Append it to processes
+            self.processes.append(process)
 
             # Log a bit
             size = self.base.setSizeToStr(flow['size'])
-            duration = self.base.setTimeToStr(flow['duration'])
+            rate = self.base.setSizeToStr(flow['rate'])
+            duration = self._getFlowDuration(flow)
             dst = self.namesToIps['ipToName'][flow['dst']]
-            log.debug("{0} : Flow is STARTING: to {1} {2} during {3}".format(self.name, dst, size, duration))
+            proto = flow['proto']
+            log.debug("{0} : {4} ELEPHANT flow is STARTING: to {1} rate of {2} during {3}".format(self.name, dst, rate, duration, proto))
 
         # if is Elephant
         else:
+            # Create client to send mice notification
+            mice_client = UnixClient(self.own_mice_server_name)
+
             # Start flow without notifying controller
-            process = Process(target=flowGenerator.sendFlowNotNotify, kwargs=flow)
+            process = Process(target=flowGenerator.sendMiceFlow, args=(mice_client, self.name), kwargs=flow)
             process.daemon = True
             process.start()
+
+            # Append it to processes
+            self.processes.append(process)
 
             # Add size of flow to
             self.increaseMiceLoad(flow)
+    # Not used now
+    # def stopFlow(self, flow):
+    #     """
+    #     Stop flow
+    #     """
+    #     if isElephant(flow):
+    #         size = self.base.setSizeToStr(flow['size'])
+    #         dst = self.namesToIps['ipToName'][flow['dst']]
+    #         log.debug("{0} : Flow is STOPPING: to {1} {2}".format(self.name, dst, size))
+    #         process = Process(target=flowGenerator.stopFlowNotifyController, kwargs=flow)
+    #         process.daemon = True
+    #         process.start()
+    #
+    #     # if is mice
+    #     else:
+    #         # Remove size of flow
+    #         self.decreaseMiceLoad(flow)
 
-    def stopFlow(self, flow):
-        """
-        Stop flow
-        """
-        if isElephant(flow):
-            size = self.base.setSizeToStr(flow['size'])
-            dst = self.namesToIps['ipToName'][flow['dst']]
-            log.debug("{0} : Flow is STOPPING: to {1} {2}".format(self.name, dst, size))
-            process = Process(target=flowGenerator.stopFlowNotifyController, kwargs=flow)
-            process.daemon = True
-            process.start()
+    def remoteStartReceiveTCP(self, dst, dport):
+        """"""
+        if 'h_' not in dst:
+            # Convert dst ip to dname
+            dname = self.namesToIps['ipToName'][dst]
 
-        # if is mice
+        # Only for debugging
         else:
-            # Remove size of flow
-            self.decreaseMiceLoad(flow)
+            dname = dst
+
+        # Start netcat process that listens on port
+        process = subprocess.Popen(["mx", dname, "nc", "-l", "-p", str(dport)], stdout=open(os.devnull, "w"))
+        self.popens.append(process)
+
+    def threadedStartReceiveTCP(self, dport):
+        """"""
+        # Start netcat process that listens on port
+        th = Thread(target=self._localStartReceiveTCP, args=[dport])
+        th.start()
+
+    def _localStartReceiveTCP(self, dport):
+        log.debug("{0} : Started TCP server at port {1}".format(self.name, dport))
+
+        # Start netcat process that listens on port
+        process = subprocess.Popen(["nc", "-l", "-p", str(dport)], stdout=open(os.devnull, "w"), stderr=subprocess.PIPE)
+        out, err = process.communicate()
+        if err:
+            log.error(err)
+
+    def localStartReceiveTCP(self, dport):
+        """"""
+        # Start netcat process that listens on port
+        process = subprocess.Popen(["nc", "-l", "-p", str(dport)], stdout=open(os.devnull, "w"))
+        self.popens.append(process)
+        log.debug("{0} : Started TCP server at port {1}".format(self.name, dport))
 
     def increaseMiceLoad(self, flow):
-        # Take flow size
-        size = flow['size']
+        """"""
+        if flow['proto'] == 'UDP':
+            to_increase = flow['size']
+
+        else:
+            to_increase = flow['rate']
 
         # Take flow destination
         dst = flow['dst']
 
         with self.estimation_lock:
             if dst in self.mice_estimation.keys():
-                self.mice_estimation[dst] += size
+                self.mice_estimation[dst] += to_increase
             else:
-                self.mice_estimation[dst] = size
+                self.mice_estimation[dst] = to_increase
+
+        #log.info("(+) mice estimation")
 
     def decreaseMiceLoad(self, flow):
-        # Take flow size
-        size = flow['size']
+        """"""
+        if flow['proto'] == 'UDP':
+            to_decrease = flow['size']
+
+        else:
+            to_decrease = flow['rate']
 
         # Take flow destination
         dst = flow['dst']
-
         with self.estimation_lock:
             if dst in self.mice_estimation.keys():
-                self.mice_estimation[dst] -= size
+                self.mice_estimation[dst] -= to_decrease
             else:
                 log.error("Decreasing flow that wasn't increased previously")
 
-    def _takeMiceLoadSample(self, mice_estimation_samples, estimation_lock, samples_lock):
-        """Traverse all other host loads and save samples"""
-        with estimation_lock:
-            for (dst, load) in self.mice_estimation.iteritems():
-                if dst in self.mice_estimation_samples.keys():
-                    mice_estimation_samples[dst].append(load)
-                else:
-                    mice_estimation_samples[dst] = [load]
+        #log.info("(-) mice estimation")
 
-    #@time_func
     def takeMiceLoadSample(self):
         """Start process that takes sample"""
         try:
@@ -301,50 +401,71 @@ class FlowServer(object):
                             self.mice_estimation_samples[dst].append(load)
                         else:
                             self.mice_estimation_samples[dst] = [load]
+            #log.info("[+] sample taken!")
         except Exception as e:
             log.error("Error while taking mice load sample")
             log.exception(e)
 
-        #process = Process(target=self._takeMiceLoadSample, args=(mice_estimation_samples, self.estimation_lock, self.samples_lock))
-        #process.daemon = True
-        #process.start()
+    def _getFlowEndTime(self, flow):
+        """"""
+        return flow.get('startTime') + self._getFlowDuration(flow)
 
-    def scheduleSamplings(self):
-        """
-        Schedules the samplings for the mice estimation
-        """
-        sampling_period = 1/self.sampling_rate
-        log.info("Scheduling mice samplings: every {0}s".format(1/self.sampling_rate))
-
-        # Compute total traffic duration
-        endtime = self.starttime + self.getTrafficDuration(self.flowlist)
-
-        # Schedule samplings at correct sampling intervals
-        for st in np.arange(self.starttime + sampling_period, endtime, sampling_period):
-            self.scheduler.enterabs(float(st), 1, self.takeMiceLoadSample, [])
-
-        log.info("Samplings scheduled!")
+    def _getFlowDuration(self, flow):
+        if flow['proto'] == 'UDP':
+            return flow.get('duration')
+        else:
+            return flow.get('size')/flow.get('rate')
 
     def getTrafficDuration(self, flowlist):
         """
         Iterates the flowlist and returns the ending time of the last ending flow
         """
-        end_times = [flow['start_time'] + flow['duration'] for flow in flowlist]
-        max_end_time = max(end_times)
-        return max_end_time
+        if flowlist:
+            return max([self._getFlowEndTime(flow) for flow in flowlist])
+        else:
+            log.error("NO FLOWLIST FOR THIS HOST! ")
+            return 3600
 
     def scheduleNotifyMiceLoads(self):
         """
         Schedules the notifications of the mice loads to the controller
         """
-        # Compute total traffic duration
-        endtime = self.starttime + self.getTrafficDuration(self.flowlist)
+        if self.controllerNotFoundCount > 1:
+            #log.warning("{0} : Not scheduling mice notifications anymore".format(self.name))
+            pass
+        else:
+            looptime = 100
 
-        # Schedule samplings at correct sampling intervals
-        for st in np.arange(self.starttime + self.notify_period, endtime, self.notify_period):
-            self.scheduler.enterabs(float(st), 1, self.notifyMiceLoads, [])
+            # Log a bit
+            #log.info("{0} : Scheduling mice notificationss: every {1}s".format(self.name, self.notify_period))
 
-    #@time_func
+            # Schedule samplings at correct sampling intervals
+            for st in range(0, looptime, self.notify_period):
+                self.scheduler.enter(st, 1, self.notifyMiceLoads, [])
+
+            # Schedule himself too!
+            self.scheduler.enter(looptime-1, 1, self.scheduleNotifyMiceLoads, [])
+
+    def scheduleMiceSamplings(self):
+        """
+        Schedules the samplings for the mice estimation
+        """
+        if self.controllerNotFoundCount > 1:
+            #log.warning("{0} : Not scheduling mice samplings anymore".format(self.name))
+            pass
+        else:
+            looptime = 50
+
+            sampling_period = 1 / self.sampling_rate
+            #log.info("{0} : Scheduling mice samplings: every {1}s".format(self.name, 1 / self.sampling_rate))
+
+            # Schedule samplings at correct sampling intervals
+            for sp in range(0, looptime, sampling_period):
+                self.scheduler.enter(sp, 1, self.takeMiceLoadSample, [])
+
+            # Schedule himself too!
+            self.scheduler.enter(looptime-1, 1, self.scheduleMiceSamplings, [])
+
     def notifyMiceLoads(self):
         """Send samples from last period to controller"""
         try:
@@ -358,35 +479,65 @@ class FlowServer(object):
             # Send them to the controller
             self.client_to_controller.send(json.dumps({"type": "miceEstimation", 'data': {'src': self.name, 'samples': samples_to_send}}), "")
         except Exception as e:
-            log.error("Controller not found")
+            if self.controllerNotFoundCount < 1:
+                #log.error("Controller not found")
+                self.controllerNotFoundCount += 1
+            else:
+                self.controllerNotFoundCount += 1
 
     def terminateTraffic(self):
         # No need to terminate startFlow processes, since they are killed when
         # the scheduler process is terminated!
 
-        log.info("{0} : Canceling events...".format(self.name))
         # Cancel all upcoming scheduler events
+        #log.info("{0} : Canceling scheduler events".format(self.name))
         action = [self.scheduler.cancel(e) for e in self.scheduler.queue]
 
-        log.info("{0} : Killing scheduler process...".format(self.name))
-        # Terminate old scheduler process if alive
-        if self.scheduler_process.is_alive(): self.scheduler_process.terminate()
+        #log.info("{0} : Terminating old scheduler thread".format(self.name))
+        self.scheduler_thread.join()
 
-        log.info("{0} : Creating new scheduler process".format(self.name))
         # Create a new instance of the process
-        self.scheduler_process = Process(target=self.scheduler.run)
+        #log.info("{0} : Creating new scheduler process".format(self.name))
+        self.scheduler_thread = Thread(target=self.scheduler.run)
 
-        # Reset everything
-        self.received_flowlist = False
-        self.received_starttime = False
-        self.starttime = 0
-        self.flowlist = []
-        self.mice_estimation = {}
+        # Terminate netcat processes
+        #log.info("{0} : Killing all ongoing processes".format(self.name))
+        for popen in self.popens:
+            popen.kill()
+
+        for process in self.processes:
+            if process.is_alive():
+                try:
+                    time.sleep(0.001)
+                    process.terminate()
+                    process.join()
+                except OSError:
+                    pass
+
+        # Restart lists
+        self.processes = []
+        self.popens = []
+
+        # Empty the mice estimation count
+        client = UnixClient(self.own_mice_server_name)
+        client.send(json.dumps({'type':'reset'}), self.name)
+
         self.mice_estimation_samples = {}
+
+        # Schedule mice loads again
+        if self.ip_alias:
+            self.scheduleNotifyMiceLoads()
+            self.scheduleMiceSamplings()
+
+        self.controllerNotFoundCount = 0
+
+        # Start scheduler process
+        #log.info("{0} : Starting scheduler thread again".format(self.name))
+        self.scheduler_thread.start()
 
     def waitForTrafficToFinish(self):
         """
-        Scheduler waits for flows to finish and then terminates the run of
+        Scheuler waits for flows to finish and then terminates the run of
         the traffic
         :return:
         """
@@ -395,117 +546,116 @@ class FlowServer(object):
         log.info("Re-setting flowServer!")
         self.terminateTraffic()
 
-    def run(self):
+    def _startTrafficGeneratorListenerThread(self):
         # Start thread that reads from the server TCP socket
         tcp_server_thread = Thread(target = self.server_from_tg.run)
         tcp_server_thread.setDaemon(True)
         tcp_server_thread.start()
 
-        last_ending_time = 0
-        while True:
-            # No simulation ongoing -- waiting for events
-            if not self.scheduler_process.is_alive():
+    def _startMiceCounterThread(self):
+        # Start thread that counts the mice sizes
+        mice_thread = Thread(target=self.miceCounterServer)
+        #mice_thread.setDaemon(True)
+        mice_thread.start()
 
-                # Wait for initial data to arrive from traffic generator
-                while not(self.received_flowlist) or not(self.received_starttime):
-                    log.debug('Waiting for flowlist and starttime events...')
+    def scheduleFlowList(self, flowlist):
+        """Assumes flowlist and startime have been received"""
 
-                    # Receive event from Socket server and convert it to a dict (--blocking)
-                    event = json.loads(self.q_server.get())
-                    self.q_server.task_done()
+        # Keep track of elephant|mice count
+        flow_count = {'elephant': 0, 'mice': 0}
 
-                    if event["type"] == "starttime":
-                        self.setStartTime(event["data"])
-                        self.received_starttime = True
-                        log.debug("Event starttime arrived")
+        # Iterate flowlist
+        for flow in flowlist:
 
-                    elif event["type"] == "flowlist":
-                        self.flowlist = event["data"]
-                        self.received_flowlist = True
-                        log.debug("Event flowlist arrived")
+            # Rewrite destination address when needed
+            if isMice(flow) and self.ip_alias == True:
+                flow['dst'] = get_secondary_ip(flow['dst'])
 
-                log.debug("Flowlist and starttime events received")
-                log.debug("Scheduling flows... ")
-                log.debug("DELTA time observed: {0}".format(self.starttime - time.time()))
+            # Schedule startFlow
+            self.scheduler.enter(flow["start_time"], 1, self.startFlow, [flow])
 
-                # Initialize counters
-                flow_count = {'elephant': 0, 'mice': 0}
-                if self.received_flowlist and self.received_starttime:
-                    # Schedule mice sampling and notifications
-                    #self.scheduleSamplings()
-                    #self.scheduleNotifyMiceLoads()
-
-                    # Iterate flowlist
-                    for flow in self.flowlist:
-                        delta = self.starttime - time.time()
-                        if delta < 0:
-                            log.error("We neet do wait a bit more in the TrafficGenerator!! Delta is negative!")
-
-                        # Rewrite destination address when needed
-                        if not isElephant(flow) and self.ip_alias == True:
-                            flow['dst'] = get_secondary_ip(flow['dst'])
-
-                        # Schedule the flow start
-                        self.scheduler.enterabs(self.starttime + flow["start_time"], 1, self.startFlow, [flow])
-
-                        # Compute flow's ending time
-                        ending_time = self.starttime + flow["start_time"] + flow["duration"]
-
-                        if isElephant(flow):
-                            flow_count['elephant'] += 1
-                            #log.debug("ELEPHANT flow to {0} with {1} (bps) will start in {2} and last for {3}".format(flow['dst'], flow['size'], flow['start_time'], flow["duration"]))
-
-                        else:
-                            flow_count['mice'] += 1
-
-                        # Schedule stopFlow function
-                        self.scheduler.enterabs(ending_time, 1, self.stopFlow, [flow])
-
-                        if ending_time > last_ending_time:
-                            last_ending_time = ending_time
-
-                    log.debug("All flows were scheduled! Let's run the scheduler (in a different thread)")
-                    log.debug("A total of {0} flows will be started at host. {1} MICE | {2} ELEPHANT".format(sum(flow_count.values()), flow_count['mice'], flow_count['elephant']))
-
-                    # Schedule dummy function to avoid last flow crash
-                    fun = lambda(x): x+1
-                    self.scheduler.enterabs(last_ending_time + 2, 1, fun, [2])
-
-                    # Run scheduler in another thread
-                    self.scheduler_process.start()
-
-            # Simulation ongoing -- only terminate event allowed
+            # Add counts
+            if isElephant(flow):
+                flow_count['elephant'] += 1
             else:
-                try:
-                    # While traffic stil ongoing
-                    while self.scheduler_process.is_alive():
-                        #log.debug("Scheduler process is still alive -- Traffic ongoing")
-                        #log.info("Processes: {0}".format(len(self.processes)))
+                flow_count['mice'] += 1
 
-                        # Check if new event in the queue
-                        try:
-                            data = self.q_server.get(timeout=3)#self.notify_period)#block=False)
-                        except Queue.Empty:
-                            # Send current mice loads to the controller
-                            #self.notifyMiceLoads()
-                            pass
-                        else:
-                            #log.debug("Timeout didn't occur: loading json object...")
-                            self.q_server.task_done()
-                            event = json.loads(data)
+        # Log a bit
+        log.debug("{0} : All flows were scheduled!".format(self.name))
+        log.debug("{0} : {1} Mice | {2} Elephant".format(self.name, flow_count['mice'], flow_count['elephant']))
 
-                            if event["type"] == "terminate":
-                                # Stop traffic during ongoing traffic
-                                log.debug("Terminate event received from trafficGenerator - terminating...")
-                                self.terminateTraffic()
+    def scheduleReceiveList(self, receivelist):
+        """"""
+        BUFFER_TIME = 3
 
-                    # Stop traffic immediately
-                    self.waitForTrafficToFinish()
-                except Exception as e:
-                    log.error("EXCEPTION OCCURRED: {0}".format(traceback.print_exc()))
+        # Iterate flowlist
+        for (flowtime, dport) in receivelist:
+            receivertime = max(0.1, flowtime - BUFFER_TIME)
+
+            # Schedule the start of the TCP server too
+            self.scheduler.enter(receivertime, 1, self.localStartReceiveTCP, [dport])
+            #self.scheduler.enter(receivertime, 1, self.threadedStartReceiveTCP, [dport])
+
+        log.debug("{0} : All TCP flow servers were scheduled!".format(self.name))
+        log.debug("{0} : Will receive a total of {1} TCP flows".format(self.name, len(receivelist)))
+
+    def run(self):
+        log.info("{0} : flowServer started!".format(self.name))
+
+        # Start some threads
+        self._startTrafficGeneratorListenerThread()
+        self._startMiceCounterThread()
+
+        if self.ip_alias:
+            # Schedule notify mice loads
+            self.scheduleNotifyMiceLoads()
+            self.scheduleMiceSamplings()
+
+        # Start variables
+        self.received_starttime = False
+        self.starttime_set = False
+
+        # Run scheduler in another thread
+        self.scheduler_thread.start()
+
+        # Loop forever
+        while True:
+            try:
+                # Read from TG queue
+                event = json.loads(self.q_server.get())
+                self.q_server.task_done()
+
+                if event["type"] == "flowlist":
+                    flowlist = event["data"]
+                    if flowlist:
+                        # Schedule flows relative to current time
+                        log.debug("{0} : Flow_list arrived".format(self.name))
+                        self.scheduleFlowList(flowlist=flowlist)
+
+                elif event['type'] == "receivelist":
+                    receivelist = event['data']
+                    if receivelist:
+                        # Schedule times at which we need to start TCP servers
+                        log.debug("{0} : Receive_list arrived".format(self.name))
+                        self.scheduleReceiveList(receivelist)
+
+                elif event["type"] == "terminate":
+                    # Stop traffic during ongoing traffic
+                    log.debug("{0} : Terminate event received!".format(self.name))
+                    self.terminateTraffic()
+
+                else:
+                    log.debug("{0} : Unknown event received {1}".format(self.name, event))
+                    continue
+
+            except KeyboardInterrupt:
+                log.info("{0} : KeyboardInterrupt catched! Exiting".format(self.name))
+                self.terminateTraffic()
+                sys.exit(0)
 
 if __name__ == "__main__":
     import os
+
     # Name of the flowServer is passed when called
     if len(sys.argv) == 3 and sys.argv[2] == '--ip_alias':
         name = sys.argv[1]
