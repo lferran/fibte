@@ -74,15 +74,12 @@ class Base(object):
         """
         return str(datetime.timedelta(seconds=time))
 
-
 class Flow(Base):
     """
     This class implements a flow object.
     """
-    def __init__(self, src = "10.0.0.1",
-                 dst = "10.0.1.1",
-                 sport = 5000, dport = 5001, tos=0, proto="UDP", size = 1,
-                 start_time = "00:00:10", duration = '00:01:00', *args, **kwargs):
+    def __init__(self, src = "10.0.0.1", dst = "10.0.1.1", sport = 5000, dport = 5001, tos=0,
+                 proto="UDP", start_time = "00:00:10", size=None, rate=None, duration = None, *args, **kwargs):
 
         super(Flow, self).__init__(*args, **kwargs)
         self.src = src
@@ -91,15 +88,13 @@ class Flow(Base):
         self.dport = self.setPort(dport)
         self.tos = tos
         self.proto = proto
-
-        self.size = self.setSizeToInt(size)
         self.start_time = self.setTimeToInt(start_time)
-        self.duration = self.setTimeToInt(duration)
-
+        self.rate = self.setSizeToInt(rate) if rate else None
+        self.size = self.setSizeToInt(size) if size else None
+        self.duration = self.setTimeToInt(duration) if duration else None
 
     def __repr__(self):
         return "{0}:{1}->{2}:{3} , protocol: {7} size:{5} duration:{4},start: {6}".format(self.src,self.sport,self.dst,self.dport,self.duration,self.size,self.start_time,self.proto)
-
 
     def __copy__(self):
         src_c = type(self.src)(self.src)
@@ -111,9 +106,10 @@ class Flow(Base):
         proto_c = type(self.proto)(self.proto)
         time_c = type(self.start_time)(self.start_time)
         duration_c = type(self.duration)(self.duration)
+        rate_c = type(self.rate)(self.rate)
         return Flow(src=src_c, dst=dst_c, sport=sport_c,
-                    dport=dport_c, tos = tos_c, proto=proto_c,size=size_c, start_time=time_c,
-                    duration=duration_c)
+                    dport=dport_c, tos = tos_c, proto=proto_c, size=size_c, start_time=time_c,
+                    duration=duration_c, rate=rate_c)
 
     def __str__(self):
         a = "Src: %s:%s, Dst: %s:%s, Size: %s, start_time: %s, Duration: %s"
@@ -124,7 +120,7 @@ class Flow(Base):
                   self.setTimeToStr(self.duration))
 
     def __setitem__(self, key, value):
-        if key not in ['src','dst','sport','dport','size','start_time','duration',"tos","proto"]:
+        if key not in ['src','dst','sport','dport','size','start_time','duration',"tos","proto","rate"]:
             raise KeyError
 
         else:
@@ -139,7 +135,7 @@ class Flow(Base):
 
 
     def __getitem__(self, key):
-        if key not in ['src','dst','sport','dport','size','start_time','duration',"tos","proto"]:
+        if key not in ['src','dst','sport','dport','size','start_time','duration',"tos","proto","rate"]:
             raise KeyError
         else:
             return self.__getattribute__(key)
@@ -149,6 +145,11 @@ class Flow(Base):
 
     def __ne__(self, other):
         return not self.__eq__(other)
+
+    def copy(self):
+        new = Flow()
+        new.__dict__ = self.__dict__.copy()
+        return new
 
     def setPort(self, port):
         if isinstance(port, int):
@@ -161,15 +162,12 @@ class Flow(Base):
             raise TypeError("port must either be a string or a int: {0}".format(port))
 
     def toDICT(self):
-
-        return {"src": self.src, "dst": self.dst, "sport":
-                self.sport, "dport": self.dport,"tos":self.tos,"proto":self.proto, "size": self.size,
-                "start_time": self.start_time, "duration": self.duration}
+        return {"src": self.src, "dst": self.dst, "sport": self.sport, "dport": self.dport,
+                "start_time": self.start_time, "tos":self.tos, "proto":self.proto,
+                "size": self.size, "rate": self.rate, "duration": self.duration}
 
     def toJSON(self):
         """Returns the JSON-REST string that identifies this flow
         """
-        flow = {"src": self.src, "dst": self.dst, "sport":
-                self.sport, "dport": self.dport,"tos":self.tos,"proto":self.proto, "size": self.size,
-                "start_time": self.start_time, "duration": self.duration}
-        return json.dumps(flow)
+        flow_dict = self.toDICT()
+        return json.dumps(flow_dict)
