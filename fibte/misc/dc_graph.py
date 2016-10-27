@@ -416,6 +416,9 @@ class DCDiGraph(DiGraph):
         else:
             return []
 
+    def get_link_loads_dict(self, attribute='load'):
+        return {(x, y): data.get(attribute) for (x, y, data) in self.edges_iter(data=True)}
+
 class DCGraph(DCDiGraph):
     """
     Models the DC graph as a networkx DiGraph subclass object
@@ -850,7 +853,7 @@ class DCDag(DCDiGraph):
         towards the sink, and modifies the DAG accordingly.
         """
         # Generate random uplink choice from edge
-        random_edges = self.get_random_uplinks(src_pod, exclude_edges_indexes=exclude_edge_indexes)
+        random_edges = self.get_random_uplinks(src_pod, exclude_edge_indexes=exclude_edge_indexes)
         self.modify_uplinks_from(random_edges)
 
     def modify_uplinks_from(self, edge_list):
@@ -1271,18 +1274,29 @@ class DCDag(DCDiGraph):
 
         return positions
 
-    def plot(self, plotname=None):
+    def plot(self, plotname=None, link_loads=None):
         """Plots himself!"""
+        if link_loads:
+            # Load the link loads
+            red_labels = {x: y for x, y in link_loads.items() if y > 0.75 }
+            orange_labels = {x: y for x, y in link_loads.items() if y >= 0.5 and y < 0.75}
+            green_labels = {x: y for x, y in link_loads.items() if y >= 0.25 and y < 0.5 }
+            blue_labels = {x: y for x, y in link_loads.items() if y < 0.25}
+
         routers = [n for n in self.nodes_iter()]
 
         # Draw nodes and edges
-        nx.draw_networkx_nodes(self, ax=None, nodelist=[self.dst_prefix], pos=self.plot_positions, node_shape='o',
-                               node_color='r')
-        nx.draw_networkx_nodes(self, ax=None, nodelist=routers, pos=self.plot_positions, node_shape='s',
-                               node_color='b')
+        nx.draw_networkx_nodes(self, ax=None, nodelist=[self.dst_prefix], pos=self.plot_positions, node_shape='o', node_color='r')
+        nx.draw_networkx_nodes(self, ax=None, nodelist=routers, pos=self.plot_positions, node_shape='s', node_color='b')
 
         # Draw edges of current dag
         nx.draw_networkx_edges(self, ax=None, width=1.5, pos=self.plot_positions)
+        if link_loads:
+            nx.draw_networkx_edge_labels(self, self.plot_positions, ax=None, edge_labels=red_labels,label_pos=0.15,font_size=10,font_color="red", font_weight='bold')
+            nx.draw_networkx_edge_labels(self, self.plot_positions, ax=None, edge_labels=orange_labels,label_pos=0.15,font_size=10,font_color="orange",font_weight='bold')
+            nx.draw_networkx_edge_labels(self, self.plot_positions, ax=None, edge_labels=green_labels,label_pos=0.15,font_size=10,font_color="green",font_weight='bold')
+            nx.draw_networkx_edge_labels(self, self.plot_positions, ax=None, edge_labels=blue_labels,label_pos=0.15,font_size=10,font_color="blue",font_weight='bold')
+
 
         # Compute edges that are not currently used
         all_edges = set(self.all_edges)
@@ -1309,6 +1323,10 @@ class DCDag(DCDiGraph):
             plt.show()
 
         plt.gcf().clear()
+
+    def get_link_loads_dict(self, attribute='load'):
+        link_loads = super(DCDag, self).get_link_loads_dict(attribute)
+        return {x: load for (x, load) in link_loads.iteritems() if self.is_valid_uplink(x[0], x[1]) or self.is_valid_downlink(x[0], x[1])}
 
 # Auxiliary funcitions
 
@@ -1340,10 +1358,17 @@ if __name__ == "__main__":
     #edges = dcDag.all_random_uplinks_iter(src_pod=0, exclude_edge_indexes=[1])
     #edges = list(edges)
 
-    edges = dcDag._get_random_uplink_choice_2(exclude_edge_indexes=[])
+    for (u, v, data) in dcDag.edges_iter(data=True):
+        data['load'] = round(random.uniform(0, 1), 2)
+
+    link_loads = dcDag.get_link_loads_dict(attribute='load')
+    dcDag.modify_random_uplinks(src_pod=0)
+    dcDag.plot(link_loads=link_loads)
+    #dcDag.plot()
+    #edges = dcDag._get_random_uplink_choice_2(exclude_edge_indexes=[])
     import ipdb; ipdb.set_trace()
 
-    dcDag.plot()
+
 
 
     #source = dcDag.get_destination_prefix_gateway(prefix)
