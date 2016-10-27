@@ -21,30 +21,23 @@ if __name__ == '__main__':
     else:
         hosts = []
 
-    print('*** Start Flow Servers and Learning Servers')
+    print('*** Starting Flow Servers')
     topology = TopologyGraph(getIfindexes=False, db=os.path.join(tmp_files,db_topo))
     for h in topology.getHosts().keys():
         if hosts:
             if len(hosts) != 1:
                 if h in hosts:
-                    if args.ip_alias:
-                        command = "mx {0} {1} {0} {2} &"
-                        os.system(command.format(h, flowServer_path, args.ip_alias))
-                    else:
-                        command = "mx {0} {1} {0} &"
-                        os.system(command.format(h, flowServer_path))
+                    if args.ip_alias: command = "mx {0} {1} {0} --ip_alias &"
+                    else: command = "mx {0} {1} {0} &"
+                    os.system(command.format(h, flowServer_path))
             else:
                 if h in hosts:
-                    if args.ip_alias:
-                        command = "mx {0} {1} {0} {2}"
-                        os.system(command.format(h, flowServer_path, args.ip_alias))
-                    else:
-                        command = "mx {0} {1} {0}"
-                        os.system(command.format(h, flowServer_path))
+                    if args.ip_alias: command = "mx {0} {1} {0} --ip_alias"
+                    else: command = "mx {0} {1} {0}"
+                    os.system(command.format(h, flowServer_path))
+
+                    break
         else:
-            if args.ip_alias:
-                command = "mx {0} {1} {0} {2} &"
-                subprocess.call(command.format(h, flowServer_path, args.ip_alias), shell=True)
-            else:
-                command = "mx {0} {1} {0} &"
-                subprocess.call(command.format(h, flowServer_path), shell=True)
+            if args.ip_alias: command = "mx {0} {1} {0} --ip_alias &"
+            else: command = "mx {0} {1} {0} &"
+            subprocess.call(command.format(h, flowServer_path), shell=True)
