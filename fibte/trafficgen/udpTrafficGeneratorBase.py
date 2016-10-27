@@ -57,6 +57,7 @@ class TGParser(object):
         self.parser = argparse.ArgumentParser()
 
     def loadParser(self):
+        self.parser.add_argument('--addtc', help='Add flows to current traffic', action="store_true", default=False)
         self.parser.add_argument('--pattern', help='Communication pattern', choices=['random','staggered','bijection','stride'], type=str, default='random')
         self.parser.add_argument('--pattern_args', help='Communication pattern arguments', type=json.loads, default='{}')
         self.parser.add_argument('-t', '--time', help='Duration of the traffic generator', type=int, default=120)
@@ -104,6 +105,8 @@ class udpTrafficGeneratorBase(Base):
         # Get sender hosts
         self.senders = self.topology.getHosts().keys()
         self.possible_destinations = self._createPossibleDestinations()
+
+        log.setLevel(logging.DEBUG)
 
     @staticmethod
     def get_poisson_times(average, totalTime):
@@ -222,6 +225,14 @@ class udpTrafficGeneratorBase(Base):
 
         else:
             raise ValueError("Unknown flow type: {0}".format(flow_type))
+
+    @staticmethod
+    def _getFlowEndTime(flow):
+        if flow['proto']  == 'UDP':
+            return flow.get('startTime') + flow.get('duration')
+        else:
+            duration = flow.get('size')/flow.get('rate')
+            return flow.get('startTime') + duration
 
     def _createPossibleDestinations(self):
         """"""
@@ -346,27 +357,27 @@ class udpTrafficGeneratorBase(Base):
         :return: dictionary host -> flowlist
         """
 
-    def schedule(self, traffic_per_host):
-        """
-        Sends the flowlists to their respective senders, together with the
-        scheduling starting time.
-
-        :param traffic_per_host:
-        :return:
-        """
+    def resetController(self):
+        # Reset controller first
+        log.info("Sending RESET to controller")
         try:
-            # Reset controller first
             self.ControllerClient.send(json.dumps({"type": "reset"}), "")
         except:
             log.error("Controller is not connected/present")
 
-        # Wait a bit
-        time.sleep(0.5)
+    def sendStartTime(self, starttime, hosts):
+        # Send traffic starting time
+        log.info("Sending STARTTIMEs to hosts")
+        for host in hosts:
+            try:
+                self.unixClient.send(json.dumps({"type": "starttime", "data": starttime}), host)
 
-        # Set sync. delay
-        SYNC_DELAY = 2
+            except Exception as e:
+                log.error("Host {0} could not be informed about starttime.".format(host))
 
+    def sendFlowList(self, traffic_per_host):
         # Schedule all the flows
+        log.info("Sending FLOWLISTs to hosts")
         for sender, flowlist in traffic_per_host.iteritems():
             try:
                 # Sends flowlist to the sender's server
@@ -375,16 +386,84 @@ class udpTrafficGeneratorBase(Base):
             except Exception as e:
                 log.error("Host {0} could not be informed about flowlist.".format(sender))
 
-        # Set traffic start time -- same time for everyone!
-        traffic_start_time = time.time() + SYNC_DELAY
-
-        for sender in traffic_per_host.keys():
+    def sendReceiveList(self, receive_per_host):
+        # Schedule all the flows
+        log.info("Sending RECEIVE_LISTs to hosts")
+        for receiver, receivelist in receive_per_host.iteritems():
             try:
-                # Send traffic starting time
-                self.unixClient.send(json.dumps({"type": "starttime", "data": traffic_start_time}), sender)
+                # Sends flowlist to the sender's server
+                self.unixClient.send(json.dumps({"type": "receivelist", "data": receivelist}), receiver)
 
             except Exception as e:
-                log.error("Host {0} could not be informed about starttime.".format(sender))
+                log.error("flowServer_{0} could not be informed about receive list.".format(receiver))
+
+    def computeReceiveList(self, traffic_per_host):
+        receivelist_per_host = {}
+
+        for sender, flowlist in traffic_per_host.iteritems():
+            for flow in flowlist:
+                if flow['proto'] == 'TCP':
+                    dst_name = self.topology.getHostName(flow['dst'])
+                    dport = flow['dport']
+                    start_time = flow['start_time']
+                    if dst_name not in receivelist_per_host.keys():
+                        receivelist_per_host[dst_name] = [(start_time, dport)]
+                    else:
+                        receivelist_per_host[dst_name].append((start_time, dport))
+
+        return {rcv: sorted(rcvlist, key=lambda x: x[0]) for rcv, rcvlist in receivelist_per_host.iteritems()}
+
+    def addInitialDelay(self, traffic_per_host, delay):
+        new_traffic_per_host = {}
+        for host, flowlist in traffic_per_host.iteritems():
+            new_traffic_per_host[host] = []
+            for flow in flowlist:
+                flow['start_time'] += delay
+                new_traffic_per_host[host].append(flow)
+
+        return new_traffic_per_host
+
+    def schedule(self, traffic_per_host, add=False):
+        """
+        Sends the flowlists to their respective senders, together with the
+        scheduling starting time.
+
+        :param traffic_per_host:
+        :return:
+        """
+        # Compute all hosts
+        all_hosts = list({h for h in self.topology.getHosts()})
+
+        # Force that we always send terminate!
+        add = False
+
+        if not add:
+            log.info("Resetting current traffic")
+
+            # Terminate traffic at the hosts
+            self.terminateTrafficAtHosts()
+
+            # Send reset to controller
+            self.resetController()
+
+            # Send start time
+            #self.sendStartTime(traffic_start_time, hosts=all_hosts)
+
+        else:
+            log.info("Adding flows to the current traffic")
+
+        # Set sync. delay
+        INITIAL_DELAY = 5
+
+        # Add initial delay to all flows
+        traffic_per_host = self.addInitialDelay(traffic_per_host, INITIAL_DELAY)
+
+        # Compute flows for which we need to start TCP server
+        receive_per_host = self.computeReceiveList(traffic_per_host)
+
+        # Send to flowServers!
+        self.sendFlowList(traffic_per_host)
+        self.sendReceiveList(receive_per_host)
 
     def plan_from_flows_file(self, flows_file):
         """Opens the flows file and schedules the specified flows
@@ -405,15 +484,25 @@ class udpTrafficGeneratorBase(Base):
         for flowline in flow_lines:
             # Try parsing flow data
             fields = flowline.split('\t')
-            if len(fields) == 7 and '#' not in fields[0]:
+
+            if len(fields) == 9 and '#' not in fields[0]:
                 # Remove the \n from the last element
                 fields[-1] = fields[-1].strip('\n')
 
                 # Extract fields
-                (src, sport, dst, dport, start_time, size, duration) = fields
+                (src, sport, dst, dport, proto, start_time, size, rate, duration) = fields
 
                 # Add entry for source if it's not there
-                if src not in traffic_per_host.keys(): traffic_per_host[src] = []
+                if src not in traffic_per_host.keys():
+                    traffic_per_host[src] = []
+
+                # Modify nones
+                if size == 'None':
+                    size = None
+                if rate == 'None':
+                    rate = None
+                if duration == 'None':
+                    duration = None
 
                 try:
                     # Get hosts ip addresses
@@ -421,8 +510,15 @@ class udpTrafficGeneratorBase(Base):
                     dstIp = self.topology.getHostIp(dst)
 
                     # Create the flow object
-                    flow = Flow(src=srcIp, dst=dstIp, sport=sport, dport=dport,
-                                size=size, start_time=start_time, duration=duration)
+                    flow = Flow(src=srcIp,
+                                dst=dstIp,
+                                sport=sport,
+                                dport=dport,
+                                proto=proto,
+                                start_time=start_time,
+                                size=size,
+                                rate=rate,
+                                duration=duration)
 
                     # Append it
                     traffic_per_host[src].append(flow.toDICT())
@@ -435,7 +531,7 @@ class udpTrafficGeneratorBase(Base):
 
         return traffic_per_host
 
-    def terminateTraffic(self):
+    def terminateTrafficAtHosts(self):
         """
         Sends a reset command to the controller and terminate traffic command
         to all flowServers of the network
@@ -444,14 +540,7 @@ class udpTrafficGeneratorBase(Base):
             try:
                 self.unixClient.send(json.dumps({"type": "terminate"}), host)
             except Exception as e:
-                log.debug("FlowServer of {0} did not receive terminate command. Exception: {1}".format(host, e))
-                pass
-        try:
-            # Send reset to the controller
-            self.ControllerClient.send(json.dumps({"type": "reset"}), "")
-        except Exception as e:
-            log.debug("Controller is not connected/present. Exception: {0}".format(e))
-            pass
+                log.debug("Couldn't terminate traffic at flowServer_{0}. Exception: {1}".format(host, e))
 
     def changeTrafficHostnamesToIps(self, traffic):
         """
@@ -484,10 +573,10 @@ class udpTrafficGeneratorBase(Base):
         traffic_copy = {}
         for sender, flowlist in traffic.iteritems():
             flowlist_copy = []
-            for flow in flowlist:
-                flow_copy = flow.copy()
-                flow_copy['src'] = self.topology.getHostName(flow['src'])
-                flow_copy['dst'] = self.topology.getHostName(flow['dst'])
+            for fw in flowlist:
+                flow_copy = fw.copy()
+                flow_copy['src'] = self.topology.getHostName(fw['src'])
+                flow_copy['dst'] = self.topology.getHostName(fw['dst'])
                 flowlist_copy.append(flow_copy)
 
             traffic_copy[sender] = flowlist_copy
@@ -509,12 +598,11 @@ class udpTrafficGeneratorBase(Base):
         allPorts = set(RangePorts)
 
         for index, flow_tmp in enumerate(flowlist_tmp):
-
             # Current flow start time
             start_time  = flow_tmp['startTime']
 
             # Filter out the flows that are not active anymore
-            active_flows = [v_flow for v_flow in flowlist_tmp[:index] if v_flow['startTime'] + v_flow['duration'] + 1 >= start_time]
+            active_flows = [v_flow for v_flow in flowlist_tmp[:index] if self._getFlowEndTime(v_flow)*3 >= start_time]
 
             # Collect used port numbers
             usedPorts = set([a_flow['sport'] for a_flow in active_flows])
@@ -533,11 +621,65 @@ class udpTrafficGeneratorBase(Base):
             dstIp = self.topology.getHostIp(flow_tmp['dstHost'])
 
             # Create the flow object
-            flow = Flow(src=srcIp, dst=dstIp, sport=sport, dport=dport, size=flow_tmp['size'],
-                        start_time=flow_tmp['startTime'], duration=flow_tmp['duration'])
+            flow = Flow(src=srcIp, dst=dstIp, sport=sport, dport=dport,
+                        proto=flow_tmp['proto'],
+                        start_time=flow_tmp['startTime'],
+                        size=flow_tmp['size'],
+                        rate=flow_tmp['rate'],
+                        duration=flow_tmp['duration'])
 
             # Append it to the list -- must be converted to dictionary to be serializable
             flowlist.append(flow.toDICT())
 
         # Return flowlist
         return flowlist
+
+    def choose_corrent_src_dst_ports(self, flows_per_sender):
+        """
+        Chooses non colliding source and destiantion ports and re-writes ip addresses
+        """
+        # Keep track of used ports here
+        usedPorts = {s: {'src': set(RangePorts), 'dst': set(RangePorts)} for s in flows_per_sender.keys()}
+
+        # Return results here
+        new_flows_per_sender = {}
+
+        # Iterate all senders
+        for sender, flowlist in flows_per_sender.iteritems():
+            # Final flowlist
+            new_flows_per_sender[sender] = []
+
+            # Iterate flowlist
+            for flow_tmp in flowlist:
+
+                # Get available source ports for sender
+                avSrcPorts = usedPorts[sender]['src']
+
+                # Get flow's destination
+                dstHost = flow_tmp['dstHost']
+
+                # Get available destination ports
+                avDstPorts = usedPorts[dstHost]['dst']
+
+                # Make a choice
+                sport = random.choice(list(avSrcPorts))
+                dport = random.choice(list(avDstPorts))
+
+                # Update used ports
+                usedPorts[sender]['src'] = avSrcPorts - {sport}
+                usedPorts[dstHost]['dst'] = avDstPorts - {dport}
+
+                # Get ips
+                srcIp = self.topology.getHostIp(flow_tmp['srcHost'])
+                dstIp = self.topology.getHostIp(flow_tmp['dstHost'])
+
+                # Create the flow object
+                flow = Flow(src=srcIp, dst=dstIp, sport=sport, dport=dport,
+                            proto=flow_tmp['proto'], start_time=flow_tmp['startTime'],
+                            size=flow_tmp['size'], rate=flow_tmp['rate'], duration=flow_tmp['duration'])
+
+                # Append it
+                new_flows_per_sender[sender].append(flow.toDICT())
+
+        # Return flowlist
+        return new_flows_per_sender

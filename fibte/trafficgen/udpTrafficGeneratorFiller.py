@@ -9,9 +9,9 @@ class TGFillerParser(TGParser):
         super(TGFillerParser, self).loadParser()
 
         # Load additional arguments
-        self.parser.add_argument('--elephant_load', help='Level of elephant load', type=float, default=0.8)
+        self.parser.add_argument('--elephant_load', help='Level of elephant load', type=float, default=0.0)
         self.parser.add_argument('--n_flows', help='Number of elephant flows to maintain', type=int, default=16)
-        self.parser.add_argument('--mice_load', help='Level of mice load', type=float, default=0.2)
+        self.parser.add_argument('--mice_load', help='Level of mice load', type=float, default=0.0)
 
 class udpTrafficGeneratorFiller(udpTrafficGeneratorBase):
     def __init__(self, elephant_load=0.8, n_flows=16, mice_load=0.2, *args, **kwargs):
@@ -40,15 +40,15 @@ class udpTrafficGeneratorFiller(udpTrafficGeneratorBase):
 
     def _get_active_flows(self, all_flows, period, to_host=None, from_host=None):
         if not to_host and not from_host:
-            return {fid: flow for fid, flow in all_flows.iteritems() if flow['startTime'] < period and flow['startTime'] + flow['duration'] > period + self.timeStep}
+            return {fid: flow for fid, flow in all_flows.iteritems() if flow['startTime'] < period and self._getFlowEndTime(flow) > period + self.timeStep}
 
         elif to_host and not from_host:
             return {fid: flow for fid, flow in all_flows.iteritems() if flow['dstHost'] == to_host and flow['startTime'] < period
-                    and flow['startTime'] + flow['duration'] > period + self.timeStep}
+                    and self._getFlowEndTime(flow) > period + self.timeStep}
 
         elif from_host and not to_host:
             return {fid: flow for fid, flow in all_flows.iteritems() if flow['srcHost'] == from_host and
-                    flow['startTime'] < period and flow['startTime'] + flow['duration'] > period + self.timeStep}
+                    flow['startTime'] < period and self._getFlowEndTime(flow) > period + self.timeStep}
 
         else:
             raise ValueError
@@ -67,9 +67,24 @@ class udpTrafficGeneratorFiller(udpTrafficGeneratorBase):
         else:
             raise ValueError
 
+    def _get_starting_flows_interval(self, all_flows, start, end, to_host=None, from_host=None):
+        if not to_host and not from_host:
+            return {f_id: flow for f_id, flow in all_flows.iteritems() if flow.get('startTime') >= start and flow.get('startTime') < end}
+
+        elif to_host and not from_host:
+            return {f_id: flow for f_id, flow in all_flows.iteritems() if flow['dstHost'] == to_host and
+                    flow.get('startTime') >= start and flow.get('startTime') < end}
+
+        elif from_host and not to_host:
+            return {f_id: flow for f_id, flow in all_flows.iteritems() if flow['srcHost'] == from_host and
+                    flow.get('startTime') >= start and flow.get('startTime') < end}
+        else:
+            raise ValueError
+
     def _get_stopping_flows(self, all_flows, period):
-        endTime = lambda x: x.get('duration') + x.get('startTime')
-        return {f_id: flow for f_id, flow in all_flows.iteritems() if endTime(flow) >= period and endTime(flow) <= period + self.timeStep}
+        return {f_id: flow for f_id, flow in all_flows.iteritems()
+                if self._getFlowEndTime(flow) >= period
+                and self._getFlowEndTime(flow) <= period + self.timeStep}
 
     def can_send_more(self, all_flows, sender, period):
         afs_sender = self._get_active_flows(all_flows, period=period, from_host=sender)
@@ -92,17 +107,20 @@ class udpTrafficGeneratorFiller(udpTrafficGeneratorBase):
         else:
             return True
 
-    def receives_too_much_traffic(self, all_flows, receiver, period):
+    def receives_too_much_traffic(self, all_flows, receiver, period, type='elephant'):
         active_flows = self._get_active_flows(all_flows, period=period, to_host=receiver)
         starting_flows = self._get_starting_flows(all_flows, period=period, to_host=receiver)
 
         # Get loads
         aload = sum([f['size'] for f in active_flows.itervalues()])
         sload = sum([f['size'] for f in starting_flows.itervalues()])
-        max_eleph_load = LINK_BANDWIDTH * self.elephant_load
-        return aload + sload > max_eleph_load
+        if type == 'elephant':
+            max_load = LINK_BANDWIDTH * self.elephant_load
+        else:
+            max_load = LINK_BANDWIDTH * self.mice_load
+        return aload + sload > max_load
 
-    def get_hosts_that_can_afford(self, all_flows, flow, period):
+    def get_hosts_that_can_afford(self, all_flows, flow, period, type='elephant'):
         can_afford = []
         for host in self.senders:
             if host != flow['dstHost'] and host != flow['srcHost']:
@@ -113,9 +131,12 @@ class udpTrafficGeneratorFiller(udpTrafficGeneratorBase):
                 aload = sum([f['size'] for f in active_flows.itervalues()])
                 sload = sum([f['size'] for f in starting_flows.itervalues()])
 
-                max_eleph_load = LINK_BANDWIDTH*self.elephant_load
+                if type == 'elephant':
+                    max_load = LINK_BANDWIDTH * self.elephant_load
+                else:
+                    max_load = LINK_BANDWIDTH * self.mice_load
 
-                if aload + sload + flow['size'] < max_eleph_load:
+                if aload + sload + flow['size'] < max_load:
                     can_afford.append(host)
 
         return can_afford
@@ -123,6 +144,16 @@ class udpTrafficGeneratorFiller(udpTrafficGeneratorBase):
     def get_terminating_flows(self, all_flows, period):
         tfs =  self._get_stopping_flows(all_flows, period)
         return tfs
+
+    def max_load_reached(self, all_flows, sender, init, end, type='elephant'):
+        starting_fws = self._get_starting_flows_interval(all_flows, init, end, from_host=sender)
+        total_load = sum([f['size'] if f['proto'] == 'UDP' else f['rate'] for fid, f in starting_fws.iteritems()])
+        if type=='elephant':
+            max_load = LINK_BANDWIDTH * self.elephant_load
+        else:
+            max_load = LINK_BANDWIDTH * self.mice_load
+
+        return total_load >= max_load
 
     def plan_flows(self):
         """
@@ -136,11 +167,16 @@ class udpTrafficGeneratorFiller(udpTrafficGeneratorBase):
         flows_per_sender = {s: [] for s in self.senders}
 
         # Here we store all flows by id
+        all_flows = {}
+
+        # Here we store only the elephants
         all_elep_flows = {}
+        all_mice_flows = {}
 
         # Initial flow id
         next_id = 0
 
+        # Compute number of elephant flows and fixed sizes
         fws_per_host = int(self.n_flows/float(len(self.senders)))
         fw_size = (self.elephant_load*LINK_BANDWIDTH)/fws_per_host
 
@@ -159,15 +195,21 @@ class udpTrafficGeneratorFiller(udpTrafficGeneratorBase):
                     duration = 20
                     destination = self.get_flow_destination(sender)
                     fid = next_id
-                    f = {'startTime': random.uniform(0, 9.9),
-                         'id': fid, 'srcHost': sender, 'dstHost': destination,
-                         'type': 'e', 'size': size, 'duration': duration}
+                    f = {'id': fid,
+                         'type': 'e',
+                         'srcHost': sender,
+                         'dstHost': destination,
+                         'proto': 'UDP',
+                         'startTime': random.uniform(5, 14.9),
+                         'size': size,
+                         'rate': size,
+                         'duration': duration}
                     flows_per_sender[sender].append(f)
                     all_elep_flows[fid] = f
                     next_id += 1
 
             # Allocate elephant flows
-            for i in range(10, self.totalTime, self.timeStep):
+            for i in range(15, self.totalTime, self.timeStep):
                 if i < self.totalTime - self.timeStep:
                     # Get flows that are terminating
                     terminating_flows = self.get_terminating_flows(all_elep_flows, period=i)
@@ -184,9 +226,15 @@ class udpTrafficGeneratorFiller(udpTrafficGeneratorBase):
                         fid = next_id
                         old_endtime = int(tf.get('startTime') + tf.get('duration'))
                         new_starttime = random.uniform(old_endtime + 1, old_endtime + 1.5)
-                        f = {'startTime': new_starttime, 'id': fid,
-                             'srcHost': original_sender, 'dstHost': destination,
-                             'type': 'e', 'size': size, 'duration': duration}
+                        f = {'id': fid,
+                             'type': 'e',
+                             'srcHost': original_sender,
+                             'dstHost': destination,
+                             'proto': 'UDP',
+                             'startTime': new_starttime,
+                             'size': size,
+                             'rate': size,
+                             'duration': duration}
                         flows_per_sender[original_sender].append(f)
                         all_elep_flows[fid] = f
                         next_id += 1
@@ -197,7 +245,7 @@ class udpTrafficGeneratorFiller(udpTrafficGeneratorBase):
             for i in range(0, self.totalTime, self.timeStep):
                 for receiver in self.senders:
                     # Check if can receive all new starting flows towards him
-                    if self.receives_too_much_traffic(all_elep_flows, receiver, period=i):
+                    if self.receives_too_much_traffic(all_elep_flows, receiver, period=i, type='elephant'):
                         # Get starting flows
                         starting_flows = self._get_starting_flows(all_elep_flows, period=i, to_host=receiver)
 
@@ -213,7 +261,7 @@ class udpTrafficGeneratorFiller(udpTrafficGeneratorBase):
                             flow = starting_flows[fid_reallocate]
 
                             # Get receivers that can afford it!
-                            possible_receivers = self.get_hosts_that_can_afford(all_elep_flows, flow, period=i)
+                            possible_receivers = self.get_hosts_that_can_afford(all_elep_flows, flow, period=i, type='elephant')
 
                             if not possible_receivers:
                                 # Just remove flow forever
@@ -236,26 +284,135 @@ class udpTrafficGeneratorFiller(udpTrafficGeneratorBase):
 
             print "After-reallocation/removal number of elephant flows: {0}".format(len(all_elep_flows))
 
+            # Update all flows dict
+            all_flows.update(all_elep_flows)
+
+
+        ## Schedule mice flows #######################################
+        if self.mice_load > 0.0:
+            # Start fws_per_host at each sender
+            senders_t = self.senders[:]
+            random.shuffle(senders_t)
+            print("Number of senders: {0}".format(len(senders_t)))
+            for sender in senders_t:
+            #    if sender == 'h_0_0':
+                while not self.max_load_reached(all_mice_flows, sender, 0, 14.9, type='mice'):
+                    # Get a new mice flow
+                    rate = self.get_flow_size(flow_type='m')
+                    duration = self.get_flow_duration(flow_type='m')
+                    size = rate * duration
+                    destination = self.get_flow_destination(sender)
+                    #destination = 'h_3_3'
+                    fid = next_id
+                    f = {'id': fid,
+                         'type': 'm',
+                         'srcHost': sender,
+                         'dstHost': destination,
+                         'proto': 'TCP',
+                         'startTime': random.uniform(5, 14.9),
+                         'size': size,
+                         'rate': rate,
+                         'duration': None}
+                    flows_per_sender[sender].append(f)
+                    all_mice_flows[fid] = f
+                    next_id += 1
+
+            print "Number of flows to fill up the mice percentage: {0}".format(len(all_mice_flows))
+
+            for i in range(15, self.totalTime, self.timeStep):
+                if i < self.totalTime - self.timeStep:
+
+                    # Get flows that are terminating
+                    terminating_flows = self.get_terminating_flows(all_mice_flows, period=i)
+
+                    # Start as many flows as the ones that finish
+                    for tfk, tf in terminating_flows.iteritems():
+                        # Get a new mice flow with similar info
+                        original_sender = tf['srcHost']
+                        rate = self.get_flow_size(flow_type='m')
+                        duration = self.get_flow_duration(flow_type='m')
+                        size = rate * duration
+                        destination = self.get_flow_destination(original_sender)
+                        #destination = 'h_3_3'
+                        fid = next_id
+                        old_endtime = int(tf.get('startTime') + tf.get('size')/tf.get('rate'))
+                        new_starttime = random.uniform(old_endtime, old_endtime + 0.5)
+                        f = {'id': fid,
+                             'type': 'm',
+                             'srcHost': original_sender,
+                             'dstHost': destination,
+                             'proto': 'TCP',
+                             'startTime': new_starttime,
+                             'size': size,
+                             'rate': rate,
+                             'duration': None}
+                        flows_per_sender[original_sender].append(f)
+                        all_mice_flows[fid] = f
+                        next_id += 1
+
+            print "Initial number of mice flows: {0}".format(len(all_mice_flows))
+
+            # Check receivers!
+            for i in range(0, self.totalTime, self.timeStep):
+                for receiver in self.senders:
+                    # Check if can receive all new starting flows towards him
+                    if self.receives_too_much_traffic(all_mice_flows, receiver, period=i, type='mice'):
+                        # Get starting flows
+                        starting_flows = self._get_starting_flows(all_mice_flows, period=i, to_host=receiver)
+
+                        # Get flow ids
+                        starting_ids = starting_flows.keys()
+
+                        # Randomly shuffle them
+                        random.shuffle(starting_ids)
+
+                        while starting_ids != []:
+                            # Get flow id to reallocate
+                            fid_reallocate = starting_ids.pop()
+                            flow = starting_flows[fid_reallocate]
+
+                            # Get receivers that can afford it!
+                            possible_receivers = self.get_hosts_that_can_afford(all_mice_flows, flow, period=i, type='mice')
+
+                            if not possible_receivers:
+                                # Just remove flow forever
+                                all_mice_flows.pop(fid_reallocate)
+                                starting_flows.pop(fid_reallocate)
+
+                            else:
+                                # Choose one randomly
+                                new_receiver = random.choice(possible_receivers)
+
+                                # Change receiver
+                                all_mice_flows[fid_reallocate]['dstHost'] = new_receiver
+
+                            # Check if already fits
+                            if self.can_receive_more(all_mice_flows, receiver, period=i):
+                                # Alreaady fits!
+                                break
+                    else:
+                        continue
+
+            print("After-reallocation/removal number of mice flows: {0}".format(len(all_mice_flows)))
+
+            # Update all flows dict with mice flows
+            all_flows.update(all_mice_flows)
+
         # Update the flows_per_sender dict
         new_flows_per_sender = {}
         for sender, flowlist in flows_per_sender.iteritems():
             new_flows_per_sender[sender] = []
             for flow in flowlist:
-                if flow['id'] in all_elep_flows.keys():
-                    floww = all_elep_flows[flow['id']]
+                if flow['id'] in all_flows.keys():
+                    floww = all_flows[flow['id']]
                     floww['sport'] = -1
                     floww['dport'] = -1
                     new_flows_per_sender[sender].append(floww)
 
         # Re-write correct source and destination ports per each sender
         print "Choosing correct ports..."
-        flows_per_sender = {}
-        for sender, flowlist in new_flows_per_sender.iteritems():
-            flowlist = self.choose_correct_ports(flowlist)
-            flows_per_sender[sender] = flowlist
-
+        flows_per_sender = self.choose_corrent_src_dst_ports(flows_per_sender)
         return flows_per_sender
-
 
 if __name__ == "__main__":
 
@@ -279,7 +436,7 @@ if __name__ == "__main__":
     t = time.time()
     if args.terminate:
         print "Terminating ongoing traffic!"
-        tgf.terminateTraffic()
+        tgf.terminateTrafficAtHosts()
 
     else:
         # Check if flow file has been given
@@ -300,8 +457,9 @@ if __name__ == "__main__":
                 # Generate traffic
                 traffic = tgf.plan_flows()
 
-                msg = "Generating traffic\n\tArguments: {0}\n\t"
-                print msg.format(args)
+                print "Generating traffic"
+                #msg = "Generating traffic\n\tArguments: {0}\n\t"
+                #print msg.format(args)
 
                 # If it must be saved
                 if args.save_traffic:
@@ -322,7 +480,7 @@ if __name__ == "__main__":
 
             # Orchestrate the traffic (either loaded or generated)
             print "Scheduling traffic..."
-            tgf.schedule(traffic)
+            tgf.schedule(traffic, add=args.addtc)
 
         # Flow file has been given
         else:
@@ -331,7 +489,7 @@ if __name__ == "__main__":
             traffic = tgf.plan_from_flows_file(args.flows_file)
 
             # Schedule it
-            tgf.schedule(traffic)
+            tgf.schedule(traffic, add=args.addtc)
 
     print "Elapsed time ", time.time()-t
 
