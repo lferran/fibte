@@ -193,7 +193,7 @@ class udpTrafficGeneratorBase(Base):
         # flow is mice
         elif flow_type == 'm':
             # Draw flow duration
-            return random.randint(min_len_mice, max_len_mice)
+            return random.uniform(min_len_mice, max_len_mice)
 
         else:
             raise ValueError("Unknown flow type: {0}".format(flow_type))
@@ -221,8 +221,8 @@ class udpTrafficGeneratorBase(Base):
                 return int(ELEPHANT_SIZE_RANGE[0])
 
         elif flow_type == 'm':
-            return random.randrange(MICE_SIZE_RANGE[0], MICE_SIZE_RANGE[1]+MICE_SIZE_STEP, MICE_SIZE_STEP)
-
+            #return random.randrange(MICE_SIZE_RANGE[0], MICE_SIZE_RANGE[1]+MICE_SIZE_STEP, MICE_SIZE_STEP)
+            return random.uniform(MICE_SIZE_RANGE[0], MICE_SIZE_RANGE[1])
         else:
             raise ValueError("Unknown flow type: {0}".format(flow_type))
 
@@ -347,6 +347,33 @@ class udpTrafficGeneratorBase(Base):
             else:
                 print("ERROR: Bijection can only return 1 receiver")
                 import ipdb; ipdb.set_trace()
+
+    def get_destination(self, pattern, sender, exclude=[]):
+        if pattern == 'random':
+            allReceivers = set(self.topology.getHosts())
+            receivers = list(set(allReceivers) - set(exclude) - set(sender))
+            if receivers:
+                # Pick one at random
+                return random.choice(receivers)
+            else:
+                return None
+
+
+        elif pattern == 'stride':
+            rcvs = self.senders[:]
+
+            # Get pattern args
+            stride_i = self.pattern_args.get('i', 4)
+
+            # Get ordered list of hosts
+            orderedHosts = self.topology.sortHostsByName(rcvs)
+
+            for index, h in enumerate(orderedHosts):
+                if h == sender:
+                    r_index = (index + stride_i) % len(orderedHosts)
+                    r = orderedHosts[r_index]
+                    return r
+
 
     @abc.abstractmethod
     def plan_flows(self):

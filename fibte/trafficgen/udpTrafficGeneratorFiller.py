@@ -10,81 +10,79 @@ class TGFillerParser(TGParser):
 
         # Load additional arguments
         self.parser.add_argument('--elephant_load', help='Level of elephant load', type=float, default=0.0)
-        self.parser.add_argument('--n_flows', help='Number of elephant flows to maintain', type=int, default=16)
+        self.parser.add_argument('--n_elephants', help='Number of elephant flows to maintain', type=int, default=16)
         self.parser.add_argument('--mice_load', help='Level of mice load', type=float, default=0.0)
+        self.parser.add_argument('--n_mice', help='Number of mice flows to maintain', type=int, default=32)
 
 class udpTrafficGeneratorFiller(udpTrafficGeneratorBase):
-    def __init__(self, elephant_load=0.8, n_flows=16, mice_load=0.2, *args, **kwargs):
+    def __init__(self, elephant_load=0.8, n_elephants=32, mice_load=0.2, n_mice=64, *args, **kwargs):
         super(udpTrafficGeneratorFiller, self).__init__(*args, **kwargs)
 
         # Set target link load
         self.elephant_load = elephant_load
-        self.n_flows = n_flows
+        self.n_elephants = n_elephants
         self.mice_load = mice_load
+        self.n_mice = n_mice
 
     def get_filename(self):
         """Return filename sample pattern"""
         pattern_args_fn = self.get_pattern_args_filename()
         filename = '{0}'.format(self.saved_traffic_dir)
-        anames = ['tgf', '{0}', pattern_args_fn, 'el{1}', 'nf{2}', 'ml{3}', 't{4}', 'ts{5}']
+        anames = ['tgf', '{0}', pattern_args_fn, 'eload{1}', 'nelep{2}', 'mload{3}', 'nmice{4}', 't{5}', 'ts{6}']
         filename += '_'.join([a for a in anames if a != None])
 
         filename = filename.format(self.pattern,
                         str(self.elephant_load).replace('.', ','),
-                        str(self.n_flows),
+                        str(self.n_elephants),
                         str(self.mice_load).replace('.', ','),
+                        str(self.n_mice),
                         self.totalTime, self.timeStep)
 
         filename += '.traffic'
         return filename
 
     def _get_active_flows(self, all_flows, period, to_host=None, from_host=None):
+
+        # Flows that started before period and finish after period+timeStep
+        all_active_flows = {fid: flow for fid, flow in all_flows.iteritems()
+                            if flow['startTime'] < period
+                            and self._getFlowEndTime(flow) > period + self.timeStep}
         if not to_host and not from_host:
-            return {fid: flow for fid, flow in all_flows.iteritems() if flow['startTime'] < period and self._getFlowEndTime(flow) > period + self.timeStep}
+            return all_active_flows
 
         elif to_host and not from_host:
-            return {fid: flow for fid, flow in all_flows.iteritems() if flow['dstHost'] == to_host and flow['startTime'] < period
-                    and self._getFlowEndTime(flow) > period + self.timeStep}
+            return {fid: flow for fid, flow in all_active_flows.iteritems() if flow['dstHost'] == to_host}
 
         elif from_host and not to_host:
-            return {fid: flow for fid, flow in all_flows.iteritems() if flow['srcHost'] == from_host and
-                    flow['startTime'] < period and self._getFlowEndTime(flow) > period + self.timeStep}
-
+            return {fid: flow for fid, flow in all_active_flows.iteritems() if flow['srcHost'] == from_host}
         else:
             raise ValueError
 
     def _get_starting_flows(self, all_flows, period, to_host=None, from_host=None):
-        if not to_host and not from_host:
-            return {f_id: flow for f_id, flow in all_flows.iteritems() if flow.get('startTime') >= period and flow.get('startTime') < period + self.timeStep}
-
-        elif to_host and not from_host:
-            return {f_id: flow for f_id, flow in all_flows.iteritems() if flow['dstHost'] == to_host and
-                    flow.get('startTime') >= period and flow.get('startTime') < period + self.timeStep}
-
-        elif from_host and not to_host:
-            return {f_id: flow for f_id, flow in all_flows.iteritems() if flow['srcHost'] == from_host and
-                    flow.get('startTime') >= period and flow.get('startTime') < period + self.timeStep}
-        else:
-            raise ValueError
+        return self._get_starting_flows_interval(all_flows=all_flows,
+                                                 start=period, end=period + self.timeStep,
+                                                 to_host=to_host, from_host=from_host)
 
     def _get_starting_flows_interval(self, all_flows, start, end, to_host=None, from_host=None):
+        # Flows that start in this period
+        all_starting_flows = {f_id: flow for f_id, flow in all_flows.iteritems() if flow.get('startTime') >= start and flow.get('startTime') < end}
+
         if not to_host and not from_host:
-            return {f_id: flow for f_id, flow in all_flows.iteritems() if flow.get('startTime') >= start and flow.get('startTime') < end}
+            return all_starting_flows
 
         elif to_host and not from_host:
-            return {f_id: flow for f_id, flow in all_flows.iteritems() if flow['dstHost'] == to_host and
-                    flow.get('startTime') >= start and flow.get('startTime') < end}
+            return {f_id: flow for f_id, flow in all_starting_flows.iteritems() if flow['dstHost'] == to_host}
 
         elif from_host and not to_host:
-            return {f_id: flow for f_id, flow in all_flows.iteritems() if flow['srcHost'] == from_host and
-                    flow.get('startTime') >= start and flow.get('startTime') < end}
+            return {f_id: flow for f_id, flow in all_starting_flows.iteritems() if flow['srcHost'] == from_host}
+
         else:
             raise ValueError
 
     def _get_stopping_flows(self, all_flows, period):
         return {f_id: flow for f_id, flow in all_flows.iteritems()
                 if self._getFlowEndTime(flow) >= period
-                and self._getFlowEndTime(flow) <= period + self.timeStep}
+                and self._getFlowEndTime(flow) < period + self.timeStep}
 
     def can_send_more(self, all_flows, sender, period):
         afs_sender = self._get_active_flows(all_flows, period=period, from_host=sender)
@@ -112,8 +110,8 @@ class udpTrafficGeneratorFiller(udpTrafficGeneratorBase):
         starting_flows = self._get_starting_flows(all_flows, period=period, to_host=receiver)
 
         # Get loads
-        aload = sum([f['size'] for f in active_flows.itervalues()])
-        sload = sum([f['size'] for f in starting_flows.itervalues()])
+        aload = sum([f['size'] if f['proto'] == 'UDP' else f['rate'] for f in active_flows.itervalues()] )
+        sload = sum([f['size'] if f['proto'] == 'UDP' else f['rate'] for f in starting_flows.itervalues()])
         if type == 'elephant':
             max_load = LINK_BANDWIDTH * self.elephant_load
         else:
@@ -176,21 +174,21 @@ class udpTrafficGeneratorFiller(udpTrafficGeneratorBase):
         # Initial flow id
         next_id = 0
 
-        # Compute number of elephant flows and fixed sizes
-        fws_per_host = int(self.n_flows/float(len(self.senders)))
-        fw_size = (self.elephant_load*LINK_BANDWIDTH)/fws_per_host
-
         ## Schedule first elephant flows #############################
         if self.elephant_load > 0.0:
+            # Compute number of elephant flows and fixed sizes
+            elep_per_host = int(self.n_elephants / float(len(self.senders)))
+            elep_size = (self.elephant_load * LINK_BANDWIDTH) / elep_per_host
+
             # Start fws_per_host at each sender
             senders_t = self.senders[:]
             random.shuffle(senders_t)
             print("Number of senders: {0}".format(len(senders_t)))
             for sender in senders_t:
-                for nf in range(fws_per_host):
+                for nf in range(elep_per_host):
                     # Get a new elephant flow
                     # size = self.get_flow_size(flow_type='e', distribution='uniform')
-                    size = fw_size
+                    size = elep_size
                     #duration = self.get_flow_duration(flow_type='e')
                     duration = 20
                     destination = self.get_flow_destination(sender)
@@ -219,13 +217,13 @@ class udpTrafficGeneratorFiller(udpTrafficGeneratorBase):
                         # Get a new elephant flow with similar info
                         # size = self.get_flow_size(flow_type='e', distribution='uniform')
                         original_sender = tf['srcHost']
-                        size = fw_size
+                        size = elep_size
                         #duration = self.get_flow_duration(flow_type='e')
                         duration = 20
                         destination = self.get_flow_destination(original_sender)
                         fid = next_id
                         old_endtime = int(tf.get('startTime') + tf.get('duration'))
-                        new_starttime = random.uniform(old_endtime + 1, old_endtime + 1.5)
+                        new_starttime = random.uniform(old_endtime + 1, old_endtime + 5)
                         f = {'id': fid,
                              'type': 'e',
                              'srcHost': original_sender,
@@ -287,22 +285,25 @@ class udpTrafficGeneratorFiller(udpTrafficGeneratorBase):
             # Update all flows dict
             all_flows.update(all_elep_flows)
 
-
         ## Schedule mice flows #######################################
         if self.mice_load > 0.0:
+            # Compute number of elephant flows and fixed sizes
+            mice_per_host = int(self.n_mice / float(len(self.senders)))
+            mice_size = (self.mice_load * LINK_BANDWIDTH) / mice_per_host
+
             # Start fws_per_host at each sender
             senders_t = self.senders[:]
             random.shuffle(senders_t)
             print("Number of senders: {0}".format(len(senders_t)))
             for sender in senders_t:
-            #    if sender == 'h_0_0':
                 while not self.max_load_reached(all_mice_flows, sender, 0, 14.9, type='mice'):
                     # Get a new mice flow
-                    rate = self.get_flow_size(flow_type='m')
+                    #rate = self.get_flow_size(flow_type='m')
+                    rate = mice_size
                     duration = self.get_flow_duration(flow_type='m')
                     size = rate * duration
-                    destination = self.get_flow_destination(sender)
-                    #destination = 'h_3_3'
+                    destination = self.get_destination('random', sender)
+                    #destination = self.get_destination('stride', sender)
                     fid = next_id
                     f = {'id': fid,
                          'type': 'm',
@@ -319,9 +320,8 @@ class udpTrafficGeneratorFiller(udpTrafficGeneratorBase):
 
             print "Number of flows to fill up the mice percentage: {0}".format(len(all_mice_flows))
 
-            for i in range(15, self.totalTime, self.timeStep):
+            for i in range(5, self.totalTime, self.timeStep):
                 if i < self.totalTime - self.timeStep:
-
                     # Get flows that are terminating
                     terminating_flows = self.get_terminating_flows(all_mice_flows, period=i)
 
@@ -329,14 +329,15 @@ class udpTrafficGeneratorFiller(udpTrafficGeneratorBase):
                     for tfk, tf in terminating_flows.iteritems():
                         # Get a new mice flow with similar info
                         original_sender = tf['srcHost']
-                        rate = self.get_flow_size(flow_type='m')
+                        #rate = self.get_flow_size(flow_type='m')
+                        rate = mice_size
                         duration = self.get_flow_duration(flow_type='m')
                         size = rate * duration
-                        destination = self.get_flow_destination(original_sender)
-                        #destination = 'h_3_3'
+                        destination = self.get_destination('random', original_sender)
+                        #destination = self.get_destination('stride', original_sender)
                         fid = next_id
-                        old_endtime = int(tf.get('startTime') + tf.get('size')/tf.get('rate'))
-                        new_starttime = random.uniform(old_endtime, old_endtime + 0.5)
+                        old_endtime = self._getFlowEndTime(tf)
+                        new_starttime = random.uniform(old_endtime, old_endtime + 0.2)
                         f = {'id': fid,
                              'type': 'm',
                              'srcHost': original_sender,
@@ -346,52 +347,59 @@ class udpTrafficGeneratorFiller(udpTrafficGeneratorBase):
                              'size': size,
                              'rate': rate,
                              'duration': None}
+
                         flows_per_sender[original_sender].append(f)
                         all_mice_flows[fid] = f
                         next_id += 1
 
+                    #n_active_flows = len(self._get_active_flows(all_mice_flows, period=i))
+                    #n_starting_flows = len(self._get_starting_flows(all_mice_flows, period=i))
+                    #n_stopping_flows = len(terminating_flows)
+                    #print "Period: {3} ---> Starting: {0} | Active: {1} | Terminating: {2}".format(n_starting_flows, n_active_flows, n_stopping_flows, i)
+
             print "Initial number of mice flows: {0}".format(len(all_mice_flows))
 
-            # Check receivers!
-            for i in range(0, self.totalTime, self.timeStep):
-                for receiver in self.senders:
-                    # Check if can receive all new starting flows towards him
-                    if self.receives_too_much_traffic(all_mice_flows, receiver, period=i, type='mice'):
-                        # Get starting flows
-                        starting_flows = self._get_starting_flows(all_mice_flows, period=i, to_host=receiver)
-
-                        # Get flow ids
-                        starting_ids = starting_flows.keys()
-
-                        # Randomly shuffle them
-                        random.shuffle(starting_ids)
-
-                        while starting_ids != []:
-                            # Get flow id to reallocate
-                            fid_reallocate = starting_ids.pop()
-                            flow = starting_flows[fid_reallocate]
-
-                            # Get receivers that can afford it!
-                            possible_receivers = self.get_hosts_that_can_afford(all_mice_flows, flow, period=i, type='mice')
-
-                            if not possible_receivers:
-                                # Just remove flow forever
-                                all_mice_flows.pop(fid_reallocate)
-                                starting_flows.pop(fid_reallocate)
-
-                            else:
-                                # Choose one randomly
-                                new_receiver = random.choice(possible_receivers)
-
-                                # Change receiver
-                                all_mice_flows[fid_reallocate]['dstHost'] = new_receiver
-
-                            # Check if already fits
-                            if self.can_receive_more(all_mice_flows, receiver, period=i):
-                                # Alreaady fits!
-                                break
-                    else:
-                        continue
+            # # Check receivers!
+            # for i in range(0, self.totalTime, self.timeStep):
+            #     for receiver in self.senders:
+            #         # Check if can receive all new starting flows towards him
+            #         if self.receives_too_much_traffic(all_mice_flows, receiver, period=i, type='mice'):
+            #             import ipdb; ipdb.set_trace()
+            #             # Get starting flows
+            #             starting_flows = self._get_starting_flows(all_mice_flows, period=i, to_host=receiver)
+            #
+            #             # Get flow ids
+            #             starting_ids = starting_flows.keys()
+            #
+            #             # Randomly shuffle them
+            #             random.shuffle(starting_ids)
+            #
+            #             while starting_ids != []:
+            #                 # Get flow id to reallocate
+            #                 fid_reallocate = starting_ids.pop()
+            #                 flow = starting_flows[fid_reallocate]
+            #
+            #                 # Get receivers that can afford it!
+            #                 possible_receivers = self.get_hosts_that_can_afford(all_mice_flows, flow, period=i, type='mice')
+            #
+            #                 if not possible_receivers:
+            #                     # Just remove flow forever
+            #                     all_mice_flows.pop(fid_reallocate)
+            #                     starting_flows.pop(fid_reallocate)
+            #
+            #                 else:
+            #                     # Choose one randomly
+            #                     new_receiver = random.choice(possible_receivers)
+            #
+            #                     # Change receiver
+            #                     all_mice_flows[fid_reallocate]['dstHost'] = new_receiver
+            #
+            #                 # Check if already fits
+            #                 if self.can_receive_more(all_mice_flows, receiver, period=i):
+            #                     # Already fits!
+            #                     break
+            #         else:
+            #             continue
 
             print("After-reallocation/removal number of mice flows: {0}".format(len(all_mice_flows)))
 
@@ -425,8 +433,9 @@ if __name__ == "__main__":
 
     # Start the TG object
     tgf = udpTrafficGeneratorFiller(elephant_load=args.elephant_load,
-                                    n_flows=args.n_flows,
+                                    n_elephants=args.n_elephants,
                                     mice_load=args.mice_load,
+                                    n_mice=args.n_mice,
                                     pattern=args.pattern,
                                     pattern_args=args.pattern_args,
                                     totalTime=args.time,
