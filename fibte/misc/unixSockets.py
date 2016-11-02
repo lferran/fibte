@@ -132,7 +132,7 @@ class UnixClient(object):
 
         self.sock.close()
 
-    def send(self,m,server):
+    def send(self, m, server):
         try:
             self.sock.sendto(m, self.server_address_base.format(server))
         except socket.error as serr:

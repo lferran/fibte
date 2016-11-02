@@ -25,9 +25,10 @@ class Base(object):
 
         if isinstance(size, float):
             return int(size)
+
         try:
             conversions = {'B': 1, 'K': 1e3, 'M': 1e6, 'G': 1e9}
-            digits_list = range(48,58) + [ord(".")]
+            digits_list = range(48, 58) + [ord(".")]
             magnitude = chr(sum([ord(x) if (ord(x) not in digits_list) else 0 for x in size]))
             digit = float(size[0:(size.index(magnitude))])
             magnitude = conversions[magnitude]

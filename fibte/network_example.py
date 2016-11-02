@@ -126,13 +126,12 @@ class TestTopo3(IPTopo):
         c1 = self.addController(cfg.C1, cfg_path=cfg.C1_cfg)
         self.addLink(c1, r1, cost=1000)
 
-
 def launch_network(k=4, bw=10, ip_alias=False):
     signal.signal(signal.SIGTERM, signal_term_handler)
 
     # Cleanup the network
     cleanup()
-    sh("killall snmpd ospfd zebra pmacctd getLoads.py")
+    sh("killall ospfd zebra getLoads.py nc")
 
     # Flush root namespace mangle table
     subprocess.call(["iptables", "-t", "mangle" ,"-F"])

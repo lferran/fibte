@@ -62,9 +62,6 @@ class FlowServer(object):
         self.popens = []
         self.processes = []
 
-        # Setup logging stuff
-        self.setup_logging()
-
         # Own's socket address
         self.address = "/tmp/flowServer_{0}".format(name)
 
@@ -110,7 +107,6 @@ class FlowServer(object):
         self.traceroute_client = UnixClient(self.traceroute_server_name)
 
         # Start process that listens from server
-        #process = multiprocessing.Process(target=self.tracerouteServer)
         process = multiprocessing.Process(target=self.tracerouteServer)
         # process.daemon = True
         process.start()
@@ -130,6 +126,8 @@ class FlowServer(object):
 
         # Configure sigterm handler
         signal.signal(signal.SIGTERM, self.signal_term_handler)
+
+        self.setup_logging()
 
     def miceCounterServer(self):
         """Thread that keeps track of the mice level observed by the host"""
@@ -278,8 +276,8 @@ class FlowServer(object):
             self.processes.append(process)
 
             # Log a bit
-            size = self.base.setSizeToStr(flow['size'])
-            rate = self.base.setSizeToStr(flow['rate'])
+            size = self.base.setSizeToStr(flow.get('size'))
+            rate = self.base.setSizeToStr(flow.get('rate')) if flow.get('rate', None) else size
             duration = self._getFlowDuration(flow)
             dst = self.namesToIps['ipToName'][flow['dst']]
             proto = flow['proto']
@@ -430,14 +428,14 @@ class FlowServer(object):
         """
         Schedules the notifications of the mice loads to the controller
         """
-        if self.controllerNotFoundCount > 1:
-            #log.warning("{0} : Not scheduling mice notifications anymore".format(self.name))
+        if self.controllerNotFoundCount > 40:
+            log.warning("{0} : Not scheduling mice notifications anymore".format(self.name))
             pass
         else:
             looptime = 100
 
             # Log a bit
-            #log.info("{0} : Scheduling mice notificationss: every {1}s".format(self.name, self.notify_period))
+            log.info("{0} : Scheduling mice notificationss: every {1}s".format(self.name, self.notify_period))
 
             # Schedule samplings at correct sampling intervals
             for st in range(0, looptime, self.notify_period):
@@ -450,14 +448,15 @@ class FlowServer(object):
         """
         Schedules the samplings for the mice estimation
         """
-        if self.controllerNotFoundCount > 1:
-            #log.warning("{0} : Not scheduling mice samplings anymore".format(self.name))
+        if self.controllerNotFoundCount > 40:
+            log.warning("{0} : Not scheduling mice samplings anymore".format(self.name))
             pass
+
         else:
-            looptime = 50
+            looptime = 100
 
             sampling_period = 1 / self.sampling_rate
-            #log.info("{0} : Scheduling mice samplings: every {1}s".format(self.name, 1 / self.sampling_rate))
+            log.info("{0} : Scheduling mice samplings: every {1}s".format(self.name, 1 / self.sampling_rate))
 
             # Schedule samplings at correct sampling intervals
             for sp in range(0, looptime, sampling_period):
@@ -479,11 +478,8 @@ class FlowServer(object):
             # Send them to the controller
             self.client_to_controller.send(json.dumps({"type": "miceEstimation", 'data': {'src': self.name, 'samples': samples_to_send}}), "")
         except Exception as e:
-            if self.controllerNotFoundCount < 1:
-                #log.error("Controller not found")
-                self.controllerNotFoundCount += 1
-            else:
-                self.controllerNotFoundCount += 1
+            self.controllerNotFoundCount += 1
+            log.error("{0} : Controller not found: {1}".format(self.name, e))
 
     def terminateTraffic(self):
         # No need to terminate startFlow processes, since they are killed when
@@ -571,8 +567,11 @@ class FlowServer(object):
             if isMice(flow) and self.ip_alias == True:
                 flow['dst'] = get_secondary_ip(flow['dst'])
 
+            # Get start time with lower bound
+            starttime = max(2, flow.get('start_time'))
+
             # Schedule startFlow
-            self.scheduler.enter(flow["start_time"], 1, self.startFlow, [flow])
+            self.scheduler.enter(starttime, 1, self.startFlow, [flow])
 
             # Add counts
             if isElephant(flow):
@@ -631,6 +630,11 @@ class FlowServer(object):
                         # Schedule flows relative to current time
                         log.debug("{0} : Flow_list arrived".format(self.name))
                         self.scheduleFlowList(flowlist=flowlist)
+                        try:
+                            self.scheduler_thread.start()
+                        except:
+                            self.scheduler_thread = Thread(target=self.scheduler.run)
+                            self.scheduler_thread.start()
 
                 elif event['type'] == "receivelist":
                     receivelist = event['data']
