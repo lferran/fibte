@@ -11,10 +11,12 @@ db_topo = CFG.get("DEFAULT", "db_topo")
 
 algo_styles = {
                'ecmp': {'color': 'red', 'linestyle':'-'},
-               'dag-shifter-best': {'color':'blue', 'linestyle':'-'},
-               'dag-shifter-sample': {'color':'orange', 'linestyle':'-'}
+               'mice-dag-shifter': {'color':'purple', 'linestyle':'-'},
+               'elephant-dag-shifter-best': {'color':'blue', 'linestyle':'-'},
+               'elephant-dag-shifter-sample': {'color': 'orange', 'linestyle': '-'},
+               'full-dag-shifter-best': {'color': 'black', 'linestyle': '-'},
+               'full-dag-shifter-sample': {'color': 'pink', 'linestyle': '-'},
                }
-
 
 class AlgorithmsComparator(object):
     def __init__(self, k=4, file_list=[]):
@@ -29,14 +31,26 @@ class AlgorithmsComparator(object):
         # Load them
         self.algo_to_measurements = self.load_measurements()
 
+        # Results folder
+        self.throughput_dir = os.path.join(os.path.dirname(__file__), 'results/throughput/')
+        self.delay_dir = os.path.join(os.path.dirname(__file__), 'results/delay/')
+
     def extractAlgoNameFromFilename(self, filename):
         if 'ecmp' in filename:
             return 'ecmp'
-        elif 'dag-shifter' in filename:
+        elif 'elephant-dag-shifter' in filename:
             if 'True' in filename:
-                return 'dag-shifter-sample'
+                return 'elephant-dag-shifter-sample'
             else:
-                return 'dag-shifter-best'
+                return 'elephant-dag-shifter-best'
+        elif 'mice-dag-shifter' in filename:
+            return 'mice-dag-shifter-best'
+
+        elif 'full-dag-shifter' in filename:
+            if 'True' in filename:
+                return 'full-dag-shifter-sample'
+            else:
+                return 'full-dag-shifter-best'
 
     def load_measurements(self):
         """
@@ -51,7 +65,10 @@ class AlgorithmsComparator(object):
 
         for filename in self.file_list:
             # Extract algorithm name
+            filename = self.throughput_dir + filename
+
             algo = self.extractAlgoNameFromFilename(filename)
+
             if algo == '': algo = 'None'
 
             # Extract measurements
