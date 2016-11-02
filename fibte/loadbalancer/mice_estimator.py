@@ -7,6 +7,7 @@ import logging
 from fibte.logger import log
 import copy
 import time
+import json
 
 # Decorator function for timing purposes
 def time_func(function):
@@ -21,7 +22,7 @@ class MiceEstimatorThread(threading.Thread):
     def __init__(self, sbmanager, orders_queue, results_queue,
                  mice_distributions, mice_distributions_lock,
                  capacities_graph, capacities_lock,
-                 dags, samples=100, *args, **kwargs):
+                 dags, q_server, samples=10, *args, **kwargs):
         # Superclass __init__()
         super(MiceEstimatorThread, self).__init__(*args, **kwargs)
 
@@ -32,8 +33,9 @@ class MiceEstimatorThread(threading.Thread):
         self.caps_graph = capacities_graph   # Capacities left by the elephant flows
         self.caps_lock = capacities_lock
         self.dags = dags                     # Current Mice traffic dags
-        self.initial_dags = self.dags.copy() # Keep copy of initial dags
-        self.prefixes = self.dags.keys()
+        self.initial_dags = copy.deepcopy(self.dags) # Keep copy of initial dags
+        self.prefixes = self.initial_dags.keys()
+        self.q_server = q_server
 
         # Get k
         self.k = self.caps_graph.k
@@ -62,7 +64,17 @@ class MiceEstimatorThread(threading.Thread):
         self.load_router_names()
 
         # Set debug level
-        log.setLevel(logging.DEBUG)
+        #log.setLevel(logging.DEBUG)
+
+    @staticmethod
+    def get_links_from_path(path):
+        return zip(path[:-1], path[1:])
+
+    def _sendMainThreadToSleep(self, seconds):
+        """Makes the main thread jump to the sleep mode
+        **ONLY FOR DEBUGGING PURPOSES!
+        """
+        self.q_server.put(json.dumps({'type': 'sleep', 'data': seconds}))
 
     def load_router_names(self):
         """FOR DEBUGGING PURPOSES ONLY"""
@@ -96,6 +108,9 @@ class MiceEstimatorThread(threading.Thread):
         self.r_c3 = self.caps_graph.get_router_from_position('core', 3)
 
     def print_stuff(self, stuff):
+        """
+        ***DEBUGGING PURPOSES ONLY
+        """
         return self.caps_graph.print_stuff(stuff)
 
     def get_dependant_probability(self, link, dst_prefix):
@@ -107,48 +122,54 @@ class MiceEstimatorThread(threading.Thread):
         # No dependencies (aggr -> edge link)
         if not slinks:
             return 1
+
         else:
             # Compute average of dependant links
             dependant_probability = 0.0
             for edge in slinks:
                 [src, dst] = edge
-                dependant_probability += self.link_probs_graph[src][dst][dst_prefix]['final_probability']
+                if dst_prefix in self.link_probs_graph[src][dst]:
+                    dependant_probability += self.link_probs_graph[src][dst][dst_prefix]['final_probability']
+                else:
+                    import ipdb;ipdb.set_trace()
 
             return dependant_probability/float(len(slinks))
 
-    def compute_final_probability(self, link, dst_prefix):
+    def compute_final_probability(self, link, dst_prefix, mpr=None):
         """Takes a link, fetches its own current probability (from mice rate passing),
         fetches its dependant probability, and computes the final one"""
-        src,dst = link
-
-        # Get own probability
-        if dst_prefix in self.link_probs_graph[src][dst].keys():
-            own_prob = self.link_probs_graph[src][dst][dst_prefix]['own_probability']
-        else:
-            import ipdb; ipdb.set_trace()
-            raise ValueError("Weird thing happening...")
+        if not mpr:
+            # Get own mpr
+            src, dst = link
+            mpr = self.link_probs_graph[src][dst]['mpr']
 
         # Get dependant probability
         dep_prob = self.get_dependant_probability(link, dst_prefix)
-
-        return dep_prob * own_prob
+        return dep_prob * mpr
 
     def _start_link_probabilities_graph(self):
+        """Fills up a DCGraph with the probabilities of the edges
+        for each of the prefixes using these edges
+        """
         # Here we store link probabilites
         link_probs_graph = self.caps_graph.copy()
+
         for (u, v, data) in link_probs_graph.edges_iter(data=True):
             # Remove elephant capacity
             if data.has_key('elephants_capacity'):
                 data.pop('elephants_capacity')
 
+            # Set the mpr
+            data.update({'mpr': 1})
+
+            pxs = self.get_prefixes_using_link(u, v, graph=link_probs_graph)
             # Initially all links are chosen (assuming ECMP on all possible paths)
-            for px in self.get_prefixes_using_link(u,v, graph=link_probs_graph):
+            for px in pxs:
+                if not data:
+                    data = {}
                 # Get edges that it depends on
-                dependant_edges = self.get_successor_links_on_direction(link=(u, v), dst_prefix=px)
-                data[px] = {'final_probability': 1,
-                            'changed': False,
-                            'dependant_edges': dependant_edges,
-                            'own_probability': 1}
+                data[px] = {'final_probability': 1, 'changed': False}
+
         # Return it
         return link_probs_graph
 
@@ -160,23 +181,20 @@ class MiceEstimatorThread(threading.Thread):
         """
         (src, dst) = link
         predecessor_links = [(other_router, src) for other_router in self.initial_dags[dst_prefix]['dag'].predecessors(src)]
+
         return predecessor_links
 
     def get_successor_links_on_direction(self, link, dst_prefix):
         """On the direction towards dst_prefix, return the
          successor links coming after link"""
         (src, dst) = link
-        successors = self.initial_dags[dst_prefix]['dag'].successors(dst)
-        return [(dst, s) for s in successors]
-
-    @staticmethod
-    def get_edges_from_path(path):
-        return zip(path[:-1], path[1:])
+        dag = self.initial_dags[dst_prefix]['dag']
+        successors = dag.successors(dst)
+        return [(dst, s) for s in successors if not dag.is_destination_prefix(s)]
 
     def choose_random_dag(self, prefix, link_probabilities):
         """Given the individual link probabilities, this
         generates a random DCDag
-
         Returns a brand new DCDag
         """
         dc_dag = self.link_probs_graph.get_random_dag_from_probability_dcgraph(prefix, link_probabilities)
@@ -184,15 +202,23 @@ class MiceEstimatorThread(threading.Thread):
 
     def get_link_probabilities(self, prefix):
         """
+        Returns a dictionary keyed by links in the prefix dag, pointing to the
+        current probabilities of the links.
         """
+        # Accumulate result here
         link_probs = {}
-        for (u, v, data) in self.initial_dags[prefix]['dag'].edges_iter(data=True):
+
+        # Get initial dag for prefix
+        dag = self.initial_dags[prefix]['dag'].copy()
+
+        # Iter its edges
+        for (u, v, data) in dag.edges_iter(data=True):
             if prefix in self.link_probs_graph[u][v].keys():
                 link_probs[(u,v)] = {mykey: self.link_probs_graph[u][v][prefix][mykey] for mykey in ['changed', 'final_probability']}
             else:
                 log.error("Something weird is happening...")
-                import ipdb; ipdb.set_trace()
-
+                self._sendMainThreadToSleep(3000)
+                import ipdb;ipdb.set_trace()
         return link_probs
 
     def set_probabilities_unchanged(self, prefix):
@@ -200,7 +226,10 @@ class MiceEstimatorThread(threading.Thread):
         action = [data[prefix].update({'changed': False}) for (u, v, data) in self.link_probs_graph.edges_iter(data=True) if prefix in data]
 
     def get_prefixes_using_link(self, src, dst, graph=None):
-        """"""
+        """
+        Given a link in the DCGraph, returns the destination prefixes
+        towards which there can be traffic going through that link
+        """
         if not graph:
             graph = self.link_probs_graph
 
@@ -222,6 +251,7 @@ class MiceEstimatorThread(threading.Thread):
 
             else:
                 log.error("Wrong data")
+                self._sendMainThreadToSleep(3000)
                 import ipdb;ipdb.set_trace()
                 raise ValueError("wrong link")
         else:
@@ -238,6 +268,7 @@ class MiceEstimatorThread(threading.Thread):
 
             else:
                 log.error("Wrong data")
+                self._sendMainThreadToSleep(3000)
                 import ipdb;ipdb.set_trace()
                 raise ValueError("wrong link")
 
@@ -250,63 +281,17 @@ class MiceEstimatorThread(threading.Thread):
         """
         return any([data['changed'] == True for ((u, v), data) in link_probs.iteritems()])
 
-    @time_func
-    def avoid_most_congested_links(self, caps_graph):
-        """
-        Modifies mice dags such that the most congested links are avoided
-        """
-
-        # Accumulate here the links with higher congestion probability
-        congested_links = []
-        for (u, v, data) in self.propagated_mice_levels.edges_iter(data=True):
-            elephant_capacity = caps_graph[u][v].get('elephants_capacity', 0)
-            loads = data['loads'] + elephant_capacity
-            linkCongProb = self.linkCongestionProbability(loads, threshold=self.congestion_threshold)
-            if linkCongProb >= self.max_mice_cong_prob:
-               congested_links.append((u, v))
-
-        # Modify link probabilities in the dags for each link
-        for (u, v) in congested_links:
-            self.modify_link_probabilities(u,v)
-
-        # Choose random dangs for each prefix
-        new_dags = {}
-        for prefix in self.prefixes:
-            link_probabilities = self.get_link_probabilities(prefix)
-            if self.link_probabilities_changed(link_probabilities):
-                # Generate new random dag
-                new_random_dag = self.choose_random_dag(prefix, link_probabilities)
-                new_dags[prefix] = new_random_dag
-                self.dags[prefix]['dag'] = new_random_dag
-
-                # Reset changed = False
-                self.set_probabilities_unchanged(prefix)
-
-        # Apply new dags all at same time
-        self.sbmanager.add_dag_requirements_from(new_dags)
-
-    @staticmethod
-    def get_links_from_path(path):
-        return zip(path[:-1], path[1:])
-
     def compute_link_passing_rate(self, remaining_capacity, incoming_load, n_dests):
         """
         Compute how much of the incoming traffic to those destinations
-        can actually be
+        can actually be sent through without congestion
         """
-        dest_share = incoming_load / float(n_dests)
-        n_shares = range(1, n_dests+1)
-        n_shares.reverse()
+        if not incoming_load:
+            return 1
 
-        for ns in n_shares:
-            current_share = dest_share * ns
-            if remaining_capacity > current_share:
-                return current_share/float(incoming_load)
-            else:
-                continue
-
-        # Otherwise return passing rate 0
-        return 0
+        rate = min(1, remaining_capacity/incoming_load)
+        rate_dests = int(n_dests * rate)/float(n_dests)
+        return rate_dests
 
     def get_link_mice_load(self, src, dst):
         """
@@ -322,12 +307,9 @@ class MiceEstimatorThread(threading.Thread):
         with self.caps_lock:
             return max(0, LINK_BANDWIDTH - self.caps_graph[src][dst]['elephants_capacity'])
 
-    def modify_link_probabilities2(self, link):
+    def modify_link_probabilities(self, link):
         # Extract src and dst
         [src, dst] = link
-
-        # Log a bit
-        #log.info("LINK: {0}".format(self.link_probs_graph.print_stuff(link)))
 
         # Get destinations using link
         dests = self.get_prefixes_using_link(src, dst)
@@ -339,16 +321,25 @@ class MiceEstimatorThread(threading.Thread):
         remaining_capacity = self.get_remaining_elephant_capacity(src, dst)
 
         # Compute individual link probability
-        ownLinkProb = self.compute_link_passing_rate(remaining_capacity, mice_load, len(dests))
+        newMPR = self.compute_link_passing_rate(remaining_capacity, mice_load, len(dests))
+
+        # Update its current probability
+        self.link_probs_graph[src][dst]['mpr'] = newMPR
 
         for px in dests:
-            # Update its current probability
-            self.link_probs_graph[src][dst][px]['own_probability'] = ownLinkProb
-            self.link_probs_graph[src][dst][px]['final_probability'] = self.compute_final_probability(link=link, dst_prefix=px)
-            self.link_probs_graph[src][dst][px]['changed'] = True
+            # Get old one
+            old_probability = self.link_probs_graph[src][dst][px]['final_probability']
 
-            # Propagate
-            self.propagate_to_predecessor_links(link, dest_px=px)
+            # Compute new one
+            new_probability = self.compute_final_probability(link=link, dst_prefix=px, mpr=newMPR)
+
+            # Update it only if it changed
+            if old_probability != new_probability:
+                self.link_probs_graph[src][dst][px]['final_probability'] = new_probability
+                self.link_probs_graph[src][dst][px]['changed'] = True
+
+                # Propagate
+                self.propagate_to_predecessor_links(link, dest_px=px)
 
     def propagate_to_predecessor_links(self, link, dest_px):
         """Once compute a new link probability, it has to be propagated to all
@@ -356,28 +347,21 @@ class MiceEstimatorThread(threading.Thread):
         # Get edge source and destination
         (src, dst) = link
 
-        # Log a bit
-        #log.info("LINK: {0}".format(self.print_stuff(link)))
-
         # Get predecessor edges
         predecessor_links = self.get_predecessor_links_on_direction(link, dst_prefix=dest_px)
-        #log.info("PREDECESSOR LINKS: {0}".format(self.print_stuff(predecessor_links)))
 
         # If there are indeed predecessor links
         if predecessor_links:
             # Iterate them and propagate
             for plink in predecessor_links:
                 [psrc, pdst] = plink
-                #log.info("Propagating predLINK: {0}".format(self.print_stuff(plink)))
 
-                # Compute updated final probability
+                # Recompute updated final probability
                 self.link_probs_graph[psrc][pdst][dest_px]['final_probability'] = self.compute_final_probability(plink, dst_prefix=dest_px)
                 self.link_probs_graph[psrc][pdst][dest_px]['changed'] = True
-                #log.info("\n({0} {1}) -> {2}".format(self.print_stuff(psrc), self.print_stuff(pdst), self.link_probs_graph[psrc][pdst][dest_px]))
 
                 # Propagate on predecessor links of each link
                 self.propagate_to_predecessor_links(link=plink, dest_px=dest_px)
-
             else:
                 return
 
@@ -390,7 +374,12 @@ class MiceEstimatorThread(threading.Thread):
 
         # Compute new probabilities for the links first
         for link in links_on_path:
-            self.modify_link_probabilities2(link)
+            self.modify_link_probabilities(link)
+
+    @time_func
+    def plotAllNewDags(self, new_dags):
+        for px, dag in new_dags.iteritems():
+            dag.plot('images/{0}_{1}.png'.format(px.replace('/', '|'), time.time()))
 
     @time_func
     def adapt_mice_dags(self, path):
@@ -414,8 +403,16 @@ class MiceEstimatorThread(threading.Thread):
                 # Reset changed = False
                 self.set_probabilities_unchanged(prefix)
 
-        # Apply new dags all at same time
-        self.sbmanager.add_dag_requirements_from(new_dags)
+        if new_dags:
+            # Apply new dags all at same time
+            self.sbmanager.add_dag_requirements_from(new_dags)
+
+            # We must re-propagate the mice loads!
+            #TODO: self.propagate again
+
+
+            # Plot them!
+            #self.plotAllNewDags(new_dags)
 
     def run(self):
         while True:
@@ -464,8 +461,6 @@ class MiceEstimatorThread(threading.Thread):
                 log.info(order)
                 continue
 
-    # Other functions
-
     @staticmethod
     def propagate_sample(dag, source, target, load):
         if source == target:
@@ -496,6 +491,7 @@ class MiceEstimatorThread(threading.Thread):
 
                 # Take random samples for each source prefix connected to the edge router
                 er_load = sum([random.choice(self.mice_dbs[prefix][px]['avg']) for px in pxs if prefix in self.mice_dbs and px in self.mice_dbs[prefix]])
+                log.debug(er_load)
 
                 # Propagate it
                 edges = self.propagate_sample(dag=dag, source=er, target=gw, load=er_load)
@@ -519,6 +515,8 @@ class MiceEstimatorThread(threading.Thread):
             # Take as many samples!
             for i in range(self.samples):
                 self.propagateAllPrefixes(i)
+
+    ## Other unused functions functions #################################
 
     def _totalCongestionProbability(self, threshold=0.3):
         """
@@ -544,7 +542,6 @@ class MiceEstimatorThread(threading.Thread):
 
         return self.union_congestion_probability(cps)
 
-    @time_func
     def totalCongestionProbability(self, caps_graph, threshold=0.3):
         """
         Propagate distribution samples and then, check for at least one
@@ -583,125 +580,39 @@ class MiceEstimatorThread(threading.Thread):
         congested_samples = len([l for l in loads if l > LINK_BANDWIDTH*threshold])
         return congested_samples/total_samples
 
-    @staticmethod
-    def union_congestion_probability(cps):
+    def avoid_most_congested_links(self, caps_graph):
         """
-        Apply function found in: http://lethalman.blogspot.ch/2011/08/probability-of-union-of-independent.html
-
-        IMPORTANT ASSUMPTION: We assume here that the individual link congestion
-                              probability are independent from each other...
-                              QUESTION: IS THAT RIGHT?
+        Modifies mice dags such that the most congested links are avoided
         """
-        tmp = reduce(lambda x,y: x*y, map(lambda x: 1-x, cps))
-        final_cp = 1 - tmp
-        return final_cp
 
-    def modify_link_probabilities(self, src, dst):
-        """Modifies the probabilities to be chosen for the corresponding
-        predecessor links, given a congested link (src, dst)
-        """
-        # Get destination prefixes that use this link
-        prefixes_to_modify = self.get_prefixes_using_link(src, dst)
+        # Accumulate here the links with higher congestion probability
+        congested_links = []
+        for (u, v, data) in self.propagated_mice_levels.edges_iter(data=True):
+            elephant_capacity = caps_graph[u][v].get('elephants_capacity', 0)
+            loads = data['loads'] + elephant_capacity
+            linkCongProb = self.linkCongestionProbability(loads, threshold=self.congestion_threshold)
+            if linkCongProb >= self.max_mice_cong_prob:
+                congested_links.append((u, v))
 
-        srctype = self.link_probs_graph.get_router_type(src)
-        dsttype = self.link_probs_graph.get_router_type(dst)
-        link_direction = self.link_probs_graph.get_edge_data(src, dst)['direction']
+        # Modify link probabilities in the dags for each link
+        for (u, v) in congested_links:
+            self.modify_link_probabilities(u, v)
 
-        if link_direction == 'uplink':
-            if srctype == 'edge' and dsttype == 'aggregation':
-                # Need to reduce probability of that edge to be chosen
+        # Choose random dangs for each prefix
+        new_dags = {}
+        for prefix in self.prefixes:
+            link_probabilities = self.get_link_probabilities(prefix)
+            if self.link_probabilities_changed(link_probabilities):
+                # Generate new random dag
+                new_random_dag = self.choose_random_dag(prefix, link_probabilities)
+                new_dags[prefix] = new_random_dag
+                self.dags[prefix]['dag'] = new_random_dag
 
-                # Iterate prefixes to modify
-                for px in prefixes_to_modify:
-                    # Number of possible outgoing edges
-                    n_succ = len(self.link_probs_graph.successors(src))
+                # Reset changed = False
+                self.set_probabilities_unchanged(prefix)
 
-                    to_reduce = 1.0 / n_succ
-                    self.link_probs_graph[src][dst][px]['probability'] -= to_reduce
-                    self.link_probs_graph[src][dst][px]['changed'] = True
-
-            elif srctype == 'aggregation' and dsttype == 'core':
-                # Need to reduce the probability of that link being chosen and the predecessor edges too,
-                # so that not so much traffic is sent through it, and other cores are chosen from that pod
-
-                n_succ = len(self.link_probs_graph.successors(src))
-                to_reduce_that_link = 1.0 / n_succ
-
-                # Get source pod
-                src_pod = self.link_probs_graph.get_router_pod(src)
-
-                # Compute links to reduce probability
-                links_to_reduce = [(er, src) for er in self.link_probs_graph.edge_routers() if
-                                   self.link_probs_graph.get_router_pod(er) == src_pod]
-
-                # Iterate prefixes to modify
-                for px in prefixes_to_modify:
-                    # Reduce that link itself first
-                    self.link_probs_graph[src][dst][px]['probability'] -= to_reduce_that_link
-                    self.link_probs_graph[src][dst][px]['changed'] = True
-
-                    # Then others in source pod
-                    for (u, v) in links_to_reduce:
-                        self.link_probs_graph[u][v][px]['probability'] -= to_reduce_that_link
-                        self.link_probs_graph[u][v][px]['changed'] = True
-
-            else:
-                log.error("Wrong data")
-                import ipdb;
-                ipdb.set_trace()
-
-        else:
-            if srctype == 'aggregation' and dsttype == 'edge':
-                # Need to reduce probability of other edge routers to same aggregation router,
-                # and from aggregation routers in other pods to the same core routers connected to src
-
-                # Get pod of edge router
-                dst_pod = self.link_probs_graph.get_router_pod(dst)
-
-                # Then get all other links from edge routers in same pod to that source aggregation router
-                links_in_pod = [(er, src) for er in self.link_probs_graph.edge_routers()
-                                if self.link_probs_graph.get_router_pod(er) == dst_pod and er != dst]
-
-                # Get connected core routers
-                connected_cores = [d for d in self.link_probs_graph.predecessors(src) if self.link_probs_graph.is_core(d)]
-
-                # Get all other links from aggregation routers outside the pod connected the cores above
-                links_outside_pod = [(aggr, cr) for cr in connected_cores for aggr in self.link_probs_graph.predecessors(cr)
-                                     if self.link_probs_graph.get_router_pod(aggr) != dst_pod]
-
-                # Iterate prefixes to modify
-                for px in prefixes_to_modify:
-
-                    to_reduce = 1.0 / len(prefixes_to_modify)
-                    for (u, v) in links_in_pod:
-                        self.link_probs_graph[u][v][px]['probability'] -= to_reduce
-                        self.link_probs_graph[u][v][px]['changed'] = True
-
-                    to_reduce = 1.0 / len(prefixes_to_modify)
-                    for (u, v) in links_outside_pod:
-                        self.link_probs_graph[u][v][px]['probability'] -= to_reduce
-                        self.link_probs_graph[u][v][px]['changed'] = True
-
-            elif srctype == 'core' and dsttype == 'aggregation':
-                # Need to reduce the probability of links from other pods to that core route
-                # Get pod of edge router
-                dst_pod = self.link_probs_graph.get_router_pod(dst)
-
-                # Get all other links from aggregation routers outside the pod connected the cores above
-                links_from_other_pods = [(aggr, src) for aggr in self.link_probs_graph.predecessors(src)
-                                         if self.link_probs_graph.get_router_pod(aggr) != dst_pod]
-
-                # Iterate prefixes to modify
-                for px in prefixes_to_modify:
-                    to_reduce = 1.0 / len(prefixes_to_modify)
-                    for (u, v) in links_from_other_pods:
-                        self.link_probs_graph[u][v][px]['probability'] -= to_reduce
-                        self.link_probs_graph[u][v][px]['changed'] = True
-
-            else:
-                log.error("Wrong data")
-                import ipdb;
-                ipdb.set_trace()
+        # Apply new dags all at same time
+        self.sbmanager.add_dag_requirements_from(new_dags)
 
 if __name__ == "__main__":
     import argparse
@@ -719,6 +630,6 @@ if __name__ == "__main__":
 
     # For the moment, the DCDags will be generated here, although in practice,
     # they need to be transmitted from the LBController too
-    me = MiceEstimator(k=args.k, dc_graph=dc_graph, dst_dags=None)
+    me = MiceEstimatorThread(k=args.k, dc_graph=dc_graph, dst_dags=None)
     cp = me.totalCongestionProbability(threshold=args.threshold)
     import ipdb; ipdb.set_trace()
