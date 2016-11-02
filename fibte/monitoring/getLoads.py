@@ -19,7 +19,8 @@ from fibte.logger import log
 
 import os
 
-results_folder = os.path.join(os.path.dirname(__file__), 'results/')
+
+throughput_folder = os.path.join(os.path.dirname(__file__), 'results/throughput/')
 
 class GetLoads(object):
     def __init__(self, k=4, time_interval=1, lb_algorithm=None):
@@ -163,14 +164,8 @@ class GetLoads(object):
         i = 1
         interval = self.time_interval
 
-        # File for the in/out traffic
-        #in_out_file = open("{1}in_out_file_{0}_{2}.txt".format(self.k, results_folder,  self.lb_algorithm), "w")
-
-        # File for bisection bandwidth
-        #bb_file = open("{1}bisection_bw_file_{0}_{2}.txt".format(self.k, results_folder, self.lb_algorithm), "w")
-
         # File for aggregation traffic
-        agg_file = open("{1}bb_{0}_{2}.txt".format(self.k, results_folder, self.lb_algorithm), "w")
+        agg_file = open("{1}bb_{0}_{2}.txt".format(self.k, throughput_folder, self.lb_algorithm), "w")
 
         while True:
             try:
@@ -182,42 +177,15 @@ class GetLoads(object):
 
                 # Fill loads of the router edges into link_loads
                 self.topology.routerUsageToLinksLoad(self.readLoads(), self.link_loads)
-                # print {x:y for x,y in self.link_loads.items() if any("sw" in e for e in x)}
-
-                #log.debug("It took {0}ms to READ the link loads".format(round(time.time() - reading_time, 5)*1e3))
 
                 # Print
                 try:
                     # Save all link loads
-                    with open("{1}getLoads_linkLoad_{0}".format(self.k, results_folder), "w") as f:
+                    with open("{1}getLoads_linkLoad_{0}".format(self.k, throughput_folder), "w") as f:
                         pickle.dump(self.link_loads, f)
-
-                    # Get In&Out traffic
-                    #in_traffic, out_traffic = self.getInOutTraffic()
-
-                    # Get bisection BW
-                    #bisecBW = self.getBisectionTraffic()
-
-                    #max_bisecBW = ((self.k**3)/4.0)#*LINK_BANDWIDTH
-                    #bisecBw_ratio = round((bisecBW / max_bisecBW)*100.0, 3)
 
                     # Get aggreagation traffic
                     aggTraffic = self.getAggregationTraffic()
-
-                    #total_out = 0
-                    #total_out += aggTraffic['r_0_a0']['r_0_e0']['in']
-                    #total_out += aggTraffic['r_0_a1']['r_0_e0']['in']
-
-                    #log.info("Total traffic starting at r_0_e0: {0}".format(total_out))
-
-                    #import ipdb; ipdb.set_trace()
-                    # Save in_out traffic in a file
-                    #in_out_file.write("{0},{1}\n".format(in_traffic, out_traffic))
-                    #in_out_file.flush()
-
-                    # Save bisection bw in a file
-                    #bb_file.write("{0},{1}\n".format(bisecBW, bisecBw_ratio))
-                    #bb_file.flush()
 
                     # Save aggregation traffic in a file
                     agg_file.write("{0}\n".format(json.dumps(aggTraffic)))
@@ -226,8 +194,6 @@ class GetLoads(object):
                 except Exception as e:
                     log.error("Error in run(): {0}".format(e))
                     break
-
-                #log.debug("It took {0}ms to READ and WRITE the metrics".format(round(time.time() - reading_time, 5)*1e3))
 
             except KeyboardInterrupt:
                 log.info("KeyboardInterrupt catched! Shutting down...")
