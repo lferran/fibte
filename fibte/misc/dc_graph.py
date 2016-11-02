@@ -98,13 +98,13 @@ class DCDiGraph(DiGraph):
             raise ValueError("Router {0} is not an edge router, so we can't set him a destination prefix".format(gateway))
 
     def is_edge(self, routerid):
-        return self.node[routerid]['type'] == 'edge'
+        return not self.is_destination_prefix(routerid) and self.node[routerid]['type'] == 'edge'
 
     def is_aggregation(self, routerid):
-        return self.node[routerid]['type'] == 'aggregation'
+        return not self.is_destination_prefix(routerid) and self.node[routerid]['type'] == 'aggregation'
 
     def is_core(self, routerid):
-        return self.node[routerid]['type'] == 'core'
+        return not self.is_destination_prefix(routerid) and self.node[routerid]['type'] == 'core'
 
     def is_destination_prefix(self, node):
         return node in self.prefixes.keys()
@@ -269,6 +269,7 @@ class DCDiGraph(DiGraph):
         """
         if not self.is_core(routerid):
             if self.is_edge(routerid):
+                # Returns all connected aggregation routers
                 return [ag for ag in self.aggregation_routers_iter() if self.is_valid_uplink(routerid, ag)]
 
             # Is aggregation router
@@ -310,19 +311,17 @@ class DCDiGraph(DiGraph):
             # Edge->aggregation uplink
             if self.is_edge(lower_rid):
                 # Check if they are from the same pod
-                if self.get_router_pod(lower_rid) == self.get_router_pod(upper_rid):
-                    return True
+                return self.get_router_pod(lower_rid) == self.get_router_pod(upper_rid)
 
             # Aggregation->core uplink
             else:
                 # Get index of aggregation and core router
                 ai = self.get_router_index(lower_rid)
-                ri = self.get_router_index(upper_rid)
+                ci = self.get_router_index(upper_rid)
                 # Check index validity
-                if self._valid_aggregation_core_indexes(ai, ri):
-                    return True
-
-        return False
+                return self._valid_aggregation_core_indexes(ai, ci)
+        else:
+            return False
 
     def is_valid_downlink(self, upper_rid, lower_rid):
         """
@@ -338,21 +337,21 @@ class DCDiGraph(DiGraph):
                 # If they are from the same pod
                 lpod = self.get_router_pod(lower_rid)
                 rpod = self.get_router_pod(upper_rid)
+
                 # Check if they are from the same pod
-                if lpod == rpod:
-                    return True
+                return lpod == rpod
 
             # Core->aggregation downlink
             else:
                 # Get index of aggregation and core router
-                ri = self.get_router_index(upper_rid)
+                ci = self.get_router_index(upper_rid)
                 ai = self.get_router_index(lower_rid)
 
                 # Check that uplink is valid wrt the DC structure
-                if self._valid_aggregation_core_indexes(ai, ri):
-                    return True
+                return self._valid_aggregation_core_indexes(ai, ci)
 
-        return False
+        else:
+            return False
 
     def add_uplink(self, lower_rid, upper_rid):
         """
@@ -419,6 +418,32 @@ class DCDiGraph(DiGraph):
     def get_link_loads_dict(self, attribute='load'):
         return {(x, y): data.get(attribute) for (x, y, data) in self.edges_iter(data=True)}
 
+    def get_all_edges_for_dag_to(self, gateway):
+        all_edges = []
+
+        gw_pod = self.get_router_pod(gateway)
+
+        # e->a
+        for er in self.edge_routers_iter():
+            if er != gateway:
+                action = [all_edges.append((er, ar)) for ar in self.get_upper_tier(er)]
+
+        # a->c
+        for ar in self.aggregation_routers_iter():
+            if self.get_router_pod(ar) != gw_pod:
+                action = [all_edges.append((ar, cr)) for cr in self.get_upper_tier(ar)]
+            else:
+                all_edges.append((ar, gateway))
+
+        # cr -> ar
+        for cr in self.core_routers_iter():
+            action = [all_edges.append((cr, ar)) for ar in self.get_lower_tier(cr) if self.get_router_pod(ar) == gw_pod]
+
+        if len(all_edges) != 32:
+            import ipdb; ipdb.set_trace()
+        else:
+            return all_edges
+
 class DCGraph(DCDiGraph):
     """
     Models the DC graph as a networkx DiGraph subclass object
@@ -480,7 +505,7 @@ class DCGraph(DCDiGraph):
             gwid = self.topo.getRouterId(gw)
 
             # Convert it to secondary prefix if necessary
-            if self.prefix_type == 'secondary':
+            if self.prefix_type == 'secondary' and not ipalias.is_secondary_ip_prefix(prefix):
                 prefix = ipalias.get_secondary_ip_prefix(prefix)
 
             self.add_destination_prefix(prefix=prefix, gateway=gwid)
@@ -499,19 +524,8 @@ class DCGraph(DCDiGraph):
             # Create empty-links dag from self DCGraph
             dc_dag = DCDag(sink_id=gateway, dst_prefix=prefix, k=self.k, dc_graph=self, prefix_type=self.prefix_type)
 
-            # Add uplinks
-            add_uplinks1 = [dc_dag.add_uplink(er, ar) for er in self.edge_routers_iter() for ar in self.get_upper_tier(er) if er != gateway]
-            add_uplinks2 = [dc_dag.add_uplink(ar, cr) for ar in self.aggregation_routers_iter() for cr in self.get_upper_tier(ar) if self.get_router_pod(ar) != prefix_pod]
-
-            # Add downlinks
-            add_downlinks1 = [dc_dag.add_downlink(cr, ar) for cr in self.core_routers_iter() for ar in self.get_lower_tier(cr) if self.get_router_pod(ar) == prefix_pod and dc_dag.is_valid_downlink(cr, ar)]
-            add_downlinks2 = [dc_dag.add_downlink(ar, er) for ar in self.aggregation_routers_iter() for er in self.get_lower_tier(ar) if self.get_router_pod(ar) == prefix_pod and dc_dag.is_valid_downlink(ar, er)]
-
-            # Add links to gateway
-            dc_dag.add_destination_prefix(prefix, gateway)
-
-            # Set initial edges
-            dc_dag._set_initial_edges()
+            # Fill up all edges!
+            dc_dag.fill_all_edges()
 
             # Return the DCDag object
             return dc_dag
@@ -530,7 +544,7 @@ class DCGraph(DCDiGraph):
             if upto + w >= r:
                 return c
             upto += w
-        assert False, "Shouldn't get here"
+        raise ValueError("Shouldn't get here")
 
     def get_random_dag_from_probability_dcgraph(self, prefix, link_probabilities):
         """Computes a random DAG towards prefix based on the individual link
@@ -542,7 +556,7 @@ class DCGraph(DCDiGraph):
         prefix_pod = self.get_destination_prefix_pod(prefix)
         gateway = self.get_destination_prefix_gateway(prefix)
         if self.is_destination_prefix(prefix):
-            # Create empty-links dag from self DCGraph
+            # Get full DAG towards destination prefix
             dc_dag = DCDag(sink_id=gateway, dst_prefix=prefix, k=self.k, dc_graph=self, prefix_type=self.prefix_type)
 
             # Add uplinks: first the edge -> aggr links
@@ -571,7 +585,11 @@ class DCGraph(DCDiGraph):
                         for link in possible_edge_to_aggr_links:
                             link_prob = link_probabilities[link]['final_probability']
                             #log.debug("{0} with probability {1} of being chosen in DAG".format(self.print_stuff(link), link_prob))
-                            use_link = self.weighted_choice([(True, link_prob), (False, 1-link_prob)])
+                            try:
+                                use_link = self.weighted_choice([(True, link_prob), (False, 1-link_prob)])
+                            except:
+                                raise ValueError
+
                             if use_link:
                                 dc_dag.add_uplink(link[0], link[1])
                                 at_least_one_link = True
@@ -584,16 +602,12 @@ class DCGraph(DCDiGraph):
                             dc_dag.add_uplink(link[0], link[1])
                         continue
 
-                    #log.debug("It took {0}s to find (edge -> aggr) links".format(time.time()- start_time))
-                    #log.debug("Used links: {0}".format(self.print_stuff(links_used)))
-
             # Compute aggregation routers in destiantoin pod
             for ar in dc_dag.aggregation_routers_iter():
                 #log.debug("Aggregation router: {0}".format(self.print_stuff(ar)))
                 ar_pod = dc_dag.get_router_pod(ar)
                 if ar_pod != prefix_pod:
                     possible_cores = dc_dag.get_upper_tier(ar)
-                    #log.debug("Upper tier core routers: {0}".format(self.print_stuff(possible_cores)))
 
                     possible_agg_core_links = [(ar, cr) for cr in possible_cores]
                     if all([link_probabilities[link]['final_probability'] <= 0 for link in possible_agg_core_links]):
@@ -617,13 +631,9 @@ class DCGraph(DCDiGraph):
                         n_iterations += 1
 
                     if not at_least_one_link:
-                        #log.error("Probabilities might be too low for all possible links -> Activate ECMP on all links!")
                         for link in possible_agg_core_links:
                             dc_dag.add_uplink(link[0], link[1])
                         continue
-
-                    #log.debug("It took {0}s to find (aggr -> core) links".format(time.time() - start_time))
-                    #log.debug("Used links: {0}".format(self.print_stuff(links_used)))
 
             # Add downlinks
             # core -> aggr
@@ -662,6 +672,8 @@ class DCDag(DCDiGraph):
             self._build_from_dc_graph(kwargs['dc_graph'])
 
         self.plot_positions = self.get_plot_positions()
+
+        self.all_edges = self.get_all_edges_for_dag_to(sink_id)
 
     def _set_initial_edges(self):
         self.all_edges = self.edges()[:]
@@ -718,8 +730,15 @@ class DCDag(DCDiGraph):
             sink_id = self.get_sink_id()
             return all([nx.has_path(self, node, sink_id) for node in self.nodes_iter() if node != sink_id])
         else:
-            print 'Nodes are missing: {0} nodes'.format(len(self.nodes()))
+            print 'Wrong number of nodes: {0} nodes'.format(len(self.nodes()))
             return False
+
+        prefix_in_edges_check = [(u,v) for u,v in self.edges_iter() if '/' in u or '/' in v]
+        if prefix_in_edges_check:
+            print 'There are edges with prefixes!!!!'.format(prefix_in_edges_check)
+            return False
+        else:
+            return True
 
     def is_sink(self, routerid):
         return routerid == self.sink['id']
@@ -1025,6 +1044,10 @@ class DCDag(DCDiGraph):
                 # Return the chosen edges
                 yield chosen_edges
 
+    def set_ecmp_uplinks(self):
+        for pod in range(0, self.k):
+            self.set_ecmp_uplinks_from_pod(src_pod=pod)
+
     def set_ecmp_uplinks_from_pod(self, src_pod):
         """
         Sets the original subdag from source pod to destination
@@ -1270,12 +1293,12 @@ class DCDag(DCDiGraph):
         dst = self.dst_prefix
         gw = self.get_sink_id()
         gwPos = positions[gw]
-        positions[dst] = (gwPos[0], gwPos[1] - 1)
-
+        positions[dst] = (gwPos[0], gwPos[1] - 0.5)
         return positions
 
-    def plot(self, plotname=None, link_loads=None):
+    def plot(self, plotname=None, link_loads=None, names=False):
         """Plots himself!"""
+
         if link_loads:
             # Load the link loads
             red_labels = {x: y for x, y in link_loads.items() if y > 0.75 }
@@ -1283,11 +1306,13 @@ class DCDag(DCDiGraph):
             green_labels = {x: y for x, y in link_loads.items() if y >= 0.25 and y < 0.5 }
             blue_labels = {x: y for x, y in link_loads.items() if y < 0.25}
 
-        routers = [n for n in self.nodes_iter()]
+        corerouters = [n for n in self.nodes_iter() if self.is_core(n)]
+        othersrouters = [n for n in self.nodes_iter() if not self.is_core(n)]
 
         # Draw nodes and edges
-        nx.draw_networkx_nodes(self, ax=None, nodelist=[self.dst_prefix], pos=self.plot_positions, node_shape='o', node_color='r')
-        nx.draw_networkx_nodes(self, ax=None, nodelist=routers, pos=self.plot_positions, node_shape='s', node_color='b')
+        nx.draw_networkx_nodes(self, ax=None, nodelist=[self.dst_prefix], pos=self.plot_positions, node_shape='o', node_color='indianred', node_size=600)
+        nx.draw_networkx_nodes(self, ax=None, nodelist=corerouters, pos=self.plot_positions, node_shape='s', node_color='lightblue', node_size=800)
+        nx.draw_networkx_nodes(self, ax=None, nodelist=othersrouters, pos=self.plot_positions, node_shape='s', node_color='lightblue', node_size=1400)
 
         # Draw edges of current dag
         nx.draw_networkx_edges(self, ax=None, width=1.5, pos=self.plot_positions)
@@ -1297,6 +1322,33 @@ class DCDag(DCDiGraph):
             nx.draw_networkx_edge_labels(self, self.plot_positions, ax=None, edge_labels=green_labels,label_pos=0.15,font_size=10,font_color="green",font_weight='bold')
             nx.draw_networkx_edge_labels(self, self.plot_positions, ax=None, edge_labels=blue_labels,label_pos=0.15,font_size=10,font_color="blue",font_weight='bold')
 
+        if names:
+            # Generate labels
+            edge_labels = {rid: self.get_router_name(rid).replace('_', '') for rid in self.edge_routers_iter()}
+            edge_pos = {rid: (pos[0], pos[1]) if self.get_router_index(rid) == 0 else (pos[0], pos[1]) for rid, pos in self.plot_positions.iteritems() if self.is_edge(rid)}
+
+            aggr_labels = {rid: self.get_router_name(rid).replace('_', '') for rid in self.aggregation_routers_iter()}
+            aggr_pos = {rid: (pos[0], pos[1]) if self.get_router_index(rid) == 0 else (pos[0], pos[1]) for rid, pos in self.plot_positions.iteritems() if self.is_aggregation(rid)}
+
+            core_labels = {rid: self.get_router_name(rid).strip('r_') for rid in self.core_routers_iter()}
+            core_pos = {rid: (pos[0], pos[1]) for rid, pos in self.plot_positions.iteritems() if self.is_core(rid)}
+
+            sink_label = {node: node for node in self.plot_positions.iterkeys() if '/' in node}
+            sink_pos = {rid: (pos[0], pos[1] - 0.15) for rid, pos in self.plot_positions.iteritems() if self.is_destination_prefix(rid)}
+
+            all_labels = {}
+            all_labels.update(edge_labels)
+            all_labels.update(aggr_labels)
+            all_labels.update(core_labels)
+            all_labels.update(sink_label)
+
+            new_pos = self.plot_positions.copy()
+            new_pos.update(edge_pos)
+            new_pos.update(aggr_pos)
+            new_pos.update(core_pos)
+            new_pos.update(sink_pos)
+
+            nx.draw_networkx_labels(self, new_pos, all_labels, font_size=16)
 
         # Compute edges that are not currently used
         all_edges = set(self.all_edges)
@@ -1317,6 +1369,8 @@ class DCDag(DCDiGraph):
         # Draw edges of current dag
         nx.draw_networkx_edges(g, ax=None, width=1.0, arrows=False, edge_color='grey', style='dashdot', pos=self.plot_positions)
 
+        plt.axis('off')
+        plt.tight_layout()
         if plotname:
             plt.savefig(plotname)
         else:
@@ -1327,6 +1381,15 @@ class DCDag(DCDiGraph):
     def get_link_loads_dict(self, attribute='load'):
         link_loads = super(DCDag, self).get_link_loads_dict(attribute)
         return {x: load for (x, load) in link_loads.iteritems() if self.is_valid_uplink(x[0], x[1]) or self.is_valid_downlink(x[0], x[1])}
+
+    def fill_all_edges(self):
+        for u,v in self.all_edges:
+            if self.is_valid_uplink(u, v):
+                self.add_uplink(u, v)
+            elif self.is_valid_downlink(u, v):
+                self.add_downlink(u, v)
+            else:
+                raise ValueError
 
 # Auxiliary funcitions
 
@@ -1355,18 +1418,11 @@ if __name__ == "__main__":
     prefixes = dcGraph.destination_prefixes()
     prefix = prefixes[random.randint(3, 7)]
     dcDag = dcGraph.get_default_ospf_dag(prefix=prefix)
-    #edges = dcDag.all_random_uplinks_iter(src_pod=0, exclude_edge_indexes=[1])
-    #edges = list(edges)
-
-    for (u, v, data) in dcDag.edges_iter(data=True):
-        data['load'] = round(random.uniform(0, 1), 2)
-
-    link_loads = dcDag.get_link_loads_dict(attribute='load')
     dcDag.modify_random_uplinks(src_pod=0)
-    dcDag.plot(link_loads=link_loads)
+    dcDag.modify_random_uplinks(src_pod=2)
+    dcDag.plot(names=True)
     #dcDag.plot()
     #edges = dcDag._get_random_uplink_choice_2(exclude_edge_indexes=[])
-    import ipdb; ipdb.set_trace()
 
 
 
