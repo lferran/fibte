@@ -17,11 +17,13 @@ from fibte import LINK_BANDWIDTH
 #in theory it should be 54
 minSizeUDP = 42
 minSizeTCP = 66
-maxUDPSize = 65000
+maxUDPSize = 10000
 
 # Time that we sleep between notification
 # is sent and the flow starts
-SLEEP_BEFORE_FLOW_MS = 0
+SLEEP_BEFORE_FLOW_S = 0
+
+delay_folder = os.path.join(os.path.dirname(__file__), '../monitoring/results/delay/')
 
 def setSizeToInt(size):
     """" Converts the sizes string notation to the corresponding integer
@@ -94,7 +96,7 @@ def sendFlowTCP(dst="10.0.32.3", sport=5000, dport=5001, size=None, rate=None, d
         if reconnections == 0:
             print "We couldn't connect to the server {1}:{0}! Returning...".format(dport, dst)
             s.close()
-            return
+            return False
 
         # If rate and duration are specified
         if not size and rate and duration:
@@ -164,13 +166,16 @@ def sendFlowTCP(dst="10.0.32.3", sport=5000, dport=5001, size=None, rate=None, d
         else:
             print "Wrong arguments!"
             s.close()
-            return
+            return False
 
-    except socket.error:
-        pass
+    except socket.error as e:
+        print "socket.error: {0}".format(e)
+        s.close()
+        return False
 
     finally:
         s.close()
+        return True
 
 def recvFlowTCP(dport=5001):
     subprocess.Popen(["nc", "-l", "-p", str(dport)], stdout=open(os.devnull, "w"))
@@ -228,8 +233,12 @@ def sendFlowUDP(dst="10.0.32.2", sport=5000, size='10M', dport=5001, duration=10
         startTime = time.time()
         while (time.time() - startTime < totalTime):
             sendRate_batch(s, dst, dport, rate, length=5000, packets_round=5)
-    finally:
+    except:
         s.close()
+        return False
+    else:
+        s.close()
+        return True
 
 def sendRound(socket, dst, rate, dport, offset):
     while rate > 0 and dport < 65535:
@@ -281,22 +290,20 @@ def _sendFlow(notify=False, **flow):
         try:
             # Notify controller that an elephant flow started
             client.send(json.dumps({"type": "startingFlow", "flow": flow}), "")
-
         except Exception as e:
             log.error("Controller cound not be informed about startingFlow event")
 
     # Sleep a bit before starting the flow
-    time.sleep(max(0, 1 - (time.time() - now)))
+    time.sleep(max(0, SLEEP_BEFORE_FLOW_S - (time.time() - now)))
 
     # If flow is UDP
     if flow['proto'] == 'UDP':
         # Start UDP flow
-        sendFlowUDP(**flow)
+        successful = sendFlowUDP(**flow)
 
-    # If flow is TCP
-    elif flow['proto'] == 'TCP':
+    else:# flow['proto'] == 'TCP':
         # Start TCP flow
-        sendFlowTCP(**flow)
+        successful = sendFlowTCP(**flow)
 
     # Send a stop notification to the controller if needed
     if notify:
@@ -308,20 +315,26 @@ def _sendFlow(notify=False, **flow):
             # Close socket
             client.close()
 
+    return successful
+
 def writeStartingTime(flow):
-    fibte_path = '/root/fibte/fibte/'
-    evaluation_path = 'evaluation/miceDurations/'
-    file_name = fibte_path + evaluation_path + "{0}_{1}_{2}_{3}".format(flow["src"],flow["sport"],
+    file_name = str(delay_folder) + "{0}_{1}_{2}_{3}".format(flow["src"],flow["sport"],
                                                                         flow["dst"],flow["dport"])
-    # save flow starting time
+    if flow['proto'] == 'UDP':
+        duration = flow.get('duration')
+    else:
+        duration = flow.get('size')/flow.get('rate')
+
+    # Save flow starting time
     with open(file_name, "w") as f:
-        f.write(str(time.time()) + "\n")
+        f.write("expected {0}".format(duration+1) + "\n")
+        f.write(str(int(round(time.time() * 1000))) + "\n")
     return file_name
 
 def writeEndingTime(file_name):
     # Write finishing time
     with open(file_name, "a") as f:
-        f.write(str(time.time()) + "\n")
+        f.write(str(int(round(time.time() * 1000))) + "\n")
 
 def sendMiceFlow(client=None, server=None, **flow):
 
@@ -331,9 +344,9 @@ def sendMiceFlow(client=None, server=None, **flow):
         file_name = writeStartingTime(flow)
 
     # Call internal sendFlow
-    _sendFlow(notify=False, **flow)
+    successful = _sendFlow(notify=False, **flow)
 
-    if file_name:
+    if file_name and successful:
         writeEndingTime(file_name)
 
     if client and server:
@@ -356,9 +369,9 @@ def sendElephantFlow(**flow):
         writeStartingTime(flow)
 
     # Call internal function
-    _sendFlow(notify=True, **flow)
+    successful = _sendFlow(notify=True, **flow)
 
-    if filename:
+    if filename and successful:
         writeEndingTime(filename)
 
     # Exit the function gracefully
