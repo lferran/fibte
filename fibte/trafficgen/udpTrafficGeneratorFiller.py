@@ -189,8 +189,8 @@ class udpTrafficGeneratorFiller(udpTrafficGeneratorBase):
                     # Get a new elephant flow
                     # size = self.get_flow_size(flow_type='e', distribution='uniform')
                     size = elep_size
-                    #duration = self.get_flow_duration(flow_type='e')
-                    duration = 20
+                    duration = self.get_flow_duration(flow_type='e')
+                    #duration = 20
                     destination = self.get_flow_destination(sender)
                     fid = next_id
                     f = {'id': fid,
@@ -218,12 +218,12 @@ class udpTrafficGeneratorFiller(udpTrafficGeneratorBase):
                         # size = self.get_flow_size(flow_type='e', distribution='uniform')
                         original_sender = tf['srcHost']
                         size = elep_size
-                        #duration = self.get_flow_duration(flow_type='e')
-                        duration = 20
+                        duration = self.get_flow_duration(flow_type='e')
+                        #duration = 20
                         destination = self.get_flow_destination(original_sender)
                         fid = next_id
                         old_endtime = int(tf.get('startTime') + tf.get('duration'))
-                        new_starttime = random.uniform(old_endtime + 1, old_endtime + 5)
+                        new_starttime = random.uniform(old_endtime + 0.5, old_endtime + 2)
                         f = {'id': fid,
                              'type': 'e',
                              'srcHost': original_sender,

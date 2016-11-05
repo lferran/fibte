@@ -188,7 +188,7 @@ class udpTrafficGeneratorBase(Base):
         # flow is elephant
         if flow_type == 'e':
             # Draw flow duration
-            return random.randint(min_len_elephant, max_len_elephant)
+            return random.uniform(min_len_elephant, max_len_elephant)
 
         # flow is mice
         elif flow_type == 'm':
