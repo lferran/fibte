@@ -177,7 +177,7 @@ if __name__ == "__main__":
                         default=5010)
 
     parser.add_argument('--ip',
-                        help='Ip of the remote host',
+                        help='Ip of the remote host to which we send the link loads data',
                         type=str,
                         default="192.168.33.1")
 

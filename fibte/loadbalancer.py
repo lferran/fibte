@@ -18,7 +18,7 @@ import sys
 import itertools as it
 import collections
 
-from fibbingnode.algorithms.southbound_interface import SouthboundManager, DstSpecificSouthboundManager
+from fibbingnode.algorithms.southbound_interface import SouthboundManager#, DstSpecificSouthboundManager
 from fibbingnode import CFG as CFG_fib
 
 from fibte.misc.unixSockets import UnixServerTCP, UnixServer, UnixClient, UnixClientTCP
@@ -52,14 +52,14 @@ class MyGraphProvider(SouthboundManager):
         super(MyGraphProvider, self).received_initial_graph()
         HAS_INITIAL_GRAPH.set()
 
-class MyGraphProvider2(DstSpecificSouthboundManager):
-    """Uses the optimized version of the Southbound Manager"""
-    def __init__(self):
-        super(MyGraphProvider2, self).__init__()
-
-    def received_initial_graph(self):
-        super(MyGraphProvider2, self).received_initial_graph()
-        HAS_INITIAL_GRAPH.set()
+# class MyGraphProvider2(DstSpecificSouthboundManager):
+#     """Uses the optimized version of the Southbound Manager"""
+#     def __init__(self):
+#         super(MyGraphProvider2, self).__init__()
+#
+#     def received_initial_graph(self):
+#         super(MyGraphProvider2, self).received_initial_graph()
+#         HAS_INITIAL_GRAPH.set()
 
 class LBController(object):
     def __init__(self, doBalance = True, k=4, algorithm=None, load_variables=True):
@@ -1208,7 +1208,7 @@ class ElephantDAGShifter(LBController):
         # Call init of subclass
         super(ElephantDAGShifter, self).__init__(algorithm='elephant-dag-shifter', *args, **kwargs)
 
-        test_traceroute = False
+        test_traceroute = True
         if test_traceroute:
             dst_px = self.topology.hostsToNetworksMapping['hostToNetwork']['h_3_3'].values()[0]
             dst_ip = self.topology.getHostIp('h_3_3')

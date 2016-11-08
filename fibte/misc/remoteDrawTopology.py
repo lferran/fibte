@@ -174,12 +174,12 @@ if __name__ == "__main__":
                         default=4)
 
     parser.add_argument('-p', '--port',
-                        help='Port at which the remoteDrow is listening',
+                        help='Port at which the remoteDraw is listening',
                         type=int,
                         default=5010)
 
     parser.add_argument('--ip',
-                        help='Ip of the host',
+                        help='Ip where the link loads data is sent',
                         type=str,
                         default="192.168.33.1")
 

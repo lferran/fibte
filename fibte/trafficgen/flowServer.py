@@ -15,7 +15,6 @@ import subprocess
 from threading import Thread, Lock
 
 import flowGenerator
-from fibte.misc.kthread import KThread
 from fibte.monitoring.traceroute import traceroute, traceroute_fast
 from fibte.misc.unixSockets import UnixServerTCP, UnixClientTCP, UnixServer, UnixClient
 from fibte.trafficgen import isElephant, isMice
