@@ -1,22 +1,12 @@
+import matplotlib.pyplot as plt
 import json
 import os
-from fibte.misc.topology_graph import TopologyGraph
 import numpy as np
-from fibte import CFG, LINK_BANDWIDTH
+import operator as o
 
-import matplotlib.pyplot as plt
-
-tmp_files = CFG.get("DEFAULT", "tmp_files")
-db_topo = CFG.get("DEFAULT", "db_topo")
-
-algo_styles = {
-               'ecmp': {'color': 'red', 'linestyle':'-'},
-               'mice-dag-shifter': {'color':'purple', 'linestyle':'-'},
-               'elephant-dag-shifter-best': {'color':'blue', 'linestyle':'-'},
-               'elephant-dag-shifter-sample': {'color': 'orange', 'linestyle': '-'},
-               'full-dag-shifter-best': {'color': 'black', 'linestyle': '-'},
-               'full-dag-shifter-sample': {'color': 'pink', 'linestyle': '-'},
-               }
+from fibte import tmp_files, db_topo, LINK_BANDWIDTH
+from fibte.monitoring import algo_styles
+from fibte.misc.topology_graph import TopologyGraph
 
 class AlgorithmsComparator(object):
     def __init__(self, k=4, file_list=[]):
@@ -26,14 +16,13 @@ class AlgorithmsComparator(object):
         # List of files for different algorithm measurements
         self.file_list = file_list
 
-        self.topology = TopologyGraph(getIfindexes=True, db=os.path.join(tmp_files, db_topo))
-
-        # Load them
-        self.algo_to_measurements = self.load_measurements()
-
         # Results folder
-        self.throughput_dir = os.path.join(os.path.dirname(__file__), 'results/throughput/')
-        self.delay_dir = os.path.join(os.path.dirname(__file__), 'results/delay/')
+        self.results_folder = os.path.join(os.path.dirname(__file__), 'results/')
+        self.throughput_dir = os.path.join(self.results_folder, 'throughput/')
+        self.delay_dir = os.path.join(self.results_folder, 'delay/')
+
+    def loadTopo(self):
+        self.topology = TopologyGraph(getIfindexes=True, db=os.path.join(tmp_files, db_topo))
 
     def extractAlgoNameFromFilename(self, filename):
         if 'ecmp' in filename:
@@ -65,7 +54,8 @@ class AlgorithmsComparator(object):
 
         for filename in self.file_list:
             # Extract algorithm name
-            filename = self.throughput_dir + filename
+            if not self.throughput_dir in filename:
+                filename = self.throughput_dir + filename
 
             algo = self.extractAlgoNameFromFilename(filename)
 
@@ -103,6 +93,21 @@ class AlgorithmsComparator(object):
             samples.append((m_time, measurement))
 
         return samples
+
+    def read_in_out_traffic_file(self, filename):
+        with open(filename, 'r') as f:
+            lines = f.readlines()
+
+        intf = []
+        outf = []
+        for line in lines:
+            inn, outt = line.strip('\n').split('\t')
+
+            # Insert it in samples
+            intf.append(float(inn))
+            outf.append(float(outt))
+
+        return intf, outf
 
     def _get_core_positions(self):
         n_cores = (self.k**2)/4
@@ -197,101 +202,15 @@ class AlgorithmsComparator(object):
                 new_algo_to_measurements[algo] = measurements
         return new_algo_to_measurements
 
-    def plot_core_input_traffic(self):
-        """
-        Plots the input traffic for all core routers along time.
-        :return:
-        """
-        # Number of cores
-        n_cores = (self.k**2)/4
-
-        # Create the figure first
-        fig = plt.figure(figsize=(80, 20))
-        #fig.subplots_adjust(bottom=0.025, left=0.025, top=0.975, right=0.975)
-        fig.suptitle("Core input traffic", fontsize=20)
-
-        # Start the subplot posistions
-        subplot_positions = []
-        for i in range(1, n_cores+1):
-            subplot_positions.append((4, 1, i))
-
-        coreRouters = self.topology.getCoreRouters()
-        core_positions = self._get_core_positions()
-        aggrRouters = self.topology.getAggregationRouters()
-
-        # Accumulate data to plot here
-        data_to_plot = {}
-
-        # Iterate all core routers and collect data
-        for cr in coreRouters:
-
-            # Create inner dict
-            data_to_plot[cr] = {}
-
-            # Collect all data to plot -- sum all input traffic from all aggr ---
-            for algo, measurements in self.algo_to_measurements.iteritems():
-                # Loads over time
-                loads_to_cr = []
-
-                # Set time relatively to starting time
-                initial_time = measurements[0][0]
-
-                # Extract data from measurements
-                for (t, link_loads) in measurements:
-                    # Load to cr in that time t
-                    total_load_to_cr = 0
-                    for ar in aggrRouters:
-                        if link_loads[ar].has_key(cr):
-                            total_load_to_cr += link_loads[ar][cr]['out']
-
-                    # Append load at that time
-                    loads_to_cr.append((t - initial_time, total_load_to_cr))
-
-                # Convert it to np array
-                loads_arr = np.asarray([l for t, l in loads_to_cr])/(self.k)
-
-                # Put it into dict
-                data_to_plot[cr][algo] = loads_arr
-
-        algos = data_to_plot[data_to_plot.keys()[0]].keys()
-
-        for nrows, ncols, plot_number in subplot_positions:
-            sub = fig.add_subplot(nrows, ncols, plot_number)
-            sub.grid(True)
-            sub.set_ylim([0,1])
-            #if plot_number != 4:
-            #    sub.set_xticks([])
-
-            # Get core router with that position
-            cr = [router for router, position in core_positions.iteritems() if position[2] == plot_number][0]
-            #print "Current core router: {0}".format(cr)
-
-            # Plot it
-            for algo in algos:
-                # Fetch load
-                loads_to_cr = data_to_plot[cr][algo]
-                sub.set_title("{0}".format(cr))
-                sub.plot(loads_to_cr, label=algo, c=algo_styles[algo]['color'], ls=algo_styles[algo]['linestyle'], linewidth=2.0)
-
-        # Locate the legend
-        plt.legend(loc='best')
-
-        # Set grid on
-        plt.grid(True)
-
-        #Show plot
-        plt.show()
+    def crop_array(self, array):
+        return [a for a in array if a < 0.1]
 
     def get_in_out_metric(self, measurement):
-        coreRouters = self.topology.getCoreRouters()
-        edgeRouters = self.topology.getEdgeRouters()
-        aggrRouters = self.topology.getAggregationRouters()
-
         tin = []
         tout = []
         for link_loads in measurement:
-            ttin = sum([data['in'] for connections in link_loads[1].values() for other, data in connections.iteritems() if other in edgeRouters])
-            ttout = sum([data['out'] for connections in link_loads[1].values() for other, data in connections.iteritems() if other in edgeRouters])
+            ttin = sum([data['in'] for connections in link_loads[1].values() for other, data in connections.iteritems() if 'e' in other])
+            ttout = sum([data['out'] for connections in link_loads[1].values() for other, data in connections.iteritems() if 'e' in other])
             tin.append(ttin)
             tout.append(ttout)
 
@@ -308,6 +227,9 @@ class AlgorithmsComparator(object):
 
         :return:
         """
+        # Load them
+        self.algo_to_measurements = self.load_measurements()
+
         data_to_plot = {}
         fig = plt.figure(figsize=(80, 20))
         fig.suptitle("Input Vs Output traffic at the edge for different LB strategies", fontsize=20)
@@ -351,6 +273,9 @@ class AlgorithmsComparator(object):
 
         :return:
         """
+        # Load them
+        self.algo_to_measurements = self.load_measurements()
+
         data_to_plot = {}
 
         fig = plt.figure(figsize=(80, 20))
@@ -448,6 +373,13 @@ class AlgorithmsComparator(object):
 
           node=r_c
         """
+        # Load topology
+        try:
+            self.loadTopo()
+        except:
+            print("Topology file not present!")
+            return
+
         # Store result here
         data_to_plot = {}
 
@@ -503,353 +435,147 @@ class AlgorithmsComparator(object):
 
         plt.show()
 
-    def get_average_core_load(self, measurements):
-        coreRouters = self.topology.getCoreRouters()
+    def _barplot(self, ax, dpoints, log=False):
+        '''
+        Create a barchart for data across different patterns with
+        multiple algos for each category.
 
-        upwards = []
-        downwards = []
+        @param ax: The plotting axes from matplotlib.
+        @param dpoints: The data set as an (n, 3) numpy array
+        '''
+        # Aggregate the algos and the patterns according to their mean values
+        algos = [(c, np.mean(dpoints[dpoints[:, 0] == c][:, 2].astype(float))) for c in np.unique(dpoints[:, 0])]
+        patterns = [(c, np.mean(dpoints[dpoints[:, 1] == c][:, 2].astype(float))) for c in np.unique(dpoints[:, 1])]
 
-        for t, link_loads in measurements:
-            # Fetch upward and downward load values for that time
-            core_upwards_loads = [link_loads[a][o]['out'] for a, other in link_loads.iteritems() for o in other if o in coreRouters]
-            core_downwards_loads = [link_loads[a][o]['in'] for a, other in link_loads.iteritems() for o in other if o in coreRouters]
+        # Sort the algos, patterns and data so that the bars in
+        # the plot will be ordered by category and condition
+        algos = [c[0] for c in sorted(algos, key=o.itemgetter(1))]
+        patterns = [c[0] for c in sorted(patterns, key=o.itemgetter(1))]
 
-            # Convert it to an array
-            cul = np.asarray(core_upwards_loads)
-            cdl = np.asarray(core_downwards_loads)
+        # Extract the completion time values
+        dpoints = np.array(sorted(dpoints, key=lambda x: patterns.index(x[1])))
 
-            # Append it to lists
-            upwards.append(cul)
-            downwards.append(cdl)
+        # Set the space between each set of bars
+        space = 0.25
+        n = len(algos)
+        width = (1 - space) / (len(algos))
 
-        # Convert it to average and std
-        upwards_avg = [u.mean() for u in upwards]
-        upwards_std = [u.std() for u in upwards]
-        downwards_avg = [u.mean() for u in downwards]
-        downwards_std = [u.std() for u in downwards]
+        # Create a set of bars at each position
+        for i, algo in enumerate(algos):
+            indeces = range(1, len(patterns) + 1)
+            vals = dpoints[dpoints[:, 0] == algo][:, 2].astype(np.float)
+            pos = [j - (1 - space) / 2. + i * width for j in indeces]
+            if not log:
+                ax.bar(pos, vals, width=width, label=algo, color=algo_styles[algo]['color'], alpha=1, zorder=40, edgecolor="none", linewidth=0)
+            else:
+                ax.bar(pos, vals, width=width, label=algo, color=algo_styles[algo]['color'], alpha=1, zorder=40, log=1,
+                       edgecolor="none", linewidth=0)
 
-        return ({'avg': upwards_avg, 'std': upwards_std}, {'avg': downwards_avg, 'std': downwards_std})
+        # Set the x-axis tick labels to be equal to the patterns
+        ax.set_xticks(indeces)
+        ax.set_xticklabels(patterns)
 
-    def plot_average_core_loads(self):
-        """
-        Plots the average core load for upwards and downwards traffic
-        :return:
-        """
-        # Fetch data to plot
-        data_to_plot = {}
-        for algo, measurements in self.algo_to_measurements.iteritems():
-            (upwards, downwards) = self.get_average_core_load(measurements)
-            data_to_plot[algo] = {'up': upwards, 'down': downwards}
+        plt.setp(plt.xticks()[1], rotation=0)
 
-        #import ipdb; ipdb.set_trace()
+    def parse_experiment_data(self, experiment_folder):
+        results = {}
+        if not self.results_folder in experiment_folder:
+            experiment_folder =  os.path.join(self.results_folder, experiment_folder)
 
-        subplot_positions = [(2,2,1), (2,2,2), (2,2,3), (2,2,4)]
+        for root, dir, files in os.walk(experiment_folder):
+            # We are in first level
+            if root == experiment_folder:
+                patterns = dir[:]
+                results.update({pattern: {} for pattern in patterns})
+            else:
+                root_t = root.split('/')
 
-        # Create figure
-        fig = plt.figure(figsize=(80, 20))
-        fig.suptitle("Average core layer load for different LB strategies", fontsize=20)
+                # We are in third level
+                if len(root_t) == 4 and files:
+                    pattern = root_t[-2]
+                    algo = root_t[-1]
+                    data = files[0]
+                    inn, outt = self.read_in_out_traffic_file(os.path.join(root, data))
+                    avg_out = np.asarray(outt)
+                    results[pattern][algo] = avg_out.mean()
+                else:
+                    continue
 
-        # Iterate subplots
-        for (row, col, index) in subplot_positions:
+        results = [{p: {a: v for a,v in data.iteritems()}} for p, data in results.iteritems()]
+        return results
 
-            # Create a new subplot
-            sub = fig.add_subplot(row, col, index)
-            sub.grid(True)
+    def plot_average_bisection_bw(self, experiment_folder=''):
+        if not experiment_folder:
+            experiment_data = [{'Random': {'Elephant-DAG-Shifter-Best':90, 'ECMP': 60, 'Non-Blocking': 128}},
+                               {'Staggered': {'Elephant-DAG-Shifter-Best': 100, 'ECMP': 80, 'Non-Blocking': 128}},
+                               {'Stride4': {'Elephant-DAG-Shifter-Best': 110, 'ECMP': 65, 'Non-Blocking': 128}},
+                               {'Stride8': {'Elephant-DAG-Shifter-Best': 128, 'ECMP': 70, 'Non-Blocking': 128}},
+                               {'Bijection': {'Elephant-DAG-Shifter-Best': 110, 'ECMP': 80, 'Non-Blocking': 128}},
+                               ]
+        else:
+            experiment_data = self.parse_experiment_data(experiment_folder)
 
-            # Upper left corner
-            if index == 1:
-                sub.set_title("Upward traffic average load", fontsize=16)
-                for algo in data_to_plot.keys():
-                    #import ipdb; ipdb.set_trace()
-                    color = algo_styles[algo]['color']
-                    linestyle = algo_styles[algo]['linestyle']
-                    # plot
-                    sub.plot(data_to_plot[algo]['up']['avg'], color=color, linestyle=linestyle, label=algo, linewidth=2.0)
+        # Create matrix from experiment data dictionary: (algo, pattern, value)
+        matrix = []
+        for result_data in experiment_data:
+            if result_data:
+                # Extract pattern name
+                pattern = result_data.keys()[0]
 
-                    # set axis labels
-                    sub.set_ylabel("Average load", fontsize=16)
-                    sub.set_xlabel("Time (s)", fontsize=16)
+                # Get results of that pattern
+                pattern_results = result_data.pop(pattern)
 
-                    # set limit
-                    sub.set_ylim([0, 1])
+                # Iterate them
+                for algo, value in pattern_results.iteritems():
+                    # Append to matrix
+                    matrix.append([algo, pattern, value])
 
-            elif index == 2:
-                sub.set_title("Downward traffic average load", fontsize=16)
-                for algo in data_to_plot.keys():
-                    color = algo_styles[algo]['color']
-                    linestyle = algo_styles[algo]['linestyle']
-                    # plot
-                    sub.plot(data_to_plot[algo]['down']['avg'], color=color, linestyle=linestyle, label=algo, linewidth=2.0)
+        # Convert into np array
+        matrix = np.asarray(matrix)
 
-                    # set axis labels
-                    sub.set_ylabel("Average load", fontsize=16)
-                    sub.set_xlabel("Time (s)", fontsize=16)
+        # Start figure
+        fig = plt.figure(figsize=(35, 10))
 
-                    # set limit
-                    sub.set_ylim([0, 1])
+        # Set title
+        # fig.suptitle("TCP total completion times", fontsize=20, weight='bold')
+        ax = plt.subplot(111)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.spines["bottom"].set_linewidth(2.5)
+        ax.spines["left"].set_linewidth(2.5)
 
-            elif index == 3:
-                sub.set_title("Upward traffic Std.", fontsize=16)
-                for algo in data_to_plot.keys():
-                    color = algo_styles[algo]['color']
-                    linestyle = algo_styles[algo]['linestyle']
-                    # plot
-                    sub.plot(data_to_plot[algo]['up']['std'], color=color, linestyle=linestyle, label=algo, linewidth=2.0)
+        ax.get_xaxis().tick_bottom()
+        ax.get_yaxis().tick_left()
+        # ax.set_xlabel("Traffic pattern", size='x-large', weight='bold')
+        ax.set_ylabel("Average bisection bandwidth (Mbps)", size='x-large', weight='bold')
+        plt.tick_params(axis="both", which="both", bottom="on", top="off", labelbottom="on", left="off", right="off",
+                        labelleft="on")
+        plt.xticks(fontsize=14, weight="bold")
+        plt.yticks(fontsize=14, weight="bold")
 
-                    # set axis labels
-                    sub.set_ylabel("Load Std.", fontsize=16)
-                    sub.set_xlabel("Time (s)", fontsize=16)
+        # Generate bar plot
+        self._barplot(ax, matrix, log=False)
 
-                    # set limit
-                    sub.set_ylim([0, 1])
+        # Set fontsize and weight of axis ticks
+        plt.xticks(fontsize=14, weight="bold")
+        plt.yticks(fontsize=14, weight="bold")
 
-            elif index == 4:
-                sub.set_title("Downward traffic Std.", fontsize=16)
-                for algo in data_to_plot.keys():
-                    color = algo_styles[algo]['color']
-                    linestyle = algo_styles[algo]['linestyle']
-                    # plot
-                    sub.plot(data_to_plot[algo]['down']['std'], color=color, linestyle=linestyle, label=algo, linewidth=2.0)
+        add_bottom_legend = True
+        if add_bottom_legend:
+            # Add a legend
+            handles, labels = ax.get_legend_handles_labels()
+            # Put a legend below current axis
+            ax.legend(handles[:], labels[:], loc='upper center', bbox_to_anchor=(0.5, -0.05), shadow=True,
+                      fontsize='x-large', ncol=len(algo_styles))
 
-                    # set axis labels
-                    sub.set_ylabel("Load Std.", fontsize=16)
-                    sub.set_xlabel("Time (s)", fontsize=16)
-
-                    # set limit
-                    sub.set_ylim([0, 1])
-
-        # Write legend and plot
-        plt.legend(loc='best')
-        # Set grid on
         plt.grid(True)
+        ax.grid(zorder=4)
+        # plt.tight_layout()
+        # plt.show()
+        fig.subplots_adjust(left=0.08, right=0.97)
+        filename = 'avg_bb'
+        plt.savefig(experiment_folder + filename, format="pdf")
         plt.show()
-
-    def get_max_core_load_diff(self, measurements):
-        coreRouters = self.topology.getCoreRouters()
-
-        upwards_diff = []
-        downwards_diff = []
-
-        for t, link_loads in measurements:
-            # Fetch upward and downward load values for that time
-            core_upwards_loads = [link_loads[a][o]['out'] for a, other in link_loads.iteritems() for o in other if o in coreRouters]
-            core_downwards_loads = [link_loads[a][o]['in'] for a, other in link_loads.iteritems() for o in other if o in coreRouters]
-
-            # Convert it to an array
-            cul = np.asarray(core_upwards_loads)
-            cdl = np.asarray(core_downwards_loads)
-
-            # Append it to lists
-            upwards_diff.append(max(cul) - min(cul))
-            downwards_diff.append(max(cdl) - min(cdl))
-
-        # Convert it to array
-        upwards_diff = np.asarray(upwards_diff)
-        downwards_diff = np.asarray(downwards_diff)
-
-        return (upwards_diff, downwards_diff)
-
-    def plot_max_core_load_diff(self):
-        # Fetch data to plot
-        data_to_plot = {}
-        for algo, measurements in self.algo_to_measurements.iteritems():
-            (upwards, downwards) = self.get_max_core_load_diff(measurements)
-            data_to_plot[algo] = {'up': upwards, 'down': downwards}
-
-        # import ipdb; ipdb.set_trace()
-        subplot_positions = [(2, 1, 1), (2, 1, 2)]
-
-        # Create figure
-        fig = plt.figure(figsize=(80, 20))
-        fig.suptitle("Difference between most and least loaded core router", fontsize=20)
-
-        # Iterate subplots
-        for (row, col, index) in subplot_positions:
-
-            # Create a new subplot
-            sub = fig.add_subplot(row, col, index)
-            sub.grid(True)
-
-            # Upper left corner
-            if index == 1:
-                sub.set_title("Upward traffic", fontsize=16)
-                for algo in data_to_plot.keys():
-                    # import ipdb; ipdb.set_trace()
-                    color = algo_styles[algo]['color']
-                    linestyle = algo_styles[algo]['linestyle']
-                    # plot
-                    sub.plot(data_to_plot[algo]['up'], color=color, linestyle=linestyle, label=algo,
-                             linewidth=2.0)
-
-                    # set axis labels
-                    sub.set_ylabel("Load difference", fontsize=16)
-                    sub.set_xlabel("Time (s)", fontsize=16)
-
-                    # set limit
-                    sub.set_ylim([0, 1])
-
-            elif index == 2:
-                sub.set_title("Downward traffic", fontsize=16)
-                for algo in data_to_plot.keys():
-                    color = algo_styles[algo]['color']
-                    linestyle = algo_styles[algo]['linestyle']
-                    # plot
-                    sub.plot(data_to_plot[algo]['down'], color=color, linestyle=linestyle, label=algo, linewidth=2.0)
-
-                    # set axis labels
-                    sub.set_ylabel("Load difference", fontsize=16)
-                    sub.set_xlabel("Time (s)", fontsize=16)
-
-                    # set limit
-                    sub.set_ylim([0, 1])
-
-        # Write legend and plot
-        plt.legend(loc='best')
-        # Set grid on
-        plt.grid(True)
-        plt.show()
-
-    def get_average_core_diff(self, measurements):
-        coreRouters = self.topology.getCoreRouters()
-
-        upwards_diff = []
-        downwards_diff = []
-
-        for t, link_loads in measurements:
-            # Fetch upward and downward load values for that time
-            core_upwards_loads = [link_loads[a][o]['out'] for a, other in link_loads.iteritems() for o in other if o in coreRouters]
-            core_downwards_loads = [link_loads[a][o]['in'] for a, other in link_loads.iteritems() for o in other if o in coreRouters]
-
-            # Convert it to an array
-            cul = np.asarray(core_upwards_loads)
-            cdl = np.asarray(core_downwards_loads)
-
-            # Compute average difference
-            cul_diff = []
-            cdl_diff = []
-
-            for index, cu in enumerate(cul):
-                for index2, cu2 in enumerate(cul):
-                    if index != index2:
-                        cul_diff.append(abs(cu - cu2))
-
-            for j, cd in enumerate(cdl):
-                for j2, cd2 in enumerate(cdl):
-                    if j != j2:
-                        cdl_diff.append(abs(cd - cd2))
-
-            # Convert to array
-            cul_diff = np.asarray(cul_diff)
-            cdl_diff = np.asarray(cdl_diff)
-
-            # Append if
-            upwards_diff.append(cul_diff)
-            downwards_diff.append(cdl_diff)
-
-        # Exctract mean and std
-        upwards_avg = [u.mean() for u in upwards_diff]
-        upwards_std = [u.std() for u in upwards_diff]
-        downwards_avg = [u.mean() for u in downwards_diff]
-        downwards_std = [u.std() for u in downwards_diff]
-
-        # Convert it to array
-        upwards_diff = np.asarray(upwards_diff)
-        downwards_diff = np.asarray(downwards_diff)
-
-        return ({'avg': upwards_avg, 'std': upwards_std}, {'avg': downwards_avg, 'std': downwards_std})
-
-    def plot_average_core_diff(self):
-        """
-        Plots the average core load for upwards and downwards traffic
-        :return:
-        """
-        # Fetch data to plot
-        data_to_plot = {}
-        for algo, measurements in self.algo_to_measurements.iteritems():
-            (upwards, downwards) = self.get_average_core_diff(measurements)
-            data_to_plot[algo] = {'up': upwards, 'down': downwards}
-
-        subplot_positions = [(2,2,1), (2,2,2), (2,2,3), (2,2,4)]
-
-        # Create figure
-        fig = plt.figure(figsize=(80, 20))
-        fig.suptitle("Average difference in load for core layer routers", fontsize=20)
-
-        # Iterate subplots
-        for (row, col, index) in subplot_positions:
-
-            # Create a new subplot
-            sub = fig.add_subplot(row, col, index)
-            sub.grid(True)
-
-            # Upper left corner
-            if index == 1:
-                sub.set_title("Upward traffic average load difference", fontsize=16)
-                for algo in data_to_plot.keys():
-                    #import ipdb; ipdb.set_trace()
-                    color = algo_styles[algo]['color']
-                    linestyle = algo_styles[algo]['linestyle']
-                    # plot
-                    sub.plot(data_to_plot[algo]['up']['avg'], color=color, linestyle=linestyle, label=algo, linewidth=2.0)
-
-                    # set axis labels
-                    sub.set_ylabel("Average load difference", fontsize=16)
-                    sub.set_xlabel("Time (s)", fontsize=16)
-
-                    # set limit
-                    sub.set_ylim([0, 1])
-
-            elif index == 2:
-                sub.set_title("Downward traffic average load difference", fontsize=16)
-                for algo in data_to_plot.keys():
-                    color = algo_styles[algo]['color']
-                    linestyle = algo_styles[algo]['linestyle']
-                    # plot
-                    sub.plot(data_to_plot[algo]['down']['avg'], color=color, linestyle=linestyle, label=algo, linewidth=2.0)
-
-                    # set axis labels
-                    sub.set_ylabel("Average load difference", fontsize=16)
-                    sub.set_xlabel("Time (s)", fontsize=16)
-
-                    # set limit
-                    sub.set_ylim([0, 1])
-
-            elif index == 3:
-                sub.set_title("Upward traffic load difference Std.", fontsize=16)
-                for algo in data_to_plot.keys():
-                    color = algo_styles[algo]['color']
-                    linestyle = algo_styles[algo]['linestyle']
-                    # plot
-                    sub.plot(data_to_plot[algo]['up']['std'], color=color, linestyle=linestyle, label=algo, linewidth=2.0)
-
-                    # set axis labels
-                    sub.set_ylabel("Load diff Std.", fontsize=16)
-                    sub.set_xlabel("Time (s)", fontsize=16)
-
-                    # set limit
-                    sub.set_ylim([0, 1])
-
-            elif index == 4:
-                sub.set_title("Downward traffic load difference Std.", fontsize=16)
-                for algo in data_to_plot.keys():
-                    color = algo_styles[algo]['color']
-                    linestyle = algo_styles[algo]['linestyle']
-                    # plot
-                    sub.plot(data_to_plot[algo]['down']['std'], color=color, linestyle=linestyle, label=algo, linewidth=2.0)
-
-                    # set axis labels
-                    sub.set_ylabel("Load diff Std.", fontsize=16)
-                    sub.set_xlabel("Time (s)", fontsize=16)
-
-                    # set limit
-                    sub.set_ylim([0, 1])
-
-        # Write legend and plot
-        plt.legend(loc='best')
-        # Set grid on
-        plt.grid(True)
-        plt.show()
-
 
 if __name__ == "__main__":
     import argparse
@@ -857,7 +583,7 @@ if __name__ == "__main__":
 
     # Declare expected arguments
     parser.add_argument('-k', help='Fat Tree parameter', type=int, default=4)
-    parser.add_argument('--file_list', nargs='+', help='List of measurement files to compare', type=str, required=True)
+    parser.add_argument('--file_list', nargs='+', help='List of measurement files to compare', type=str, required=False)
 
     parser.add_argument('--node', help="Plot traffic observed at node links only. e.g: h_0_0", type=str, default=None)
     parser.add_argument('--downwards', action="store_true", default=False)
@@ -865,13 +591,8 @@ if __name__ == "__main__":
 
     parser.add_argument('--in_out', help="Plot ratio input/output traffic", action="store_true", default=False)
     parser.add_argument('--in_out_abs', help="Plot input traffic against output traffic", action="store_true", default=False)
-
-    parser.add_argument('--core_input_traffic', help="Plot traffic arriving at core layer", action="store_true", default=False)
-
-    parser.add_argument('--average_core_load', help="Plot average core layer load", action="store_true", default=False)
-    parser.add_argument('--max_diff_core_load', help="Plot maximum difference between core loads", action="store_true", default=False)
-    parser.add_argument('--average_diff_core_load', help="Plot average difference between core loads", action="store_true", default=False)
-
+    parser.add_argument('--avg_bb', help="Average bisection bandwidth (useful for TCP traffic)", action="store_true", default=False)
+    parser.add_argument('--experiment', help='Experiment folder')
     parser.add_argument('--all', help="Plot all metrics", action="store_true", default=False)
 
     # Parse arguments
@@ -883,10 +604,7 @@ if __name__ == "__main__":
     if args.all:
         ac.plot_in_out_traffic()
         ac.plot_in_out_abs_traffic()
-        ac.plot_core_input_traffic()
-        ac.plot_average_core_loads()
-        ac.plot_max_core_load_diff()
-        ac.plot_average_core_diff()
+        ac.plot_average_bisection_bw()
 
     else:
         # Act according to presented arguments
@@ -902,14 +620,11 @@ if __name__ == "__main__":
         if args.in_out_abs:
             ac.plot_in_out_abs_traffic()
 
-        if args.core_input_traffic:
-            ac.plot_core_input_traffic()
+        if args.avg_bb:
+            if not args.experiment:
+                print "Experiment folder needed!"
+                experiment_folder = raw_input('*** Introduce experiment folder [experiment1]: ') or 'experiment1'
+            else:
+                experiment_folder = args.experiment
 
-        if args.average_core_load:
-            ac.plot_average_core_loads()
-
-        if args.max_diff_core_load:
-            ac.plot_max_core_load_diff()
-
-        if args.average_diff_core_load:
-            ac.plot_average_core_diff()
+            ac.plot_average_bisection_bw(experiment_folder)

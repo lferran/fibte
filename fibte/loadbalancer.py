@@ -15,6 +15,7 @@ import abc
 import Queue
 import numpy as np
 import sys
+import signal
 import itertools as it
 import collections
 
@@ -128,7 +129,12 @@ class LBController(object):
 
         # Start getLoads thread that reads from counters
         in_out_name = self._getAlgorithmName() # Get the name of the GetLoads result file
-        self.p_getLoads = subprocess.Popen([getLoads_path, '-k', str(self.k), '-a', in_out_name], shell=False)
+        self.gl = GetLoads(k=self.k, time_interval=1, lb_algorithm=self.algorithm)
+        self.gl_thread = Thread(target=self.gl.run, name="GetLoads thread")
+        self.gl_thread.setDaemon(True)
+        self.gl_thread.start()
+
+        #self.p_getLoads = subprocess.Popen([getLoads_path, '-k', str(self.k), '-a', in_out_name], shell=False)
 
         # Object useful to make some unit conversions
         self.base = Base()
@@ -677,9 +683,6 @@ class LBController(object):
         self.current_elephant_dags = copy.deepcopy(self.initial_elep_dags)
         self.current_mice_dags = copy.deepcopy(self.initial_mice_dags)
 
-        # Set them all to initial state
-        #self.saveCurrentDags_from({px: data['dag'] for px, data in self.current_elephant_dags.iteritems()})
-        #self.saveCurrentDags_from({px: data['dag'] for px, data in self.current_mice_dags.iteritems()})
         # Remove all attraction points and lsas
         self.sbmanager.remove_all_dag_requirements()
 
@@ -699,6 +702,9 @@ class LBController(object):
         with self.mice_caps_lock:
             for (u, v, data) in self.mice_caps_graph.edges_iter(data=True):
                 data['elephants_capacity'] = 0.0
+
+        # Reset flow demands
+        self.flowDemands = EstimateDemands()
 
     def getLinkCapacity(self, link, exclude=[]):
         """Returns the difference between link bandwidth and
@@ -998,8 +1004,6 @@ class LBController(object):
         log.info("Cleaning up the network from fake LSAs ...")
         self.sbmanager.remove_all_dag_requirements()
 
-        import ipdb; ipdb.set_trace()
-
         # Finally exit
         os._exit(0)
 
@@ -1077,16 +1081,14 @@ class LBController(object):
                 else:
                     # Read from TCP server's queue
                     try:
-                        event = json.loads(self.q_server.get())
+                        event = json.loads(self.q_server.get(timeout=0.3))
                         self.q_server.task_done()
-                    except TypeError:
-                        log.error("weird TypeError")
-                        import ipdb; ipdb.set_trace()
+                    except Queue.Empty:
+                        continue
 
                     if event["type"] == "reset":
                         log.info("RESET event received")
                         self.reset()
-                        continue
 
                     elif event["type"] in ["startingFlow", "stoppingFlow"]:
                         log.info("{0} event received".format(event['type']))
@@ -1128,7 +1130,7 @@ class ECMPController(LBController):
             return
 
         # Get default path of flow
-        self.findNewPathsForFlows([flow])
+        #self.findNewPathsForFlows([flow])
 
     def deallocateFlow(self, flow):
         """Removes flow from flow->path data structure"""
@@ -1141,7 +1143,7 @@ class ECMPController(LBController):
             return
 
         # Remove flow from path
-        path = self.delFlowFromPath(flow)
+        #path = self.delFlowFromPath(flow)tt
 
 class MiceDAGShifter(LBController):
     def __init__(self, doBalance=True, k=4):
@@ -1208,104 +1210,48 @@ class ElephantDAGShifter(LBController):
         # Call init of subclass
         super(ElephantDAGShifter, self).__init__(algorithm='elephant-dag-shifter', *args, **kwargs)
 
-        test_traceroute = True
-        if test_traceroute:
-            dst_px = self.topology.hostsToNetworksMapping['hostToNetwork']['h_3_3'].values()[0]
-            dst_ip = self.topology.getHostIp('h_3_3')
-            src_ip = self.topology.getHostIp('h_0_0')
-            src_pod = 0
+        tests=False
+        if tests:
+            h33 = self.topology.getHostIp('h_3_3')
+            h32 = self.topology.getHostIp('h_3_2')
+            h00 = self.topology.getHostIp('h_0_0')
+            sport = 2000
+            starttime = 10
 
-            initial_dag = self.current_elephant_dags[dst_px]['dag'].copy()
+            flow1 = {'src': h00, 'sport': sport, 'dport': 1111, 'dst': h33, 'proto': 'TCP', 'size': LINK_BANDWIDTH*30,
+                    'duration': None, 'rate': LINK_BANDWIDTH, 'start_time': starttime}
 
-            times = []
-            for sport in range(2000, 2001):
-                import ipdb; ipdb.set_trace()
-
-                # Apply initial DAG
-                self.resetToInitialDag(dst_px, fib=True)
-
-                # Get initial DAG
-                cdag = self.getCurrentDag(dst_px)
-
-                # Send starttime
-                starttime = 0.5
-                flow = {'src':src_ip, 'sport': sport, 'dport': 1111, 'dst': dst_ip, 'proto': 'UDP', 'size': 5000000.0, 'duration': 1000, 'start_time': starttime}
-                fkey = self.flowToKey(flow)
-
-                # Start flow in the network
-                self.startFlow(flow)
-
-                # Look for path
-                self.findNewPathsForFlows([flow])
-
-                default_path = self.flows_to_paths[self.flowToKey(flow)]['path']
-
-                # Modify DAG somehow
-                if default_path[1] == self.r_0_a0:
-                    edge = (default_path[0], self.r_0_a1)
-                else:
-                    edge = (default_path[0], self.r_0_a0)
-
-                # Compute new edge
-                cdag.modify_uplinks_from([edge])
-
-                # Force this new dag
-                self.saveCurrentDag(dst_px, cdag, fib=True)
-
-                # Check if flow has moved of path
-
-
-                # Check if moves back to original path doing
-                ## a) adding new dag with all links
-                cdag_copy = cdag.copy()
-                cdag_copy.set_ecmp_uplinks()
-                self.saveCurrentDag(dst_px, cdag_copy, fib=True)
-
-                ## b) removing dag requirements
-                self.resetToInitialDag(dst_px, fib=True)
-
-
-
-
-
-
-                # Start counting propagation time
-                start = time.time()
-                found = False
-                i = 0
-                while not found and i < 100:
-                    # Find new path for flow
-                    self.findNewPathsForFlows([flow])
-
-                    # Extract new path
-                    new_path = self.flows_to_paths[fkey]['path']
-
-                    # If they are different, it has converged!
-                    if new_path != default_path:
-                        found = True
-                        break
-
-                    i = i + 1
-
-                if found:
-                    prp_time = time.time() - start
-                    log.warning("It took ~ {0}s to find new route in new DAG".format(prp_time))
-                    times.append(prp_time)
-
-                else:
-                    log.warning("Not found...")
-                    times.append(-1)
+            flow2 = {'src': h00, 'sport': sport, 'dport': 1111, 'dst': h32, 'proto': 'TCP', 'size': LINK_BANDWIDTH*30,
+                    'duration': None, 'rate': LINK_BANDWIDTH, 'start_time': starttime}
 
             import ipdb; ipdb.set_trace()
+
+            self.startFlow(flow1)
 
     def startFlow(self, flow):
         # Get source ip
         srcip = flow.get('src')
+        dstip = flow.get('dst')
         srcname = self.topology.getHostName(srcip)
-
+        dstname = self.topology.getHostName(dstip)
         # Send flowlist
-        flowlist = [flow]
-        self.unixClient.send(json.dumps({"type": "flowlist", "data": flowlist}), srcname)
+        if flow.get('proto') == 'UDP':
+            flowlist = [flow]
+            self.unixClient.send(json.dumps({"type": "flowlist", "data": flowlist}), srcname)
+
+        else:
+            starttime = flow.get('start_time')
+            rcv_start = max(0, starttime-2)
+            receivelist = [(rcv_start, flow.get('dport'))]
+
+            # Sends flowlist to the sender's server
+            self.unixClient.send(json.dumps({"type": "receivelist", "data": receivelist}), dstname)
+
+            flowlist = [flow]
+            self.unixClient.send(json.dumps({"type": "flowlist", "data": flowlist}), srcname)
+
+        # Update demands
+        self.flowDemands.estimateDemands(flow, action='add')
 
     def _getAlgorithmName(self):
         """"""
@@ -1374,7 +1320,7 @@ class ElephantDAGShifter(LBController):
         # Find new paths for flows
         self.findNewPathsForFlows(dst_ongoing_flows)
 
-    def deallocateFlow(self, flow, reset_dag=False):
+    def deallocateFlow(self, flow):
         super(ElephantDAGShifter, self).deallocateFlow(flow)
 
         # Get destination
@@ -1389,18 +1335,7 @@ class ElephantDAGShifter(LBController):
         # Deallocate if from the network
         old_path = self.delFlowFromPath(flow)
 
-        if reset_dag:
-            # Reset to initial source-pod dag if no more flows are there
-            src_pod = self.getSourcePodFromFlow(flow)
-            if not self.getOngoingFlowKeysToDst(dst, src_pod):
-                if not self.getOngoingFlowKeysToDst(dst):
-                    log.info("Resetting the complete DAG to initial one")
-                    self.resetToInitialDag(dst, fib=True)
-                else:
-                    log.info("Resetting DAG from source pod {0}".format(src_pod))
-                    self.resetToInitialDag(dst, fib=True, src_pod=src_pod)
-
-    @time_func
+    #@time_func
     def findBestSourcePodDag(self, src_pod, complete_dag, ongoing_flows):
         """"""
         # Compute edge indexes for which no flows are starting towards dst
@@ -1451,7 +1386,7 @@ class ElephantDAGShifter(LBController):
         # Return the best one!
         return (ndag, best_assessment)
 
-    @time_func
+    #@time_func
     def getBestOfDagSamples(self, src_pod, complete_dag, ongoing_flows):
         """"""
         # Compute edge indexes for which no flows are starting towards dst
@@ -1552,7 +1487,7 @@ class ElephantDAGShifter(LBController):
                         return a_nedges < b_nedges
 
                     else:
-                        log.warning("ALL equal! ...")
+                        #log.warning("ALL equal! ...")
                         return True
 
     def getExcludedEdgeIndexes(self, ongoing_flows):
@@ -1824,169 +1759,6 @@ class ElephantDAGShifter(LBController):
 
 
 
-
-
-class TestController(object):
-    def __init__(self):
-        log.setLevel(logging.DEBUG)
-
-        # Connects to the southbound controller. Must be called before
-        # creating the instance of SouthboundManager
-        CFG_fib.read(os.path.join(tmp_files, C1_cfg))
-
-        # Start the Southbound manager in a different thread
-        self.sbmanager = MyGraphProvider()
-        t = threading.Thread(target=self.sbmanager.run, name="Southbound Manager")
-        t.start()
-
-        # Unix domain server to make things faster and possibility to communicate with hosts
-        self._address_server = os.path.join(tmp_files, UDS_server_name)
-        self.q_server = Queue.Queue(0)
-        self.server = UnixServerTCP(self._address_server, self.q_server)
-
-        # Blocks until initial graph received from SouthBound Manager
-        HAS_INITIAL_GRAPH.wait()
-        log.info("Initial graph received from SouthBound Controller")
-
-        self.topology = TopologyGraph(db=os.path.join(tmp_files, db_topo))
-
-        self.print_all_ips()
-
-        upper = map(self.topology.getRouterId, ['r1', 'r3', 'r5'])
-        middle = map(self.topology.getRouterId, ['r1', 'r5'])
-        lower = map(self.topology.getRouterId, ['r1', 'r2', 'r4', 'r5'])
-
-        d1_ip = self.topology.getHostIp('d1')
-        d1_px = self.topology.hostsToNetworksMapping['hostToNetwork']['d1']['d1-eth0']
-
-        dag = nx.DiGraph()
-        dag.add_edges_from(self.get_links_from_path(path=upper))
-        dag.add_edges_from(self.get_links_from_path(path=middle))
-        self.sbmanager.add_dag_requirement(d1_px, dag)
-
-        import ipdb; ipdb.set_trace()
-
-        # Here we store the mice levels from each host to all other hosts
-        self.mice_dbs = {}
-
-    @staticmethod
-    def get_links_from_path(path):
-        return zip(path[:-1], path[1:])
-
-    def print_all_ips(self):
-        regex = "{0}\t->\t{1}"
-        log.info("*** Routers")
-        for name, rid in self.topology.routersIdMapping['nameToId'].iteritems():
-            log.info(regex.format(name, rid))
-
-        regex = "{0}\t->\t{1}, {2}"
-        log.info("*** Hosts")
-        for name, hip in self.topology.hostsIpMapping['nameToIp'].iteritems():
-            log.info(regex.format(name, hip, ipalias.get_secondary_ip(hip)))
-
-    def reset(self):
-        pass
-
-    def run(self):
-        # Start process that handles connections to the TCP server
-        tcp_server_thread = Thread(target = self.server.run)
-        tcp_server_thread.setDaemon(True)
-        tcp_server_thread.start()
-
-        log.info("Looping for new events!")
-        while True:
-            try:
-                while True:
-                    # Read from TCP server queue
-                    try:
-                        event = json.loads(self.q_server.get())
-                        self.q_server.task_done()
-                    except TypeError:
-                        log.error("weird TypeError")
-                        import ipdb; ipdb.set_trace()
-
-                    log.info("Event received: {0}".format(event))
-                    if event["type"] == "reset":
-                        log.info("RESET event received")
-                        self.reset()
-                        continue
-
-                    elif event["type"] in ["startingFlow", "stoppingFlow"]:
-                        self.handleFlow(event)
-
-                    elif event["type"] == "miceEstimation":
-                        estimation_data = event['data']
-                        self.handleMiceEstimation(estimation_data)
-
-                    else:
-                        log.error("Unknown event: {0}".format(event))
-                        import ipdb; ipdb.set_trace()
-
-            except KeyboardInterrupt:
-                # Exit load balancer
-                self.exitGracefully()
-
-    @time_func
-    def handleMiceEstimation(self, estimation_data):
-        # Get mice source
-        src = estimation_data['src']
-        log.info("Received estimation data from {0}".format(src))
-
-        # Get per-destination samples
-        dst_samples = estimation_data['samples']
-        for (dst, samples) in dst_samples.iteritems():
-            if dst not in self.mice_dbs.keys():
-                self.mice_dbs[dst] = {}
-
-            samples = np.asarray(samples)
-            avg, std = samples.mean(), samples.std()
-
-            # Add new average and std values
-            if src not in self.mice_dbs[dst].keys():
-                self.mice_dbs[dst][src] = {'avg': [avg], 'std': [std]}
-            else:
-                self.mice_dbs[dst][src]['avg'].append(avg)
-                self.mice_dbs[dst][src]['std'].append(std)
-
-    def handleFlow(self, flow):
-        src_ip = flow['src']
-        dst_e_ip = flow['dst']
-
-        dst_mice_px = [p for p in self.sbmanager.igp_graph.prefixes if ip.ip_address(dst_e_ip) in ip.ip_network(p)][0]
-        dst_elep_px = ipalias.get_secondary_ip_prefix(dst_mice_px)
-
-        long_path = [self.topology.routerid(r) for r in ('r1', 'r2', 'r4', 'r5')]
-        short_path = [self.topology.routerid(r) for r in ('r1', 'r3', 'r5')]
-
-        import ipdb; ipdb.set_trace()
-
-        log.info("BEFORE mice -> long path")
-        self.sbmanager.simple_path_requirement(dst_mice_px, long_path)
-        log.info("AFTER mice -> long path")
-
-        import ipdb; ipdb.set_trace()
-
-        log.info("BEFORE eleph -> short path")
-        self.sbmanager.simple_path_requirement(dst_elep_px, short_path)
-        log.info("AFTER eleph -> short path")
-
-        import ipdb; ipdb.set_trace()
-
-
-        #self.sbmanager.simple_path_requirement(d1_elephant_px, short_path)
-        #self.sbmanager.simple_path_requirement(d1_mice_px, long_path)
-
-    def exitGracefully(self):
-        """
-        Exit load balancer gracefully
-        :return:
-        """
-        log.info("Keyboad Interrupt catched!")
-
-        self.sbmanager.remove_all_dag_requirements()
-
-        # Finally exit
-        os._exit(0)
 
 if __name__ == '__main__':
     from fibte.logger import log

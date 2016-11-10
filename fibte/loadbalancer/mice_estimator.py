@@ -454,11 +454,11 @@ class MiceEstimatorThread(threading.Thread):
                 self.adapt_mice_dags(path=flow_path)
 
             elif order_type == 'terminate':
-                log.info("Self-shutting down...")
+                log.info("MiceEstimatorThread: self-shutting down...")
                 break
 
             else:
-                log.info(order)
+                log.warning(order)
                 continue
 
     @staticmethod

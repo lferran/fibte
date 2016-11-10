@@ -1,28 +1,23 @@
-from flow import Flow, Base
-from fibte.misc.topology_graph import TopologyGraph
 import random
 import time
 import os
 import argparse
 import abc
 import json
+import scipy.stats as stats
 
 try:
     import cPickle as pickle
 except:
     import pickle
 
-import json
-import scipy.stats as stats
-
+from fibte.misc.topology_graph import TopologyGraph
 from fibte.misc.unixSockets import UnixClient, UnixClientTCP
-from fibte import CFG, LINK_BANDWIDTH, MICE_SIZE_RANGE, ELEPHANT_SIZE_RANGE, MICE_SIZE_STEP, ELEPHANT_SIZE_STEP
-
-import logging
+from fibte import tmp_files, db_topo, CFG, LINK_BANDWIDTH, MICE_SIZE_RANGE, ELEPHANT_SIZE_RANGE, MICE_SIZE_STEP, ELEPHANT_SIZE_STEP
 from fibte.logger import log
+from fibte.trafficgen.flow import Flow, Base
+import logging
 
-tmp_files = CFG.get("DEFAULT","tmp_files")
-db_topo = CFG.get("DEFAULT","db_topo")
 controllerServer = CFG.get("DEFAULT","controller_UDS_name")
 
 MIN_PORT = 1
@@ -35,7 +30,7 @@ def time_func(function):
     def wrapper(*args,**kwargs):
         t = time.time()
         res = function(*args,**kwargs)
-        log.debug("{0} took {1}s to execute".format(function.func_name, time.time()-t))
+        log.info("{0} took {1}s to execute".format(function.func_name, time.time()-t))
         return res
     return wrapper
 
@@ -57,7 +52,7 @@ class TGParser(object):
         self.parser = argparse.ArgumentParser()
 
     def loadParser(self):
-        self.parser.add_argument('--addtc', help='Add flows to current traffic', action="store_true", default=False)
+        self.parser.add_argument('--addtc', help='Add flows to current traffic --it doesnt reset the controller', action="store_true", default=False)
         self.parser.add_argument('--pattern', help='Communication pattern', choices=['random','staggered','bijection','stride'], type=str, default='random')
         self.parser.add_argument('--pattern_args', help='Communication pattern arguments', type=json.loads, default='{}')
         self.parser.add_argument('-t', '--time', help='Duration of the traffic generator', type=int, default=120)
@@ -72,6 +67,68 @@ class TGParser(object):
         # Parse the arguments and return them
         args = self.parser.parse_args()
         return args
+
+    @time_func
+    def runArguments(self, tgf, args):
+        """Given a traffic generator object and the
+         arguments, act accordingly
+        """
+        # Start counting time
+        if args.terminate:
+            print "Terminating ongoing traffic!"
+            tgf.terminateTrafficAtHosts()
+            tgf.resetController()
+
+        else:
+            # Check if flow file has been given
+            if not args.flows_file:
+
+                # If traffic must be loaded
+                if args.load_traffic:
+                    msg = "Loading traffic from file <- {0}"
+                    print msg.format(args.load_traffic)
+
+                    # Fetch traffic from file
+                    traffic = pickle.load(open(args.load_traffic, "r"))
+
+                    # Convert hostnames to current ips
+                    traffic = tgf.changeTrafficHostnamesToIps(traffic)
+
+                else:
+                    print "Generating traffic ..."
+                    # Generate traffic
+                    traffic = tgf.plan_flows()
+
+                    # If it must be saved
+                    if args.save_traffic:
+                        if not args.file_name:
+                            filename = tgf.get_filename()
+                        else:
+                            filename = args.file_name
+
+                        # Log it
+                        msg = "Saving traffic to file -> {0}"
+                        print msg.format(filename)
+
+                        # Convert current ip's to hostnames
+                        traffic_to_save = tgf.changeTrafficIpsToHostnames(traffic)
+
+                        with open(filename, "w") as f:
+                            pickle.dump(traffic_to_save, f)
+
+                # Orchestrate the traffic (either loaded or generated)
+                print "Scheduling traffic..."
+                tgf.schedule(traffic, add=args.addtc)
+
+            # Flow file has been given
+            else:
+                print "Scheduling flows specified in file: {0}".format(args.flows_file)
+
+                # Generate traffic from flows file
+                traffic = tgf.plan_from_flows_file(args.flows_file)
+
+                # Schedule it
+                tgf.schedule(traffic, add=args.addtc)
 
     def printArgs(self, args):
         import ipdb; ipdb.set_trace()
@@ -106,7 +163,7 @@ class udpTrafficGeneratorBase(Base):
         self.senders = self.topology.getHosts().keys()
         self.possible_destinations = self._createPossibleDestinations()
 
-        log.setLevel(logging.DEBUG)
+        log.setLevel(logging.INFO)
 
     @staticmethod
     def get_poisson_times(average, totalTime):
@@ -358,7 +415,6 @@ class udpTrafficGeneratorBase(Base):
             else:
                 return None
 
-
         elif pattern == 'stride':
             rcvs = self.senders[:]
 
@@ -373,7 +429,6 @@ class udpTrafficGeneratorBase(Base):
                     r_index = (index + stride_i) % len(orderedHosts)
                     r = orderedHosts[r_index]
                     return r
-
 
     @abc.abstractmethod
     def plan_flows(self):
@@ -402,7 +457,7 @@ class udpTrafficGeneratorBase(Base):
             except Exception as e:
                 log.error("Host {0} could not be informed about starttime.".format(host))
 
-    def sendFlowList(self, traffic_per_host):
+    def sendFlowLists(self, traffic_per_host):
         # Schedule all the flows
         log.info("Sending FLOWLISTs to hosts")
         for sender, flowlist in traffic_per_host.iteritems():
@@ -413,7 +468,7 @@ class udpTrafficGeneratorBase(Base):
             except Exception as e:
                 log.error("Host {0} could not be informed about flowlist.".format(sender))
 
-    def sendReceiveList(self, receive_per_host):
+    def sendReceiveLists(self, receive_per_host):
         # Schedule all the flows
         log.info("Sending RECEIVE_LISTs to hosts")
         for receiver, receivelist in receive_per_host.iteritems():
@@ -473,9 +528,6 @@ class udpTrafficGeneratorBase(Base):
             # Send reset to controller
             self.resetController()
 
-            # Send start time
-            #self.sendStartTime(traffic_start_time, hosts=all_hosts)
-
         else:
             log.info("Adding flows to the current traffic")
 
@@ -489,8 +541,8 @@ class udpTrafficGeneratorBase(Base):
         receive_per_host = self.computeReceiveList(traffic_per_host)
 
         # Send to flowServers!
-        self.sendFlowList(traffic_per_host)
-        self.sendReceiveList(receive_per_host)
+        self.sendFlowLists(traffic_per_host)
+        self.sendReceiveLists(receive_per_host)
 
     def plan_from_flows_file(self, flows_file):
         """Opens the flows file and schedules the specified flows
@@ -567,7 +619,7 @@ class udpTrafficGeneratorBase(Base):
             try:
                 self.unixClient.send(json.dumps({"type": "terminate"}), host)
             except Exception as e:
-                log.debug("Couldn't terminate traffic at flowServer_{0}. Exception: {1}".format(host, e))
+                log.error("Couldn't terminate traffic at flowServer_{0}. Exception: {1}".format(host, e))
 
     def changeTrafficHostnamesToIps(self, traffic):
         """

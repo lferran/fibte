@@ -26,7 +26,7 @@ class udpElephantFiller(udpTrafficGeneratorBase):
         """Return filename sample pattern"""
         pattern_args_fn = self.get_pattern_args_filename()
         filename = '{0}'.format(self.saved_traffic_dir)
-        anames = ['tgf', '{0}', pattern_args_fn, 'eload{1}', 'nelep{2}', 'mload{3}', 'nmice{4}', 't{5}', 'ts{6}']
+        anames = ['tgf_udp', '{0}', pattern_args_fn, 'eload{1}', 'nelep{2}', 'mload{3}', 'nmice{4}', 't{5}', 'ts{6}']
         filename += '_'.join([a for a in anames if a != None])
 
         filename = filename.format(self.pattern,
@@ -321,7 +321,6 @@ class udpElephantFiller(udpTrafficGeneratorBase):
         flows_per_sender = self.choose_corrent_src_dst_ports(new_flows_per_sender)
         return flows_per_sender
 
-
 if __name__ == "__main__":
 
     # Get the TGParser
@@ -339,69 +338,4 @@ if __name__ == "__main__":
                                     totalTime=args.time,
                                     timeStep=args.time_step)
 
-    # Start counting time
-    t = time.time()
-    if args.terminate:
-        print "Terminating ongoing traffic!"
-        tgf.terminateTrafficAtHosts()
-
-    else:
-        # Check if flow file has been given
-        if not args.flows_file:
-
-            # If traffic must be loaded
-            if args.load_traffic:
-                msg = "Loading traffic from file <- {0}"
-                print msg.format(args.load_traffic)
-
-                # Fetch traffic from file
-                traffic = pickle.load(open(args.load_traffic, "r"))
-
-                # Convert hostnames to current ips
-                traffic = tgf.changeTrafficHostnamesToIps(traffic)
-
-            else:
-                # Generate traffic
-                traffic = tgf.plan_flows()
-
-                print "Generating traffic"
-                # msg = "Generating traffic\n\tArguments: {0}\n\t"
-                # print msg.format(args)
-
-                # If it must be saved
-                if args.save_traffic:
-                    if not args.file_name:
-                        filename = tgf.get_filename()
-                    else:
-                        filename = args.file_name
-
-                    # Log it
-                    msg = "Saving traffic file -> {0}"
-                    print msg.format(filename)
-
-                    # Convert current ip's to hostnames
-                    traffic_to_save = tgf.changeTrafficIpsToHostnames(traffic)
-
-                    with open(filename, "w") as f:
-                        pickle.dump(traffic_to_save, f)
-
-            # Orchestrate the traffic (either loaded or generated)
-            print "Scheduling traffic..."
-            tgf.schedule(traffic, add=args.addtc)
-
-        # Flow file has been given
-        else:
-            print "Scheduling flows specified in {0}".format(args.flows_file)
-            # Generate traffic from flows file
-            traffic = tgf.plan_from_flows_file(args.flows_file)
-
-            # Schedule it
-            tgf.schedule(traffic, add=args.addtc)
-
-    print "Elapsed time ", time.time() - t
-
-# Example commandline call:
-# python udpTrafficGenerator2.py --pattern bijection --mice_rate 0.25 --elephant_rate 1 --time 50 --save_traffic
-# python udpTrafficGenerator2.py --terminate
-# python udpTrafficGenerator2.py --load_traffic saved_traffic/
-# python udpTrafficGenerator2.py --flows_file file.txt
+    tgfparser.runArguments(tgf, args)

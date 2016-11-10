@@ -18,9 +18,11 @@ import logging
 from fibte.logger import log
 
 import os
-
+import signal
+import sys
 
 throughput_folder = os.path.join(os.path.dirname(__file__), 'results/throughput/')
+
 
 class GetLoads(object):
     def __init__(self, k=4, time_interval=1, lb_algorithm=None):
@@ -56,6 +58,14 @@ class GetLoads(object):
 
         # Create the dictionary to store temporary aggregation loads
         self.aggregation_loads = self.createAggregationLoads()
+
+        signal.signal(signal.SIGTERM, self.signal_term_handler)
+
+    def signal_term_handler(self, signal, frame):
+        log.info('got SIGTERM - getLoads thread is exiting!')
+        self.agg_file.flush()
+        self.in_out_file.flush()
+        sys.exit(0)
 
     def createAggregationLoads(self):
         d = {}
@@ -111,31 +121,12 @@ class GetLoads(object):
         Reads Incoming and Outgoing traffic to/from hosts
         """
         # Get all hosts incoming traffic
-        in_traffic = sum({x: y for x, y in self.link_loads.items() if "ovs" in x[0]}.values())
+        in_traffic = sum({x: y for x, y in self.link_loads.items() if "h" in x[0]}.values())
 
         # Get all hosts outgoing traffic
-        out_traffic = sum({x: y for x, y in self.link_loads.items() if "ovs" in x[1]}.values())
+        out_traffic = sum({x: y for x, y in self.link_loads.items() if "h" in x[1]}.values())
 
         return in_traffic, out_traffic
-
-    def getBisectionTraffic(self):
-        """
-        Calculates average bisection bandwidth
-        """
-        # Get aggregation routers
-        aggregationRouters = set(self.topology.getAggregationRouters())
-
-        # Get core routers
-        coreRouters = set(self.topology.getCoreRouters())
-
-        # Get only bisection edges -- only upwards
-        bisectionEdges = [(a, b, load) for (a, b), load in self.link_loads.iteritems()
-                          if (a in aggregationRouters and b in coreRouters)]
-
-        # Compute bisection bandwdith
-        bisectionBandwidth = sum([load for (_,_,load) in bisectionEdges])
-
-        return bisectionBandwidth
 
     def getAggregationTraffic(self):
         # Make a copy
@@ -165,7 +156,8 @@ class GetLoads(object):
         interval = self.time_interval
 
         # File for aggregation traffic
-        agg_file = open("{1}bb_{0}_{2}.txt".format(self.k, throughput_folder, self.lb_algorithm), "w")
+        self.agg_file = open("{1}bb_{0}_{2}.txt".format(self.k, throughput_folder, self.lb_algorithm), "w")
+        self.in_out_file = open("{1}in_out_{0}_{2}.txt".format(self.k, throughput_folder, self.lb_algorithm), "w")
 
         while True:
             try:
@@ -177,34 +169,43 @@ class GetLoads(object):
 
                 # Fill loads of the router edges into link_loads
                 self.topology.routerUsageToLinksLoad(self.readLoads(), self.link_loads)
-
-                # Print
-                try:
-                    # Save all link loads
-                    with open("{1}getLoads_linkLoad_{0}".format(self.k, throughput_folder), "w") as f:
-                        pickle.dump(self.link_loads, f)
-
-                    # Get aggreagation traffic
-                    aggTraffic = self.getAggregationTraffic()
-
-                    # Save aggregation traffic in a file
-                    agg_file.write("{0}\n".format(json.dumps(aggTraffic)))
-                    agg_file.flush()
-
-                except Exception as e:
-                    log.error("Error in run(): {0}".format(e))
-                    break
-
-            except KeyboardInterrupt:
-                log.info("KeyboardInterrupt catched! Shutting down...")
-                agg_file.flush()
+            except KeyboardInterrupt as e:
+                log.exception("Exception catched in run(): {0}".format(e))
                 break
 
-            i += 1
-            #print time.time() - now
+            # Print
+            try:
+                # Save all link loads
+                with open("{1}getLoads_linkLoad_{0}".format(self.k, throughput_folder), "w") as f:
+                    pickle.dump(self.link_loads, f)
+
+                # Get aggreagation traffic
+                aggTraffic = self.getAggregationTraffic()
+                intf, outtf = self.getInOutTraffic()
+
+                # Save aggregation traffic in a file
+                self.agg_file.write("{0}\n".format(json.dumps(aggTraffic)))
+                self.agg_file.flush()
+
+                self.in_out_file.write("{0}\t{1}\n".format(intf, outtf))
+                self.in_out_file.flush()
+
+            except Exception as e:
+                log.exception("Exception catched in run(): {0}".format(e))
+                self.agg_file.flush()
+                self.in_out_file.flush()
+                break
+
+            else:
+                # Incement counter
+                i += 1
+
+        # Leave
+        return
 
 if __name__ == "__main__":
     import argparse
+    import sys
     parser = argparse.ArgumentParser()
     # group = parser.add_mutually_exclusive_group()
 
@@ -218,3 +219,4 @@ if __name__ == "__main__":
 
     gl = GetLoads(k=args.k, time_interval=args.time_interval, lb_algorithm=args.algorithm)
     gl.run()
+    sys.exit()

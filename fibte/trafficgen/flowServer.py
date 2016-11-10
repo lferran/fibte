@@ -73,7 +73,6 @@ class FlowServer(object):
 
         # Flow generation start time
         self.starttime = 0
-        self.received_starttime = False
 
         # Create the scheduler instance and run it in a separate process
         self.scheduler = sched.scheduler(time.time, my_sleep)
@@ -297,23 +296,6 @@ class FlowServer(object):
 
             # Add size of flow to
             self.increaseMiceLoad(flow)
-    # Not used now
-    # def stopFlow(self, flow):
-    #     """
-    #     Stop flow
-    #     """
-    #     if isElephant(flow):
-    #         size = self.base.setSizeToStr(flow['size'])
-    #         dst = self.namesToIps['ipToName'][flow['dst']]
-    #         log.debug("{0} : Flow is STOPPING: to {1} {2}".format(self.name, dst, size))
-    #         process = Process(target=flowGenerator.stopFlowNotifyController, kwargs=flow)
-    #         process.daemon = True
-    #         process.start()
-    #
-    #     # if is mice
-    #     else:
-    #         # Remove size of flow
-    #         self.decreaseMiceLoad(flow)
 
     def remoteStartReceiveTCP(self, dst, dport):
         """"""
@@ -349,7 +331,7 @@ class FlowServer(object):
         # Start netcat process that listens on port
         process = subprocess.Popen(["nc", "-l", "-p", str(dport)], stdout=open(os.devnull, "w"))
         self.popens.append(process)
-        log.debug("{0} : Started TCP server at port {1}".format(self.name, dport))
+        log.info("{0} : Started TCP server at port {1}".format(self.name, dport))
 
     def increaseMiceLoad(self, flow):
         """"""
@@ -485,15 +467,10 @@ class FlowServer(object):
         # the scheduler process is terminated!
 
         # Cancel all upcoming scheduler events
-        #log.info("{0} : Canceling scheduler events".format(self.name))
         action = [self.scheduler.cancel(e) for e in self.scheduler.queue]
 
-        #log.info("{0} : Terminating old scheduler thread".format(self.name))
-        self.scheduler_thread.join()
-
-        # Create a new instance of the process
-        #log.info("{0} : Creating new scheduler process".format(self.name))
-        self.scheduler_thread = Thread(target=self.scheduler.run)
+        # Restart thread
+        self._restartSchedulerThread()
 
         # Terminate netcat processes
         #log.info("{0} : Killing all ongoing processes".format(self.name))
@@ -526,10 +503,6 @@ class FlowServer(object):
 
         self.controllerNotFoundCount = 0
 
-        # Start scheduler process
-        #log.info("{0} : Starting scheduler thread again".format(self.name))
-        self.scheduler_thread.start()
-
     def waitForTrafficToFinish(self):
         """
         Scheuler waits for flows to finish and then terminates the run of
@@ -554,7 +527,7 @@ class FlowServer(object):
         mice_thread.start()
 
     def scheduleFlowList(self, flowlist):
-        """Assumes flowlist and startime have been received"""
+        """Schedules a list of flows to start"""
 
         # Keep track of elephant|mice count
         flow_count = {'elephant': 0, 'mice': 0}
@@ -567,7 +540,7 @@ class FlowServer(object):
                 flow['dst'] = get_secondary_ip(flow['dst'])
 
             # Get start time with lower bound
-            starttime = max(2, flow.get('start_time'))
+            starttime = max(0, flow.get('start_time'))
 
             # Schedule startFlow
             self.scheduler.enter(starttime, 1, self.startFlow, [flow])
@@ -582,13 +555,17 @@ class FlowServer(object):
         log.debug("{0} : All flows were scheduled!".format(self.name))
         log.debug("{0} : {1} Mice | {2} Elephant".format(self.name, flow_count['mice'], flow_count['elephant']))
 
+        # Start schedule.run()
+        self.startSchedulerThread()
+
     def scheduleReceiveList(self, receivelist):
-        """"""
+        """Schedules a list of flow receivers to start"""
+        # Time in advance for which we start the receiver before the sender starts
         BUFFER_TIME = 3
 
         # Iterate flowlist
         for (flowtime, dport) in receivelist:
-            receivertime = max(0.1, flowtime - BUFFER_TIME)
+            receivertime = max(0, flowtime - BUFFER_TIME)
 
             # Schedule the start of the TCP server too
             self.scheduler.enter(receivertime, 1, self.localStartReceiveTCP, [dport])
@@ -596,6 +573,47 @@ class FlowServer(object):
 
         log.debug("{0} : All TCP flow servers were scheduled!".format(self.name))
         log.debug("{0} : Will receive a total of {1} TCP flows".format(self.name, len(receivelist)))
+
+        # Start schedule.run()
+        self.startSchedulerThread()
+
+    def startSchedulerThread(self):
+        """Starts the action of schedulerThread making sure that the queued
+        events will be executed!"""
+        if not self.scheduler.queue:
+            log.warning("No events in the queue: doing nothing...")
+            return
+
+        if self.scheduler_thread.is_alive():
+            #log.info("Scheduler thread is already alive!: doing nothing...")
+            return
+
+        try:
+            self.scheduler_thread.start()
+        except:
+            #log.warning("Scheduler thread finished: restarting it!")
+            self._restartSchedulerThread()
+            self.scheduler_thread.start()
+            return
+        else:
+            #log.info("Scheduler thread successfully started!")
+            pass
+
+    def _restartSchedulerThread(self):
+        """Joins the previous scheduler thread and creates a new instance
+        so that self.scheduler.run can be called again!
+        """
+        try:
+            #log.info("Joining previous thread...")
+            st = time.time()
+            self.scheduler_thread.join()
+            log.info("It took {0}s".format(time.time() - st))
+        except RuntimeError:
+            #log.warning("Thread wasn't previously started -> we can't join it")
+            pass
+        finally:
+            self.scheduler_thread = Thread(target=self.scheduler.run, name="Scheduler Thread")
+            self.scheduler_thread.setDaemon(True)
 
     def run(self):
         log.info("{0} : flowServer started!".format(self.name))
@@ -608,13 +626,6 @@ class FlowServer(object):
             # Schedule notify mice loads
             self.scheduleNotifyMiceLoads()
             self.scheduleMiceSamplings()
-
-        # Start variables
-        self.received_starttime = False
-        self.starttime_set = False
-
-        # Run scheduler in another thread
-        self.scheduler_thread.start()
 
         # Loop forever
         while True:
@@ -629,11 +640,6 @@ class FlowServer(object):
                         # Schedule flows relative to current time
                         log.debug("{0} : Flow_list arrived".format(self.name))
                         self.scheduleFlowList(flowlist=flowlist)
-                        try:
-                            self.scheduler_thread.start()
-                        except:
-                            self.scheduler_thread = Thread(target=self.scheduler.run)
-                            self.scheduler_thread.start()
 
                 elif event['type'] == "receivelist":
                     receivelist = event['data']

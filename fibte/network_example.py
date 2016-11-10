@@ -83,7 +83,6 @@ class TestTopo2(IPTopo):
         c1 = self.addController(cfg.C1, cfg_path=cfg.C1_cfg)
         self.addLink(c1, r1, cost=1000)
 
-
 class TestTopo3(IPTopo):
     def build(self, *args, **kwargs):
         """
@@ -133,6 +132,10 @@ def launch_network(k=4, bw=10, ip_alias=False):
     cleanup()
     sh("killall ospfd zebra getLoads.py nc")
 
+    # Remove tmp files and old namespaces
+    subprocess.call(['rm', '/tmp/*.log', '/tmp/*.pid', '/tmp/mice*'])
+    subprocess.call(['rm', '/var/run/netns/*'])
+
     # Flush root namespace mangle table
     subprocess.call(["iptables", "-t", "mangle" ,"-F"])
     subprocess.call(["iptables", "-t", "mangle" ,"-X"])
@@ -166,9 +169,8 @@ def launch_network(k=4, bw=10, ip_alias=False):
         # Start flowServers
         #h.cmd(command.format(h.name))
         #print(h.name)
-
     if ip_alias == True:
-        print('*** Setting up ip alias for elephant traffic - alias identifier: .222')
+        print('*** Setting up secondary ip / alias for elephant traffic - alias identifier: .222')
         for h in net.hosts:
             # Setup alias at host h
             setup_alias(h)

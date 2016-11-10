@@ -150,6 +150,7 @@ def sendFlowTCP(dst="10.0.32.3", sport=5000, dport=5001, size=None, rate=None, d
             time_step_s = 1
             # While still some data to send
             while (totalSize > minSizeTCP):
+                #print "Sending a bit more..."
                 # Compute data to send next second
                 rate = min(rate, totalSize - minSizeUDP)
                 # Send it
@@ -162,6 +163,7 @@ def sendFlowTCP(dst="10.0.32.3", sport=5000, dport=5001, size=None, rate=None, d
                 next_send_time = startTime + i * time_step_s
                 # Sleep
                 time.sleep(max(0, next_send_time - time.time()))
+            #print "Finished sending!"
 
         else:
             print "Wrong arguments!"
@@ -175,6 +177,7 @@ def sendFlowTCP(dst="10.0.32.3", sport=5000, dport=5001, size=None, rate=None, d
 
     finally:
         s.close()
+        #print "Finishing flow gracefully"
         return True
 
 def recvFlowTCP(dport=5001):
@@ -282,6 +285,7 @@ def _sendFlow(notify=False, **flow):
 
     # Take the time
     now  = time.time()
+    successful = False
 
     # Notify controller first (if needed)
     if notify:
@@ -314,6 +318,9 @@ def _sendFlow(notify=False, **flow):
         finally:
             # Close socket
             client.close()
+
+    if not successful:
+        log.warning("Flow didn't finish successfully!")
 
     return successful
 
@@ -357,7 +364,6 @@ def sendMiceFlow(client=None, server=None, **flow):
         # Close the client
         client.close()
 
-
     # Exit the function gracefully
     sys.exit(0)
 
@@ -366,7 +372,7 @@ def sendElephantFlow(**flow):
 
     # Write starting time
     if flow['proto'] == 'TCP':
-        writeStartingTime(flow)
+        filename = writeStartingTime(flow)
 
     # Call internal function
     successful = _sendFlow(notify=True, **flow)

@@ -2,7 +2,7 @@
 # FLOWS THAT WILL BE STARTED HERE #####################################################
 
 #src	sport	dst	dport	proto	start	size	rate	duration ######
-h_0_0	7111	h_3_1	2211	UDP	0:0:02	9.5M	9.5M	0:20:00
+#h_0_0	7111	h_3_1	2211	UDP	0:0:02	9.5M	9.5M	0:20:00
 
 
 
@@ -38,7 +38,8 @@ h_0_0	7111	h_3_1	2211	UDP	0:0:02	9.5M	9.5M	0:20:00
 #########################
 # Some TCP flows ##############################################################################
 #src	sport	dst	dport	proto	start	size	rate	duration ######
-#h_0_0	7582	h_3_3	5554	TCP	0:0:00	10M	2M	None
+h_0_0	7582	h_3_3	5554	TCP	0:0:00	100M	10M	None
+
 # Rate-limited TCP flow that tries to send size bytes of data. It will last at least: size/rate
 
 #src	sport	dst	dport	proto	start	size	rate	duration ######
