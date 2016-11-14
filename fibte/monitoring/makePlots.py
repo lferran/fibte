@@ -26,12 +26,12 @@ class AlgorithmsComparator(object):
 
     def extractAlgoNameFromFilename(self, filename):
         if 'ecmp' in filename:
-            return 'ecmp'
+            return 'ECMP'
         elif 'elephant-dag-shifter' in filename:
             if 'True' in filename:
-                return 'elephant-dag-shifter-sample'
+                return 'Elephant-DAG-Shifter-Sample'
             else:
-                return 'elephant-dag-shifter-best'
+                return 'Elephant-DAG-Shifter-Best'
         elif 'mice-dag-shifter' in filename:
             return 'mice-dag-shifter-best'
 

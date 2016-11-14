@@ -532,7 +532,7 @@ class udpTrafficGeneratorBase(Base):
             log.info("Adding flows to the current traffic")
 
         # Set sync. delay
-        INITIAL_DELAY = 5
+        INITIAL_DELAY = 10
 
         # Add initial delay to all flows
         traffic_per_host = self.addInitialDelay(traffic_per_host, INITIAL_DELAY)

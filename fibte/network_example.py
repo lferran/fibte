@@ -159,7 +159,7 @@ def launch_network(k=4, bw=10, ip_alias=False):
     # Start the network
     net.start()
 
-    print('*** Starting Flow Servers in virtualized hosts')
+    #print('*** Starting Flow Servers in virtualized hosts')
 
     # Check first if ip_alias is active
     if ip_alias: command = flowServer_path + " {0} --ip_alias &"

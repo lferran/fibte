@@ -561,7 +561,7 @@ class FlowServer(object):
     def scheduleReceiveList(self, receivelist):
         """Schedules a list of flow receivers to start"""
         # Time in advance for which we start the receiver before the sender starts
-        BUFFER_TIME = 3
+        BUFFER_TIME = 6
 
         # Iterate flowlist
         for (flowtime, dport) in receivelist:

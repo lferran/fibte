@@ -129,7 +129,7 @@ class LBController(object):
 
         # Start getLoads thread that reads from counters
         in_out_name = self._getAlgorithmName() # Get the name of the GetLoads result file
-        self.gl = GetLoads(k=self.k, time_interval=1, lb_algorithm=self.algorithm)
+        self.gl = GetLoads(k=self.k, time_interval=1, lb_algorithm=in_out_name)
         self.gl_thread = Thread(target=self.gl.run, name="GetLoads thread")
         self.gl_thread.setDaemon(True)
         self.gl_thread.start()
@@ -1759,7 +1759,6 @@ class ElephantDAGShifter(LBController):
 
 
 
-
 if __name__ == '__main__':
     from fibte.logger import log
     import logging
@@ -1795,9 +1794,6 @@ if __name__ == '__main__':
         log.info("Capacity threshold: {0}".format(args.cap_threshold))
         log.info("Max congestion probability: {0}".format(args.cong_prob))
         log.info("Sample on DAGs? {0}".format(args.sample))
-
-    if args.test == True:
-        lb = TestController()
 
     elif args.algorithm == 'ecmp':
         lb = ECMPController(doBalance = args.doBalance, k=args.k)

@@ -320,7 +320,7 @@ def _sendFlow(notify=False, **flow):
             client.close()
 
     if not successful:
-        log.warning("Flow didn't finish successfully!")
+        log.error("Flow didn't finish successfully!")
 
     return successful
 
