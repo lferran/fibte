@@ -149,7 +149,10 @@ class SendLoads(object):
             except socket.error:
                 # Try to reconnect again
                 try:
+                    in_traffic, out_traffic = self.getInOutTraffic()
+                    print "in traffic:", in_traffic, "out traffic: ", out_traffic
                     print "Trying to connect with the server again"
+
                     self.handShake()
                 except:
                     pass
