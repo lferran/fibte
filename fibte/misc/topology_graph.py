@@ -561,11 +561,15 @@ class TopologyGraph(TopologyDB):
                     if 'sit' not in interface:
                         # Extract mac of that interface
                         mac = 0
+                        neigh = 0
                         for neighbor, ifdata in self.network[router].iteritems():
                             if isinstance(ifdata, dict) and 'name' in ifdata:
                                 if ifdata['name'] == interface:
                                     mac = ifdata['mac']
-                        tmp_dict[mac] = {'ifname': interface, 'ifindex': nameToIfindex[interface]}
+                                    neigh = neighbor
+                                    break
+
+                        tmp_dict[mac] = {'ifname': interface, 'ifindex': nameToIfindex[interface], 'connectedTo': neigh}
 
             # If we dont use ifindexes
             else:
@@ -577,12 +581,13 @@ class TopologyGraph(TopologyDB):
 
                     # Extract mac of that interface
                     mac = 0
+                    neigh = 0
                     for neighbor, ifdata in self.network[router].iteritems():
                         if isinstance(ifdata, dict) and 'name' in ifdata:
-                            if ifdata['name'] == interface:
-                                mac = ifdata['mac']
-
-                    tmp_dict[mac] = {'ifname': interface}
+                            mac = ifdata['mac']
+                            ifname = ifdata['name']
+                            neigh = neighbor
+                            tmp_dict[mac] = {'ifname': ifname, 'connectedTo': neigh}
 
             self.routersInterfaces[routerId] = tmp_dict
 
@@ -644,26 +649,35 @@ class TopologyGraph(TopologyDB):
             # For every router interface
             routerId = self.routerid(router)
             for intfData in self.routersInterfaces[routerId].values():
+                ifname = intfData.get('ifname')
+                connectedTo = intfData.get('connectedTo')
                 if isEdge:
                      # Using /proc/net/dev
-                     if routersUsage[router]["out"].has_key(intfData["ifname"]):
-                         link_loads[(router, self.network[router][intfData["ifname"]]["connectedTo"])] = round(routersUsage[router]["out"][intfData['ifname']], 3)
+                     if routersUsage[router]["out"].has_key(ifname):
+                         outload = round(routersUsage[router]["out"][ifname], 3)
+                         link_loads[(router, connectedTo)] = outload
 
-                         if self.network[self.network[router][intfData["ifname"]]["connectedTo"]]["type"] == "host":
-                             link_loads[(self.network[router][intfData["ifname"]]["connectedTo"], router)] = round(routersUsage[router]["in"][intfData['ifname']], 3)
+                     if self.type(connectedTo) == "host":
+                         inload = round(routersUsage[router]["in"][ifname], 3)
+                         link_loads[(connectedTo, router)] = inload
 
                 elif isAggr:
                     # Using /proc/net/dev
-                    if routersUsage[router]["out"].has_key(intfData["ifname"]):
-                        link_loads[(router, self.network[router][intfData["ifname"]]["connectedTo"])] = round(routersUsage[router]["out"][intfData['ifname']], 3)
-                    if routersUsage[router]["in"].has_key(intfData["ifname"]):
-                        link_loads[(self.network[router][intfData["ifname"]]["connectedTo"], router)] = round(routersUsage[router]["in"][intfData['ifname']], 3)
+                    if routersUsage[router]["out"].has_key(ifname):
+                        outload = round(routersUsage[router]["out"][ifname], 3)
+                        link_loads[(router, connectedTo)] = outload
+
+                    if routersUsage[router]["in"].has_key(ifname):
+                        inload = round(routersUsage[router]["in"][ifname], 3)
+                        link_loads[(connectedTo, router)] = inload
+
                 else:
                     # Only for countersDev class
-                    if routersUsage[router]["out"].has_key(intfData["ifname"]):
+                    if routersUsage[router]["out"].has_key(ifname):
                         # Avoid adding fibbing controller here
-                        if self.network[router][intfData["ifname"]]['connectedTo'] != 'c1':
-                            link_loads[(router, self.network[router][intfData["ifname"]]["connectedTo"])] = round(routersUsage[router]["out"][intfData['ifname']], 3)
+                        if connectedTo != 'c1':
+                            outload = round(routersUsage[router]["out"][ifname], 3)
+                            link_loads[(router, connectedTo)] = outload
 
     def isEdgeRouter(self, router):
         """
