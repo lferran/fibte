@@ -4,7 +4,6 @@ import subprocess
 import time
 import json
 import os
-from fibte.misc.topology_graph import TopologyGraph
 
 from countersDev import IfDescr, CountersDev
 
@@ -22,8 +21,6 @@ credit: Edgar Costa - edgarcosta@hotmail.es
 
 def collectCounters(name='h_0_0', interval=1.1):
     try:
-        #topology = TopologyGraph(getIfindexes=False,db=os.path.join(tmp_files,db_topo))
-
         #THIS WAS DONE USING THE TOPOLOGY TO KNOW IF THE ROUTER IS EDGE, HOWEVER AT TIME OF CALLING THIS FUNCTION
         #THE TOPOLOGY IS NOT READY SO WE CAN NOT RELAY ON THIS OBJECT, UNLESS WE CALL THIS SCRIPT LATER ON THE MAIN
         #SCRIPT. SINCE NOW IS NOT THAT IMPORTANT I WILL CHANGE THAT AND JUST CHECK IF THE ROUTER NAME CONTAINS AN E

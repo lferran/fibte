@@ -624,6 +624,7 @@ if __name__ == "__main__":
             if not args.experiment:
                 print "Experiment folder needed!"
                 experiment_folder = raw_input('*** Introduce experiment folder [experiment1]: ') or 'experiment1'
+
             else:
                 experiment_folder = args.experiment
 

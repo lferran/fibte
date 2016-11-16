@@ -17,9 +17,7 @@ credit to: Edgar Costa - edgarcosta@hotmail.es
 
 
 class IfDescr(object):
-
     def __init__(self):
-
         # Holds the mappings between interface names and interface indexes
         self.ifindexMapping = {}
 
@@ -74,7 +72,6 @@ class IfDescr(object):
 
 
 class CountersDev(object):
-
     def __init__(self,interfaces = [], isEdge = True, isAggr = True):
 
         # Interfaces for which we want to keep track of the counters
