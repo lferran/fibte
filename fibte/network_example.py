@@ -9,6 +9,7 @@ from fibbingnode.misc.mininetlib.iptopo import IPTopo
 from fibbingnode.algorithms.southbound_interface import SouthboundManager
 from fibbingnode.algorithms.ospf_simple import OSPFSimple
 import fibbingnode.misc.mininetlib as _lib
+from fibbingnode.misc.utils import read_pid, del_file
 
 from mininet.clean import cleanup, sh
 from mininet.util import custom
@@ -18,7 +19,7 @@ from fibte.fattree import FatTree, FatTreeOOB
 from fibte.misc.DCTCInterface import DCTCIntf
 from fibte.misc.ipalias import setup_alias
 import fibte.res.config as cfg
-from fibte import flowServer_path
+from fibte import counterCollector_path, ifDescrNamespace_path, tmp_files
 
 def signal_term_handler(signal, frame):
     import sys
@@ -125,6 +126,40 @@ class TestTopo3(IPTopo):
         c1 = self.addController(cfg.C1, cfg_path=cfg.C1_cfg)
         self.addLink(c1, r1, cost=1000)
 
+
+def startCounterCollectors(topo, interval=1):
+    """"""
+    print("*** Starting counterCollectors")
+
+    cc_cmd = "mx {0} {2} -n {0} -t {1} &"
+    for rid in topo.routers():
+        subprocess.call(cc_cmd.format(rid, interval, counterCollector_path), shell=True)
+
+        # store interfaces information
+        path = tmp_files + "ifDescr_{0}".format(rid)
+        subprocess.call([ifDescrNamespace_path, path, "&"])
+
+def stopCounterCollectors(topo):
+    """"""
+    print("*** Stopping counterCollectors")
+
+    for rid in topo.routers():
+        # Stop counters process
+        pid = read_pid("/tmp/load_{0}.pid".format(rid))
+
+        if pid:
+            subprocess.call(['kill', '-9', pid])
+
+        # Erase load writen by the process
+        del_file("/tmp/load_{0}.pid".format(rid))
+        del_file("/tmp/load_{0}".format(rid))
+        del_file("/tmp/load_{0}_tmp".format(rid))
+
+        # Delete ifDescript file
+        path = "/tmp/ifDescr_{0}".format(rid)
+        del_file(path)
+
+
 def launch_network(k=4, bw=10, ip_alias=False):
     signal.signal(signal.SIGTERM, signal_term_handler)
 
@@ -159,35 +194,19 @@ def launch_network(k=4, bw=10, ip_alias=False):
     # Start the network
     net.start()
 
-    #print('*** Starting Flow Servers in virtualized hosts')
+    startCounterCollectors(topo, interval=1)
 
-    # Check first if ip_alias is active
-    if ip_alias: command = flowServer_path + " {0} --ip_alias &"
-    else: command = flowServer_path + " {0} &"
-
-    #for h in net.hosts:
-        # Start flowServers
-        #h.cmd(command.format(h.name))
-        #print(h.name)
-    if ip_alias == True:
-        print('*** Setting up secondary ip / alias for elephant traffic - alias identifier: .222')
-        for h in net.hosts:
-            # Setup alias at host h
-            setup_alias(h)
-            
     # Start the Fibbing CLI
     FibbingCLI(net)
 
     net.stop()
 
+    stopCounterCollectors(topo)
+
 def launch_controller():
     CFG.read(cfg.C1_cfg)
     db = TopologyDB(db=cfg.DB_path)
     manager = SouthboundManager(optimizer=OSPFSimple())
-    #manager.simple_path_requirement(db.subnet(R3, D1), [db.routerid(r)
-    #                                                    for r in (R1, R2, R3)])
-    #manager.simple_path_requirement(db.subnet(R3, D2), [db.routerid(r)
-    #                                                 for r in (R1, R4, R3)])
     try:
         manager.run()
     except KeyboardInterrupt:
