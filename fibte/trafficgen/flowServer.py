@@ -7,6 +7,7 @@ import signal
 import sched
 import time
 import sys
+import random
 import traceback
 import logging
 import Queue
@@ -38,24 +39,26 @@ import select
 def my_sleep(seconds):
     select.select([], [], [], seconds)
 
-class Joiner(Thread):
-    def __init__(self, q):
-        super(Joiner,self).__init__()
-        self.__q = q
-    def run(self):
-        while True:
-            child = self.__q.get()
-            if child == None:
-                return
-            child.join()
-
 class FlowServer(object):
-    def __init__(self, name, ip_alias=False, sampling_rate=1, notify_period=10):
-        # Setup flowServer name
+    def __init__(self, name, own_ip, ip_alias=False, sampling_rate=1, notify_period=10):
+        # Setup flowServer name and ip
         self.name = name
+        self.ip = own_ip
 
         # Get parent pid
         self.parentPid = os.getpid()
+
+        # Setup logs
+        self.setup_logging()
+
+        # Configure sigterm handler
+        signal.signal(signal.SIGTERM, self.signal_term_handler)
+
+        # Setup black hole
+        self.setupUDPBlackHole()
+
+        # Reset ICMP ratelimit
+        self.setICMPRateLimit()
 
         # Accumulate processes for TCP servers
         self.popens = []
@@ -116,16 +119,10 @@ class FlowServer(object):
         # Start count of wrong notifications
         self.controllerNotFoundCount = 0
 
-        # start joiner
-        self.queue = Queue.Queue(maxsize=0)
-        joiner = Joiner(self.queue)
-        joiner.setDaemon(True)
-        joiner.start()
+        # Keeps track of how many TCP receivers must start for this session
+        self.tcpReceiversToStart = 0
+        self.tcpLock = Lock()
 
-        # Configure sigterm handler
-        signal.signal(signal.SIGTERM, self.signal_term_handler)
-
-        self.setup_logging()
 
     def miceCounterServer(self):
         """Thread that keeps track of the mice level observed by the host"""
@@ -147,13 +144,35 @@ class FlowServer(object):
     def setup_logging(self):
         """"""
         mlog = multiprocessing.get_logger()
-        handler = logging.FileHandler(filename='/tmp/flowServer_{0}.log'.format(self.name))
+        self.logfile = '/tmp/flowServer_{0}.log'.format(self.name)
+        handler = logging.FileHandler(filename=self.logfile)
         fmt = logging.Formatter('[%(levelname)20s] %(asctime)s %(funcName)s: %(message)s ')
         handler.setFormatter(fmt)
         log.addHandler(handler)
         log.setLevel(logging.DEBUG)
         mlog.addHandler(handler)
         mlog.setLevel(logging.DEBUG)
+
+    def setupUDPBlackHole(self):
+        """Starts blackhole at the mininet host"""
+        # Check first if rule already exists
+        s = subprocess.Popen(["iptables-save"], stdout=subprocess.PIPE)
+        out, err = s.communicate()
+        out = out.split('\n')
+        #import ipdb; ipdb.set_trace()
+        already_there = any([True for line in out if 'udp' in line and 'DROP' in line])
+        if not already_there:
+            # It means it doesn't exist, so we have to set it!
+            log.info("Setting up UDP black hole!")
+            cmd = "iptables -A INPUT -s {0} -p udp -j DROP".format(self.ip)
+            subprocess.call(cmd, shell=True)
+        else:
+            log.info("UDP black hole already up!")
+
+    def setICMPRateLimit(self):
+        # Modify icmp ratelimit too
+        subprocess.call(['sysctl', '-w', 'net.ipv4.icmp_ratelimit=0'])
+
 
     def signal_term_handler(self, signal, frame):
         # Only parent will do this
@@ -165,7 +184,6 @@ class FlowServer(object):
                 log.info("{0} : Terminating pid: {1}".format(self.name, process))
                 process.terminate()
             sys.exit(0)
-
         else:
             log.info("{0} : Children exiting!".format(self.name))
             sys.exit(0)
@@ -211,9 +229,6 @@ class FlowServer(object):
 
         # Send the result back
         client.send(json.dumps(route_info), "")
-
-        # Log a bit
-        #print "Server {1}: time doing {2}-traceroute: {0} (trials: {3})".format(time.time() - now, self.name, traceroute_type, n_trials)
 
     def tracerouteServer(self):
         """
@@ -329,9 +344,11 @@ class FlowServer(object):
     def localStartReceiveTCP(self, dport):
         """"""
         # Start netcat process that listens on port
-        process = subprocess.Popen(["nc", "-l", "-p", str(dport)], stdout=open(os.devnull, "w"))
+        process = subprocess.Popen(["nc", "-l", "-p", str(dport)], stdout=open(os.devnull, 'w'), stderr=open(self.logfile, "a"))
         self.popens.append(process)
         log.info("{0} : Started TCP server at port {1}".format(self.name, dport))
+        with self.tcpLock:
+            self.tcpReceiversToStart -= 1
 
     def increaseMiceLoad(self, flow):
         """"""
@@ -503,6 +520,9 @@ class FlowServer(object):
 
         self.controllerNotFoundCount = 0
 
+        with self.tcpLock:
+            self.tcpReceiversToStart = 0
+
     def waitForTrafficToFinish(self):
         """
         Scheuler waits for flows to finish and then terminates the run of
@@ -561,7 +581,7 @@ class FlowServer(object):
     def scheduleReceiveList(self, receivelist):
         """Schedules a list of flow receivers to start"""
         # Time in advance for which we start the receiver before the sender starts
-        BUFFER_TIME = 6
+        BUFFER_TIME = 20
 
         # Iterate flowlist
         for (flowtime, dport) in receivelist:
@@ -573,6 +593,21 @@ class FlowServer(object):
 
         log.debug("{0} : All TCP flow servers were scheduled!".format(self.name))
         log.debug("{0} : Will receive a total of {1} TCP flows".format(self.name, len(receivelist)))
+
+        # Start schedule.run()
+        self.startSchedulerThread()
+
+    def scheduleReceiveList2(self, receivelist):
+        # Iterate flowlist
+        for (flowtime, dport) in receivelist:
+            # Schedule the start of the TCP server too
+            self.scheduler.enter(random.uniform(1, 15), 1, self.localStartReceiveTCP, [dport])
+
+        log.debug("{0} : All TCP flow servers were scheduled!".format(self.name))
+        log.debug("{0} : Will receive a total of {1} TCP flows".format(self.name, len(receivelist)))
+
+        with self.tcpLock:
+            self.tcpReceiversToStart += len(receivelist)
 
         # Start schedule.run()
         self.startSchedulerThread()
@@ -646,7 +681,12 @@ class FlowServer(object):
                     if receivelist:
                         # Schedule times at which we need to start TCP servers
                         log.debug("{0} : Receive_list arrived".format(self.name))
-                        self.scheduleReceiveList(receivelist)
+                        #self.scheduleReceiveList(receivelist)
+                        self.scheduleReceiveList2(receivelist)
+
+                elif event['type'] == 'startReceiver':
+                    port = event['data']
+                    self.localStartReceiveTCP(dport=port)
 
                 elif event["type"] == "terminate":
                     # Stop traffic during ongoing traffic
@@ -664,21 +704,19 @@ class FlowServer(object):
 
 if __name__ == "__main__":
     import os
+    import argparse
 
-    # Name of the flowServer is passed when called
-    if len(sys.argv) == 3 and sys.argv[2] == '--ip_alias':
-        name = sys.argv[1]
-        ip_alias = True
+    parser = argparse.ArgumentParser()
 
-    elif len(sys.argv) == 2:
-        name = sys.argv[1]
-        ip_alias = False
+    parser.add_argument('--name', help='flowServer name', type=str, required=True)
+    parser.add_argument('--own_ip', help='flowServer primary ip', type=str, required=True)
+    parser.add_argument('--ip_alias', help='Are aliases active for mice flows?', action='store_true', default=False)
 
-    else:
-        raise Exception("Wrong number of arguments")
+    args = parser.parse_args()
 
     # Store the pid of the process so we can stop it when we stop the network
-    with open("/tmp/flowServer_{0}.pid".format(name),"w") as f:
+    with open("/tmp/flowServer_{0}.pid".format(args.name), "w") as f:
         f.write(str(os.getpid()))
 
-    FlowServer(name, ip_alias=ip_alias).run()
+    # Start flowServer
+    FlowServer(args.name, args.own_ip, ip_alias=args.ip_alias).run()
