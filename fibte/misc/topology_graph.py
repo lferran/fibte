@@ -48,18 +48,15 @@ class NetworkGraph(object):
                 elif 'r_c' in node:
                     g.node[node]['core'] = True
 
-                for itf in topologyDB.network[node]:
+                for neighbor, ifdata in topologyDB.network[node].iteritems():
                     # we should ignore routerid, type.
                     # TODO have to find a better way to do this
-                    if itf in ["routerid", 'type', 'gateway']:
+                    if not isinstance(ifdata, dict):
                         continue
 
-                    # else itf its a real interface so we add an edge,
-                    # only if the connected node has been created.
-                    connectedTo = topologyDB._interface(node, itf)["connectedTo"]
-                    if connectedTo in g.nodes():
+                    if neighbor in g.nodes():
                         # add edge
-                        g.add_edge(node, connectedTo)
+                        g.add_edge(node, neighbor)
         return g
 
     def keepOnlyRouters(self):
@@ -219,19 +216,15 @@ class TopologyGraph(TopologyDB):
                 elif 'h_' in node:
                     g.node[node]['host'] = True
 
-                for itf in self.network[node]:
+                for neighbor, ifdata in self.network[node].iteritems():
                     # we should ignore routerid, type.
                     # TODO have to find a better way to do this
-                    if itf in ["routerid", 'type', 'gateway']:
+                    if not isinstance(ifdata, dict):
                         continue
 
-                    # else itf its a real interface so we add an edge,
-                    # only if the connected node has been created.
-                    connectedTo = self._interface(node, itf)["connectedTo"]
-
-                    if connectedTo in g.nodes():
+                    if neighbor in g.nodes():
                         # add edge
-                        g.add_edge(node, connectedTo)
+                        g.add_edge(node, neighbor)
         return g
 
     def fillHostGateways(self):
@@ -240,16 +233,17 @@ class TopologyGraph(TopologyDB):
         self.hostToGatewayMapping['gatewayToHosts'] = {}
         hosts = self.getHosts()
         for host, host_data in hosts.iteritems():
-            for iface, iface_data in host_data.iteritems():
-                if iface != 'type':
-                    connected_to = iface_data['connectedTo']
+            for neighbor, iface_data in host_data.iteritems():
+                if isinstance(iface_data, dict):
                     # Case in which intermediate switch is not there
-                    if self.type(connected_to) == 'router':
-                        gw = connected_to
-                    elif self.type(connected_to) == 'switch':
-                        gw = [data['connectedTo'] for _, data in self.network[connected_to].iteritems()
-                              if type(data) == dict and self.type(data['connectedTo']) == 'router'][0]
+                    if self.type(neighbor) == 'router':
+                        gw = neighbor
 
+                    elif self.type(neighbor) == 'switch':
+                        # Deal with the case where we have switches!
+                        raise ValueError
+                        #gw = [data['connectedTo'] for _, data in self.network[connected_to].iteritems()
+                        #      if type(data) == dict and self.type(data['connectedTo']) == 'router'][0]
                     iface_data['gateway'] = gw
                     self.hostToGatewayMapping['hostToGateway'][host] = gw
                     if gw not in self.hostToGatewayMapping['gatewayToHosts']:
@@ -424,8 +418,12 @@ class TopologyGraph(TopologyDB):
         self.hostsIpMapping["ipToName"] = {}
         self.hostsIpMapping["nameToIp"] = {}
         for host in hosts:
-            self.hostsIpMapping["ipToName"][(hosts[host]["%s-eth0"%(host)]["ip"]).split("/")[0]] = host
-            self.hostsIpMapping["nameToIp"][host] = (hosts[host]["%s-eth0" % (host)]["ip"]).split("/")[0]
+            for (connectedRouter, ifData) in hosts[host].iteritems():
+                if not isinstance(ifData, dict):
+                    continue
+                ip = ifData.get('ip').split('/')[0]
+                self.hostsIpMapping["ipToName"][ip] = host
+                self.hostsIpMapping["nameToIp"][host] = ip
 
     def routersIdMapping(self):
         self.routersIdMapping = {}
@@ -523,7 +521,6 @@ class TopologyGraph(TopologyDB):
         :param name:
         :return:
         """
-
         if name not in self.hostsIpMapping["nameToIp"]:
             raise ValueError("Any host of the network has the ip {0}".format(name))
 
@@ -538,6 +535,7 @@ class TopologyGraph(TopologyDB):
         to the dictionary so we can easliy do the mappings.
         :return:
         """
+
         # Holds the router interfaces names
         self.routersInterfaces = {}
 
@@ -561,17 +559,29 @@ class TopologyGraph(TopologyDB):
                 tmp_dict = {}
                 for interface in nameToIfindex:
                     if 'sit' not in interface:
-                        mac = self.network[router][interface]['mac']
+                        # Extract mac of that interface
+                        mac = 0
+                        for neighbor, ifdata in self.network[router].iteritems():
+                            if isinstance(ifdata, dict) and 'name' in ifdata:
+                                if ifdata['name'] == interface:
+                                    mac = ifdata['mac']
                         tmp_dict[mac] = {'ifname': interface, 'ifindex': nameToIfindex[interface]}
 
             # If we dont use ifindexes
             else:
                 tmp_dict = {}
-                for interface in self.network[router]:
+                for (neighbor, ifdata) in self.network[router].iteritems():
                     # This is a little bit ugly. Change it in the future if I have time
-                    if interface == "routerid" or "mon" in interface or interface == "type":
+                    if not isinstance(ifdata, dict):
                         continue
-                    mac = self.network[router][interface]['mac']
+
+                    # Extract mac of that interface
+                    mac = 0
+                    for neighbor, ifdata in self.network[router].iteritems():
+                        if isinstance(ifdata, dict) and 'name' in ifdata:
+                            if ifdata['name'] == interface:
+                                mac = ifdata['mac']
+
                     tmp_dict[mac] = {'ifname': interface}
 
             self.routersInterfaces[routerId] = tmp_dict
