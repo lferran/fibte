@@ -83,6 +83,7 @@ def sendFlowTCP(dst="10.0.32.3", sport=5000, dport=5001, size=None, rate=None, d
     s.bind(('', sport))
     try:
         reconnections = 4
+        time_to_wait = 0.3
         while reconnections:
             try:
                 s.connect((dst, dport))
@@ -90,7 +91,8 @@ def sendFlowTCP(dst="10.0.32.3", sport=5000, dport=5001, size=None, rate=None, d
             except:
                 reconnections -=1
                 print "Trying to reconnect... reconnections left {0}".format(reconnections)
-                time.sleep(0.5)
+                time.sleep(time_to_wait)
+                time_to_wait *= 2
 
         # Could not connect to the server
         if reconnections == 0:
@@ -321,6 +323,7 @@ def _sendFlow(notify=False, **flow):
 
     if not successful:
         log.error("Flow didn't finish successfully!")
+        print("Flow didn't finish successfully!")
 
     return successful
 
