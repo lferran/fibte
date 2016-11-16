@@ -239,8 +239,8 @@ class udpTrafficGeneratorBase(Base):
         # Flow duration ranges
         min_len_elephant = 20
         max_len_elephant = 50#500
-        min_len_mice = 2
-        max_len_mice = 10
+        min_len_mice = 0.2
+        max_len_mice = 6
 
         # flow is elephant
         if flow_type == 'e':
@@ -250,8 +250,12 @@ class udpTrafficGeneratorBase(Base):
         # flow is mice
         elif flow_type == 'm':
             # Draw flow duration
-            return random.uniform(min_len_mice, max_len_mice)
-
+            #return random.uniform(min_len_mice, max_len_mice)
+            mean = 4.0
+            ep = random.expovariate(1/mean)
+            while ep > max_len_mice:
+                ep = random.expovariate(1 / mean)
+            return ep
         else:
             raise ValueError("Unknown flow type: {0}".format(flow_type))
 
@@ -532,7 +536,7 @@ class udpTrafficGeneratorBase(Base):
             log.info("Adding flows to the current traffic")
 
         # Set sync. delay
-        INITIAL_DELAY = 10
+        INITIAL_DELAY = 15
 
         # Add initial delay to all flows
         traffic_per_host = self.addInitialDelay(traffic_per_host, INITIAL_DELAY)

@@ -42,6 +42,7 @@ class MiceEstimatorThread(threading.Thread):
 
         # Here we store the propagated mice loads
         self.propagated_mice_levels = self.caps_graph.copy()
+        self.propagated_mice_levels_2 = self.caps_graph.copy()
 
         # Number of samples to use
         self.samples = samples
@@ -62,6 +63,11 @@ class MiceEstimatorThread(threading.Thread):
         self.congestion_threshold = 0.95
 
         self.load_router_names()
+
+        # We assume that 20% of the link bandwidth accounts for mice flows.
+        # We assume that the mice traffic sent by a host is evenly distributed for all other destinations
+        self.mice_load = 0.2 * LINK_BANDWIDTH
+        self.avg_host_to_host_load = (self.mice_load) / ((self.k**3/4) - 1)
 
         # Set debug level
         #log.setLevel(logging.DEBUG)
@@ -303,6 +309,12 @@ class MiceEstimatorThread(threading.Thread):
         else:
             return 0
 
+    def get_link_mice_load2(self, src, dst):
+        if 'load' in self.propagated_mice_levels_2[src][dst].keys():
+            return self.propagated_mice_levels_2[src][dst]['load']
+        else:
+            return 0
+
     def get_remaining_elephant_capacity(self, src, dst):
         with self.caps_lock:
             return max(0, LINK_BANDWIDTH - self.caps_graph[src][dst]['elephants_capacity'])
@@ -315,7 +327,7 @@ class MiceEstimatorThread(threading.Thread):
         dests = self.get_prefixes_using_link(src, dst)
 
         # Get all load incoming to that link, directed to those destinations
-        mice_load = self.get_link_mice_load(src, dst)
+        mice_load = self.get_link_mice_load2(src, dst)
 
         # Get remaining capacity after elephants
         remaining_capacity = self.get_remaining_elephant_capacity(src, dst)
@@ -385,7 +397,6 @@ class MiceEstimatorThread(threading.Thread):
     def adapt_mice_dags(self, path):
         """Compute new link probabilities for the path where an elephant flow
         has been added or deleted, and generates new random DAGs"""
-
         # Modify the probabilities of the links in the path
         self.modify_path_probabilities(path)
 
@@ -404,17 +415,23 @@ class MiceEstimatorThread(threading.Thread):
                 self.set_probabilities_unchanged(prefix)
 
         if new_dags:
+
+            self._sendMainThreadToSleep(3000)
+            import ipdb; ipdb.set_trace()
+
             # Apply new dags all at same time
             self.sbmanager.add_dag_requirements_from(new_dags)
 
             # We must re-propagate the mice loads!
-            #TODO: self.propagate again
-
+            self.propagateLoadsOnDags()
 
             # Plot them!
             #self.plotAllNewDags(new_dags)
 
     def run(self):
+        # Fill up the loads according to current dags
+        self.propagateLoadsOnDags()
+
         while True:
             try:
                 order = self.orders_queue.get(block=True)
@@ -499,6 +516,36 @@ class MiceEstimatorThread(threading.Thread):
                 # Iterate edges and sum pertinent load
                 for (u, v, load) in edges:
                     self.propagated_mice_levels[u][v]['loads'][i] += load
+
+    @time_func
+    def propagateLoadsOnDags(self):
+        """Propagates the sampled average load of the hosts towards prefix over
+        the network graph"""
+        # Insert arrays to accumulate load samples
+        for (a, b, data) in self.propagated_mice_levels_2.edges_iter(data=True):
+            data['load'] = 0.0
+
+        for prefix in self.prefixes:
+            # Fetch current prefix dag
+            dag = self.dags[prefix]['dag']
+            gw = self.dags[prefix]['gateway']
+
+            # Iterate all other edge routers
+            for er in self.propagated_mice_levels_2.edge_routers_iter():
+                if er != gw:
+                    # Collect sum of loads from connected prefixes
+                    pxs = self.propagated_mice_levels_2.get_connected_destination_prefixes(er)
+
+                    # Take random samples for each source prefix connected to the edge router
+                    er_load = sum([self.avg_host_to_host_load for px in pxs])
+                    #log.debug(er_load)
+
+                    # Propagate it
+                    edges = self.propagate_sample(dag=dag, source=er, target=gw, load=er_load)
+
+                    # Iterate edges and sum pertinent load
+                    for (u, v, load) in edges:
+                        self.propagated_mice_levels_2[u][v]['load'] += load
 
     def propagateAllPrefixes(self, i):
         """Propagates all noise distributions"""

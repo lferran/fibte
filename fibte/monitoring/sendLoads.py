@@ -139,6 +139,7 @@ class SendLoads(object):
             except:
                 continue
 
+
             # Send link_load
             try:
                 send_msg(self.s, pickle.dumps(self.link_loads))

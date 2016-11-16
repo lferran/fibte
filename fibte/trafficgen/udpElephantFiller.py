@@ -258,50 +258,6 @@ class udpElephantFiller(udpTrafficGeneratorBase):
 
             print "Initial number of elephant flows: {0}".format(len(all_elep_flows))
 
-            # # Check receivers!
-            # for i in range(0, self.totalTime, self.timeStep):
-            #     for receiver in self.senders:
-            #         # Check if can receive all new starting flows towards him
-            #         if self.receives_too_much_traffic(all_elep_flows, receiver, period=i, type='elephant'):
-            #             # Get starting flows
-            #             starting_flows = self._get_starting_flows(all_elep_flows, period=i, to_host=receiver)
-            #
-            #             # Get flow ids
-            #             starting_ids = starting_flows.keys()
-            #
-            #             # Randomly shuffle them
-            #             random.shuffle(starting_ids)
-            #
-            #             while starting_ids != []:
-            #                 # Get flow id to reallocate
-            #                 fid_reallocate = starting_ids.pop()
-            #                 flow = starting_flows[fid_reallocate]
-            #
-            #                 # Get receivers that can afford it!
-            #                 possible_receivers = self.get_hosts_that_can_afford(all_elep_flows, flow, period=i,
-            #                                                                     type='elephant')
-            #
-            #                 if not possible_receivers:
-            #                     # Just remove flow forever
-            #                     all_elep_flows.pop(fid_reallocate)
-            #                     starting_flows.pop(fid_reallocate)
-            #
-            #                 else:
-            #                     # Choose one randomly
-            #                     new_receiver = random.choice(possible_receivers)
-            #
-            #                     # Change receiver
-            #                     all_elep_flows[fid_reallocate]['dstHost'] = new_receiver
-            #
-            #                 # Check if already fits
-            #                 if self.can_receive_more(all_elep_flows, receiver, period=i):
-            #                     # Alreaady fits!
-            #                     break
-            #         else:
-            #             continue
-
-            #print "After-reallocation/removal number of elephant flows: {0}".format(len(all_elep_flows))
-
             # Update all flows dict
             all_flows.update(all_elep_flows)
 

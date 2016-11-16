@@ -42,30 +42,32 @@ class udpTrafficGeneratorFiller(udpTrafficGeneratorBase):
         return filename
 
     def _get_active_flows(self, all_flows, period, to_host=None, from_host=None):
+        return self._get_active_flows_interval(all_flows, start=period, end=period + self.timeStep, to_host=to_host,
+                                               from_host=from_host)
 
-        # Flows that started before period and finish after period+timeStep
-        all_active_flows = {fid: flow for fid, flow in all_flows.iteritems()
-                            if flow['startTime'] < period
-                            and self._getFlowEndTime(flow) > period + self.timeStep}
+    def _get_active_flows_interval(self, all_flows, start, end, to_host=None, from_host=None):
+        # Flows that start in this period
+        all_active_flows = {fid: flow for fid, flow in all_flows.iteritems() if flow.get('startTime') <= start and self._getFlowEndTime(flow) > end}
+
         if not to_host and not from_host:
             return all_active_flows
 
         elif to_host and not from_host:
-            return {fid: flow for fid, flow in all_active_flows.iteritems() if flow['dstHost'] == to_host}
+            return {f_id: flow for f_id, flow in all_active_flows.iteritems() if flow['dstHost'] == to_host}
 
         elif from_host and not to_host:
-            return {fid: flow for fid, flow in all_active_flows.iteritems() if flow['srcHost'] == from_host}
+            return {f_id: flow for f_id, flow in all_active_flows.iteritems() if flow['srcHost'] == from_host}
+
         else:
             raise ValueError
 
     def _get_starting_flows(self, all_flows, period, to_host=None, from_host=None):
-        return self._get_starting_flows_interval(all_flows=all_flows,
-                                                 start=period, end=period + self.timeStep,
-                                                 to_host=to_host, from_host=from_host)
+        return self._get_starting_flows_interval(all_flows, start=period, end=period + self.timeStep, to_host=to_host, from_host=from_host)
 
     def _get_starting_flows_interval(self, all_flows, start, end, to_host=None, from_host=None):
         # Flows that start in this period
-        all_starting_flows = {f_id: flow for f_id, flow in all_flows.iteritems() if flow.get('startTime') >= start and flow.get('startTime') < end}
+        all_starting_flows = {f_id: flow for f_id, flow in all_flows.iteritems() if
+                              flow.get('startTime') >= start and flow.get('startTime') < end}
 
         if not to_host and not from_host:
             return all_starting_flows
@@ -153,6 +155,201 @@ class udpTrafficGeneratorFiller(udpTrafficGeneratorBase):
 
         return total_load >= max_load
 
+    def get_full_receivers(self, all_flows, start, end):
+        full_receivers = []
+
+        for receiver in self.senders:
+            # Get active flows to receiver in this period of time
+            active_flows = self._get_active_flows_interval(all_flows, start, end, to_host=receiver)
+
+            # Calculate the sum
+            total_load = sum([fw.get('size') for f, fw in active_flows.iteritems()])
+
+            # Append it if full
+            if total_load >= LINK_BANDWIDTH*self.elephant_load:
+                full_receivers.append(receiver)
+
+        return full_receivers
+
+    def scheduleElephantsUDP(self, all_elep_flows, flows_per_sender, next_id):
+        if self.elephant_load > 0.0:
+            # Compute number of elephant flows and fixed sizes
+            elep_per_host = int(self.n_elephants / float(len(self.senders)))
+            elep_size = (self.elephant_load * LINK_BANDWIDTH) / elep_per_host
+
+            # Start fws_per_host at each sender
+            senders_t = self.senders[:]
+            random.shuffle(senders_t)
+            print("Number of senders: {0}".format(len(senders_t)))
+            for sender in senders_t:
+                for nf in range(elep_per_host):
+                    # Get a new elephant flow
+                    # size = self.get_flow_size(flow_type='e', distribution='uniform')
+                    size = elep_size
+                    duration = self.get_flow_duration(flow_type='e')
+                    # duration = 20
+                    full_receivers = self.get_full_receivers(all_elep_flows, start=0.5, end=14.9)
+                    destination = self.get_flow_destination(sender, exclude=full_receivers)
+                    if not destination:
+                        print("{0} can't start more flows! No receivers available!".format(sender))
+                        break
+
+                    fid = next_id
+                    f = {'id': fid,
+                         'type': 'e',
+                         'srcHost': sender,
+                         'dstHost': destination,
+                         'proto': 'UDP',
+                         'startTime': random.uniform(5, 14.9),
+                         'size': size,
+                         'rate': size,
+                         'duration': duration}
+
+                    flows_per_sender[sender].append(f)
+                    all_elep_flows[fid] = f
+                    next_id += 1
+
+            # Allocate elephant flows
+            for i in range(15, self.totalTime, self.timeStep):
+                if i < self.totalTime - self.timeStep:
+                    # Get flows that are terminating
+                    terminating_flows = self.get_terminating_flows(all_elep_flows, period=i)
+
+                    # Start as many flows as the ones that finish
+                    for tfk, tf in terminating_flows.iteritems():
+                        # Get a new elephant flow with similar info
+                        # size = self.get_flow_size(flow_type='e', distribution='uniform')
+                        original_sender = tf['srcHost']
+                        size = elep_size
+                        duration = self.get_flow_duration(flow_type='e')
+                        # duration = 20
+                        old_endtime = int(tf.get('startTime') + tf.get('duration'))
+                        new_starttime = random.uniform(old_endtime + 0.5, old_endtime + 2)
+                        full_receivers = self.get_full_receivers(all_elep_flows, start=old_endtime,
+                                                                 end=old_endtime + self.timeStep)
+                        destination = self.get_flow_destination(original_sender, exclude=full_receivers)
+                        if not destination:
+                            print("{0} can't start more flows! No receivers available!".format(original_sender))
+                            continue
+
+                        fid = next_id
+                        f = {'id': fid,
+                             'type': 'e',
+                             'srcHost': original_sender,
+                             'dstHost': destination,
+                             'proto': 'UDP',
+                             'startTime': new_starttime,
+                             'size': size,
+                             'rate': size,
+                             'duration': duration}
+                        flows_per_sender[original_sender].append(f)
+                        all_elep_flows[fid] = f
+                        next_id += 1
+
+
+        print "Initial number of elephant flows: {0}".format(len(all_elep_flows))
+        return all_elep_flows, flows_per_sender, next_id
+
+    def scheduleMiceTCP(self, all_mice_flows, flows_per_sender, next_id):
+        if self.mice_load > 0.0:
+            # Compute number of mice flows and fixed sizes
+            mice_per_host = int(self.n_mice / float(len(self.senders)))
+            mice_size = (self.mice_load * LINK_BANDWIDTH) / mice_per_host
+
+            # Start fws_per_host at each sender
+            senders_t = self.senders[:]
+            random.shuffle(senders_t)
+            print("Number of senders: {0}".format(len(senders_t)))
+            for sender in senders_t:
+                for nf in range(mice_per_host):
+                    # Get a new tcp elephant flow
+                    min_duration = self.get_flow_duration(flow_type='m')
+                    max_rate = LINK_BANDWIDTH
+                    data_size = min_duration * max_rate
+
+                    # Rate reduction
+                    rate_reduction = random.uniform(0.5, 0.9)
+                    estimated_rate = (LINK_BANDWIDTH / mice_per_host) * rate_reduction
+
+                    # Random start time
+                    new_starttime = random.uniform(5, 14.9)
+
+                    # Compute estimated endtime
+                    estimated_endtime = new_starttime + (data_size / (estimated_rate))
+
+                    # Get a new destination
+                    destination = self.get_destination(pattern='random', sender=sender)
+
+                    fid = next_id
+                    f = {'id': fid,
+                         'type': 'e',
+                         'srcHost': sender,
+                         'dstHost': destination,
+                         'proto': 'TCP',
+                         'startTime': new_starttime,
+                         'size': data_size,
+                         'rate': LINK_BANDWIDTH,
+                         'duration': None,
+                         'estimated_endtime': estimated_endtime}
+
+                    flows_per_sender[sender].append(f)
+                    all_mice_flows[fid] = f
+                    next_id += 1
+
+
+            print "Number of flows to fill up the mice percentage: {0}".format(len(all_mice_flows))
+
+            # Allocate elephant flows
+            for i in range(5, self.totalTime, self.timeStep):
+                if i < self.totalTime - self.timeStep:
+                    # Get flows that are terminating
+                    terminating_flows = self.get_terminating_flows(all_mice_flows, period=i)
+
+                    # Start as many flows as the ones that finish
+                    for tfk, tf in terminating_flows.iteritems():
+                        # Get a new elephant flow with similar info
+                        original_sender = tf['srcHost']
+
+                        # Get a new tcp elephant flow
+                        min_duration = self.get_flow_duration(flow_type='m')
+                        max_rate = LINK_BANDWIDTH
+                        data_size = min_duration * max_rate
+
+                        # Rate reduction
+                        rate_reduction = random.uniform(0.5, 0.9)
+                        estimated_rate = (LINK_BANDWIDTH / mice_per_host) * rate_reduction
+
+                        # Previous endtime
+                        previous_endtime = tf.get('estimated_endtime')
+
+                        # Random start time
+                        new_starttime = random.uniform(previous_endtime + 0.1, previous_endtime + 1)
+
+                        # Compute estimated endtime
+                        estimated_endtime = new_starttime + (data_size / (estimated_rate))
+
+                        # Get a new destination
+                        destination = self.get_flow_destination(original_sender)
+
+                        fid = next_id
+                        f = {'id': fid,
+                             'type': 'e',
+                             'srcHost': original_sender,
+                             'dstHost': destination,
+                             'proto': 'TCP',
+                             'startTime': new_starttime,
+                             'size': data_size,
+                             'rate': LINK_BANDWIDTH,
+                             'duration': None,
+                             'estimated_endtime': estimated_endtime}
+
+                        flows_per_sender[original_sender].append(f)
+                        all_mice_flows[fid] = f
+                        next_id += 1
+
+        print "Initial number of mice flows: {0}".format(len(all_mice_flows))
+        return all_mice_flows, flows_per_sender, next_id
+
     def plan_flows(self):
         """
         * Creates elephant and mice flows at certain specified rates for a poisson process
@@ -174,237 +371,17 @@ class udpTrafficGeneratorFiller(udpTrafficGeneratorBase):
         # Initial flow id
         next_id = 0
 
-        ## Schedule first elephant flows #############################
-        if self.elephant_load > 0.0:
-            # Compute number of elephant flows and fixed sizes
-            elep_per_host = int(self.n_elephants / float(len(self.senders)))
-            elep_size = (self.elephant_load * LINK_BANDWIDTH) / elep_per_host
+        ## Schedule first UDP elephant flows
+        all_eleph_flows, flows_per_sender, next_id = self.scheduleElephantsUDP(all_elep_flows, flows_per_sender, next_id)
 
-            # Start fws_per_host at each sender
-            senders_t = self.senders[:]
-            random.shuffle(senders_t)
-            print("Number of senders: {0}".format(len(senders_t)))
-            for sender in senders_t:
-                for nf in range(elep_per_host):
-                    # Get a new elephant flow
-                    # size = self.get_flow_size(flow_type='e', distribution='uniform')
-                    size = elep_size
-                    duration = self.get_flow_duration(flow_type='e')
-                    #duration = 20
-                    destination = self.get_flow_destination(sender)
-                    fid = next_id
-                    f = {'id': fid,
-                         'type': 'e',
-                         'srcHost': sender,
-                         'dstHost': destination,
-                         'proto': 'UDP',
-                         'startTime': random.uniform(5, 14.9),
-                         'size': size,
-                         'rate': size,
-                         'duration': duration}
-                    flows_per_sender[sender].append(f)
-                    all_elep_flows[fid] = f
-                    next_id += 1
+        # Update all flows dict
+        all_flows.update(all_elep_flows)
 
-            # Allocate elephant flows
-            for i in range(15, self.totalTime, self.timeStep):
-                if i < self.totalTime - self.timeStep:
-                    # Get flows that are terminating
-                    terminating_flows = self.get_terminating_flows(all_elep_flows, period=i)
+        ## Schedule TCP mice flows
+        all_mice_flows, flows_per_sender, next_id = self.scheduleMiceTCP(all_mice_flows, flows_per_sender, next_id)
 
-                    # Start as many flows as the ones that finish
-                    for tfk, tf in terminating_flows.iteritems():
-                        # Get a new elephant flow with similar info
-                        # size = self.get_flow_size(flow_type='e', distribution='uniform')
-                        original_sender = tf['srcHost']
-                        size = elep_size
-                        duration = self.get_flow_duration(flow_type='e')
-                        #duration = 20
-                        destination = self.get_flow_destination(original_sender)
-                        fid = next_id
-                        old_endtime = int(tf.get('startTime') + tf.get('duration'))
-                        new_starttime = random.uniform(old_endtime + 0.5, old_endtime + 2)
-                        f = {'id': fid,
-                             'type': 'e',
-                             'srcHost': original_sender,
-                             'dstHost': destination,
-                             'proto': 'UDP',
-                             'startTime': new_starttime,
-                             'size': size,
-                             'rate': size,
-                             'duration': duration}
-                        flows_per_sender[original_sender].append(f)
-                        all_elep_flows[fid] = f
-                        next_id += 1
-
-            print "Initial number of elephant flows: {0}".format(len(all_elep_flows))
-
-            # Check receivers!
-            for i in range(0, self.totalTime, self.timeStep):
-                for receiver in self.senders:
-                    # Check if can receive all new starting flows towards him
-                    if self.receives_too_much_traffic(all_elep_flows, receiver, period=i, type='elephant'):
-                        # Get starting flows
-                        starting_flows = self._get_starting_flows(all_elep_flows, period=i, to_host=receiver)
-
-                        # Get flow ids
-                        starting_ids = starting_flows.keys()
-
-                        # Randomly shuffle them
-                        random.shuffle(starting_ids)
-
-                        while starting_ids != []:
-                            # Get flow id to reallocate
-                            fid_reallocate = starting_ids.pop()
-                            flow = starting_flows[fid_reallocate]
-
-                            # Get receivers that can afford it!
-                            possible_receivers = self.get_hosts_that_can_afford(all_elep_flows, flow, period=i, type='elephant')
-
-                            if not possible_receivers:
-                                # Just remove flow forever
-                                all_elep_flows.pop(fid_reallocate)
-                                starting_flows.pop(fid_reallocate)
-
-                            else:
-                                # Choose one randomly
-                                new_receiver = random.choice(possible_receivers)
-
-                                # Change receiver
-                                all_elep_flows[fid_reallocate]['dstHost'] = new_receiver
-
-                            # Check if already fits
-                            if self.can_receive_more(all_elep_flows, receiver, period=i):
-                                # Alreaady fits!
-                                break
-                    else:
-                        continue
-
-            print "After-reallocation/removal number of elephant flows: {0}".format(len(all_elep_flows))
-
-            # Update all flows dict
-            all_flows.update(all_elep_flows)
-
-        ## Schedule mice flows #######################################
-        if self.mice_load > 0.0:
-            # Compute number of elephant flows and fixed sizes
-            mice_per_host = int(self.n_mice / float(len(self.senders)))
-            mice_size = (self.mice_load * LINK_BANDWIDTH) / mice_per_host
-
-            # Start fws_per_host at each sender
-            senders_t = self.senders[:]
-            random.shuffle(senders_t)
-            print("Number of senders: {0}".format(len(senders_t)))
-            for sender in senders_t:
-                while not self.max_load_reached(all_mice_flows, sender, 0, 14.9, type='mice'):
-                    # Get a new mice flow
-                    #rate = self.get_flow_size(flow_type='m')
-                    rate = mice_size
-                    duration = self.get_flow_duration(flow_type='m')
-                    size = rate * duration
-                    destination = self.get_destination('random', sender)
-                    #destination = self.get_destination('stride', sender)
-                    fid = next_id
-                    f = {'id': fid,
-                         'type': 'm',
-                         'srcHost': sender,
-                         'dstHost': destination,
-                         'proto': 'TCP',
-                         'startTime': random.uniform(5, 14.9),
-                         'size': size,
-                         'rate': rate,
-                         'duration': None}
-                    flows_per_sender[sender].append(f)
-                    all_mice_flows[fid] = f
-                    next_id += 1
-
-            print "Number of flows to fill up the mice percentage: {0}".format(len(all_mice_flows))
-
-            for i in range(5, self.totalTime, self.timeStep):
-                if i < self.totalTime - self.timeStep:
-                    # Get flows that are terminating
-                    terminating_flows = self.get_terminating_flows(all_mice_flows, period=i)
-
-                    # Start as many flows as the ones that finish
-                    for tfk, tf in terminating_flows.iteritems():
-                        # Get a new mice flow with similar info
-                        original_sender = tf['srcHost']
-                        #rate = self.get_flow_size(flow_type='m')
-                        rate = mice_size
-                        duration = self.get_flow_duration(flow_type='m')
-                        size = rate * duration
-                        destination = self.get_destination('random', original_sender)
-                        #destination = self.get_destination('stride', original_sender)
-                        fid = next_id
-                        old_endtime = self._getFlowEndTime(tf)
-                        new_starttime = random.uniform(old_endtime, old_endtime + 0.2)
-                        f = {'id': fid,
-                             'type': 'm',
-                             'srcHost': original_sender,
-                             'dstHost': destination,
-                             'proto': 'TCP',
-                             'startTime': new_starttime,
-                             'size': size,
-                             'rate': rate,
-                             'duration': None}
-
-                        flows_per_sender[original_sender].append(f)
-                        all_mice_flows[fid] = f
-                        next_id += 1
-
-                    #n_active_flows = len(self._get_active_flows(all_mice_flows, period=i))
-                    #n_starting_flows = len(self._get_starting_flows(all_mice_flows, period=i))
-                    #n_stopping_flows = len(terminating_flows)
-                    #print "Period: {3} ---> Starting: {0} | Active: {1} | Terminating: {2}".format(n_starting_flows, n_active_flows, n_stopping_flows, i)
-
-            print "Initial number of mice flows: {0}".format(len(all_mice_flows))
-
-            # # Check receivers!
-            # for i in range(0, self.totalTime, self.timeStep):
-            #     for receiver in self.senders:
-            #         # Check if can receive all new starting flows towards him
-            #         if self.receives_too_much_traffic(all_mice_flows, receiver, period=i, type='mice'):
-            #             import ipdb; ipdb.set_trace()
-            #             # Get starting flows
-            #             starting_flows = self._get_starting_flows(all_mice_flows, period=i, to_host=receiver)
-            #
-            #             # Get flow ids
-            #             starting_ids = starting_flows.keys()
-            #
-            #             # Randomly shuffle them
-            #             random.shuffle(starting_ids)
-            #
-            #             while starting_ids != []:
-            #                 # Get flow id to reallocate
-            #                 fid_reallocate = starting_ids.pop()
-            #                 flow = starting_flows[fid_reallocate]
-            #
-            #                 # Get receivers that can afford it!
-            #                 possible_receivers = self.get_hosts_that_can_afford(all_mice_flows, flow, period=i, type='mice')
-            #
-            #                 if not possible_receivers:
-            #                     # Just remove flow forever
-            #                     all_mice_flows.pop(fid_reallocate)
-            #                     starting_flows.pop(fid_reallocate)
-            #
-            #                 else:
-            #                     # Choose one randomly
-            #                     new_receiver = random.choice(possible_receivers)
-            #
-            #                     # Change receiver
-            #                     all_mice_flows[fid_reallocate]['dstHost'] = new_receiver
-            #
-            #                 # Check if already fits
-            #                 if self.can_receive_more(all_mice_flows, receiver, period=i):
-            #                     # Already fits!
-            #                     break
-            #         else:
-            #             continue
-
-            print("After-reallocation/removal number of mice flows: {0}".format(len(all_mice_flows)))
-
-            # Update all flows dict with mice flows
-            all_flows.update(all_mice_flows)
+        # Update all flows dict with mice flows
+        all_flows.update(all_mice_flows)
 
         # Update the flows_per_sender dict
         new_flows_per_sender = {}

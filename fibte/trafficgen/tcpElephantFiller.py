@@ -94,7 +94,7 @@ class tcpElephantFiller(udpTrafficGeneratorBase):
                     data_size = min_duration * max_rate
 
                     # Rate reduction
-                    rate_reduction = random.uniform(0.7, 1)
+                    rate_reduction = random.uniform(0.5, 0.9)
                     estimated_rate = (LINK_BANDWIDTH/elep_per_host) * rate_reduction
 
                     # Random start time
@@ -139,7 +139,7 @@ class tcpElephantFiller(udpTrafficGeneratorBase):
                         data_size = min_duration * max_rate
 
                         # Rate reduction
-                        rate_reduction = random.uniform(0.7, 1)
+                        rate_reduction = random.uniform(0.5, 0.9)
                         estimated_rate = (LINK_BANDWIDTH / elep_per_host) * rate_reduction
 
                         # Previous endtime

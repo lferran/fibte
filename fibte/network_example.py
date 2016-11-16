@@ -132,12 +132,15 @@ def startCounterCollectors(topo, interval=1):
     print("*** Starting counterCollectors")
 
     cc_cmd = "mx {0} {2} -n {0} -t {1} &"
+    if_cmd = "mx {0} {1} {2} &"
     for rid in topo.routers():
+        # Fetch interface information first
+        itfDescr_path = "{1}ifDescr_{0}".format(rid, tmp_files)
+        subprocess.call(if_cmd.format(rid, ifDescrNamespace_path, itfDescr_path), shell=True)
+
+        # Start counter collector
         subprocess.call(cc_cmd.format(rid, interval, counterCollector_path), shell=True)
 
-        # store interfaces information
-        path = tmp_files + "ifDescr_{0}".format(rid)
-        subprocess.call([ifDescrNamespace_path, path, "&"])
 
 def stopCounterCollectors(topo):
     """"""

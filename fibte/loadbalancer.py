@@ -134,8 +134,6 @@ class LBController(object):
         self.gl_thread.setDaemon(True)
         self.gl_thread.start()
 
-        #self.p_getLoads = subprocess.Popen([getLoads_path, '-k', str(self.k), '-a', in_out_name], shell=False)
-
         # Object useful to make some unit conversions
         self.base = Base()
 
@@ -373,6 +371,12 @@ class LBController(object):
         dst_gw = self.getGatewayRouter(dst_px)
         return src_gw == dst_gw
 
+    def _sendMainThreadToSleep(self, seconds):
+        """Makes the main thread jump to the sleep mode
+        **ONLY FOR DEBUGGING PURPOSES!
+        """
+        self.q_server.put(json.dumps({'type': 'sleep', 'data': seconds}))
+
     def get_router_name(self, addr):
         """Addr can either the router id, the interface ip or the private ip"""
         for fun in [self.topology.getRouterName, self.topology.getRouterFromPrivateIp, self.topology.getRouterFromInterfaceIp]:
@@ -380,7 +384,12 @@ class LBController(object):
                 return fun(addr)
             except KeyError:
                 continue
-        return ValueError("{0} is neither a private ip, router id or interface ip".format(addr))
+
+        log.error("EEEEEP ERROR FORT")
+        self._sendMainThreadToSleep(4000)
+        import ipdb; ipdb.set_trace()
+
+        raise ValueError("{0} is neither a private ip, router id or interface ip".format(addr))
 
     def ipPath_to_namePath(self, traceroute_data):
         """
@@ -461,7 +470,8 @@ class LBController(object):
 
     def _do_logging_stuff(self):
         # Config logging to dedicated file for this thread
-        handler = logging.FileHandler(filename='{0}loadbalancer_{1}.log'.format(tmp_files, self.algorithm))
+        self.logfile = '{0}loadbalancer_{1}.log'.format(tmp_files, self.algorithm)
+        handler = logging.FileHandler(filename=self.logfile)
         fmt = logging.Formatter('[%(levelname)20s] %(asctime)s %(funcName)s: %(message)s ')
         handler.setFormatter(fmt)
         log.addHandler(handler)
@@ -679,6 +689,9 @@ class LBController(object):
         Sets the load balancer to its initial state
         :return:
         """
+        # Remove the logifile
+        subprocess.call(['rm', self.logfile])
+
         # Set all dags to original ospf dag
         self.current_elephant_dags = copy.deepcopy(self.initial_elep_dags)
         self.current_mice_dags = copy.deepcopy(self.initial_mice_dags)
@@ -720,8 +733,8 @@ class LBController(object):
         in the exclude list.
         """
         if link in self.edges_to_flows.keys():
-            if self.edges_to_flows[link] != {}:
-                return sum([self.flowDemands.getDemand(fkey) for fkey, data in self.edges_to_flows[link].iteritems() if fkey not in exclude])
+            if self.edges_to_flows[link]:
+                return sum([self.flowDemands.getDemand(fkey) for fkey in self.edges_to_flows[link].iterkeys() if fkey not in exclude])
             else:
                 return 0.0
         else:
@@ -871,9 +884,10 @@ class LBController(object):
         src = self.topology.getHostName(flow['src'])
         dst = self.topology.getHostName(flow['dst'])
         rate = self.flowDemands.getDemand(flow)
+        rate = self.base.setSizeToStr(rate * LINK_BANDWIDTH)
         sport = flow['sport']
         dport = flow['dport']
-        log.debug("New flow STARTED: Flow({0}:({1}) -> {2}:({3}) | #{4})".format(src, sport, dst, dport, rate))
+        log.debug("New flow STARTED: Flow({0}:({1}) -> {2}:({3}) | Demand: {4})".format(src, sport, dst, dport, rate))
 
     def deallocateFlow(self, flow):
         """
@@ -889,7 +903,7 @@ class LBController(object):
         dst = self.topology.getHostName(flow['dst'])
         sport = flow['sport']
         dport = flow['dport']
-
+        rate = self.base.setSizeToStr(rate * LINK_BANDWIDTH)
         log.debug("Flow FINISHED: Flow({0}:({1}) -> {2}:({3}) | #{4})".format(src, sport, dst, dport, rate))
 
     def tracerouteFlow(self, flow):
@@ -1031,7 +1045,6 @@ class LBController(object):
             else:
                 return None
 
-    @time_func
     def findNewPathsForFlows(self, flows):
         """This function only returns if the path for all flows in the input were found"""
         # Set flows state to be updates
@@ -1077,12 +1090,12 @@ class LBController(object):
                         event = json.loads(self.q_server.get())
                         self.q_server.task_done()
                         log.info("LB not active - event received: {0}".format(json.loads(event)))
-
                 else:
                     # Read from TCP server's queue
                     try:
                         event = json.loads(self.q_server.get(timeout=0.3))
                         self.q_server.task_done()
+
                     except Queue.Empty:
                         continue
 
@@ -1112,8 +1125,8 @@ class LBController(object):
                 self.exitGracefully()
 
 class ECMPController(LBController):
-    def __init__(self, doBalance=True, k=4):
-        super(ECMPController, self).__init__(doBalance=doBalance, k=k, algorithm='ecmp')
+    def __init__(self, *args, **kwargs):
+        super(ECMPController, self).__init__(algorithm='ecmp', *args, **kwargs)
 
     def _getAlgorithmName(self):
         return "ecmp_k_{0}".format(self.k)
@@ -1146,8 +1159,8 @@ class ECMPController(LBController):
         #path = self.delFlowFromPath(flow)tt
 
 class MiceDAGShifter(LBController):
-    def __init__(self, doBalance=True, k=4):
-        super(MiceDAGShifter, self).__init__(doBalance=doBalance, k=k, algorithm='mice-dag-shifter')
+    def __init__(self, *args, **kwargs):
+        super(MiceDAGShifter, self).__init__(algorithm='mice-dag-shifter', *args, **kwargs)
 
     def reset(self):
         super(MiceDAGShifter, self).reset()
@@ -1210,7 +1223,7 @@ class ElephantDAGShifter(LBController):
         # Call init of subclass
         super(ElephantDAGShifter, self).__init__(algorithm='elephant-dag-shifter', *args, **kwargs)
 
-        tests=False
+        tests = True
         if tests:
             h33 = self.topology.getHostIp('h_3_3')
             h32 = self.topology.getHostIp('h_3_2')
@@ -1285,7 +1298,7 @@ class ElephantDAGShifter(LBController):
         # Get dag with spare capacities
         idag = self.getInitialDagWithoutFlows(dst_px=dst_px, ongoing_flow_keys=dst_ongoing_flowkeys)
 
-        # Convert them to keys and add current flow to computations too
+        # Convert them to flows and add current flow to computations too
         dst_ongoing_flows = [self.keyToFlow(fkey) for fkey in dst_ongoing_flowkeys]
         dst_ongoing_flows.append(flow)
 
@@ -1335,7 +1348,6 @@ class ElephantDAGShifter(LBController):
         # Deallocate if from the network
         old_path = self.delFlowFromPath(flow)
 
-    #@time_func
     def findBestSourcePodDag(self, src_pod, complete_dag, ongoing_flows):
         """"""
         # Compute edge indexes for which no flows are starting towards dst
@@ -1386,7 +1398,6 @@ class ElephantDAGShifter(LBController):
         # Return the best one!
         return (ndag, best_assessment)
 
-    #@time_func
     def getBestOfDagSamples(self, src_pod, complete_dag, ongoing_flows):
         """"""
         # Compute edge indexes for which no flows are starting towards dst
@@ -1561,7 +1572,7 @@ class ElephantDAGShifter(LBController):
         totalKarma = 0
         totalCost = 0
 
-        # Compute overload on the flow paths
+        # Compute overload and karma on the flow paths
         for fpath in path_combination:
 
             # Iterate links
@@ -1571,7 +1582,7 @@ class ElephantDAGShifter(LBController):
                 totalLoad = complete_dag[u][v]['fixed_load'] + complete_dag[u][v]['current_dag_load']
 
                 # Compute capacity threshold
-                capThreshold = LINK_BANDWIDTH*self.capacity_threshold
+                capThreshold = LINK_BANDWIDTH * self.capacity_threshold
 
                 # Compute the spare capacity after the flows are allocated
                 spareCapacity = capThreshold - totalLoad
@@ -1790,26 +1801,25 @@ if __name__ == '__main__':
 
     log.setLevel(logging.DEBUG)
     log.info("Starting Controller - k = {0} , algorithm = {1}".format(args.k, args.algorithm))
-    if args.algorithm == 'dag-shifter':
+
+    if args.algorithm == 'ecmp':
+        lb = ECMPController(doBalance=args.doBalance, k=args.k)
+
+    elif args.algorithm == 'mice-dag-shifter':
+        lb = MiceDAGShifter(doBalance=args.doBalance, k=args.k)
+
+    elif args.algorithm == 'elephant-dag-shifter':
         log.info("Capacity threshold: {0}".format(args.cap_threshold))
         log.info("Max congestion probability: {0}".format(args.cong_prob))
         log.info("Sample on DAGs? {0}".format(args.sample))
 
-    elif args.algorithm == 'ecmp':
-        lb = ECMPController(doBalance = args.doBalance, k=args.k)
-
-    elif args.algorithm == 'mice-dag-shifter':
-        lb = MiceDAGShifter(doBalance = args.doBalance, k=args.k)
-
-    elif args.algorithm == 'elephant-dag-shifter':
-        lb = ElephantDAGShifter(doBalance= args.doBalance, k=args.k,
+        lb = ElephantDAGShifter(doBalance=args.doBalance, k=args.k,
                                   congProb_threshold=args.cong_prob,
                                   capacity_threshold=args.cap_threshold,
                                   sample=args.sample)
-
+    else:
+        print("Unknown algorithm: {0}".format(args.algorithm))
+        exit()
 
     # Run the controller
     lb.run()
-
-
-    #import ipdb; ipdb.set_trace()
