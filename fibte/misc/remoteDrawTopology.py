@@ -36,23 +36,39 @@ def recvall(sock, n):
 
 
 class RemoteDrawTopology(object):
-    def __init__(self, listeningIp="192.168.33.1", listeningPort=5010, k=4):
-        self.listeningIp = listeningIp
-        self.listeningPort = listeningPort
-
+    def __init__(self, listeningPort=5010, k=4, remote=False):
         self.k = k
         self.queue = Queue.Queue(0)
         self.sock = ""
         self.connections = []
 
-    def serverThread(self):
-        # start a thread that handles TCP connections
-        self.serverProcess = threading.Thread(target=self.serverStart, args=())
-        self.serverProcess.setDaemon(True)
-        self.serverProcess.start()
+        # We always listen on local machine at specified port
+        self.listeningPort = listeningPort
+        self.listeningIp = '127.0.0.1'
+
+        # Is remotePlot in local machine?
+        self.remote = remote
+        if self.remote:
+            # Parameters for remote ssh tunner to eth server
+            self.userName = 'lferran'
+            self.serverName = 'pc-10327.ethz.ch'
+            self.openPort = 5010  # Should be changed for what Ahmed tells me
+
+        else:
+            # Parameters for ssh tunnel within local VM
+            self.userName = 'root'
+            self.serverName = '127.0.0.1'
+            self.openPort = 2222
+
+        print("RemoteDrawTopology(host:{0}, port:{1})".format(self.serverName, self.listeningPort))
 
     def run(self):
         try:
+            # Start thread that checks connectivity to the server
+            p = threading.Thread(target=self.handlesTunnelConnection, args=())
+            p.setDaemon(True)
+            p.start()
+
             # Start a thread that handles TCP connections
             self.serverThread()
 
@@ -63,12 +79,85 @@ class RemoteDrawTopology(object):
             print("KeyboardInterrupt: plot stopped")
             pass
 
+    def handlesTunnelConnection(self):
+        # First thing to do is to clear the server
+        self.clearReverseSSH()
+
+        # Setup reverse SSH tunnel
+        self.reverseSSH()
+
+        connected = True
+        while True:
+            time.sleep(2)
+            status = self.checkInternetOn()
+            #print status, "current port:", self.listeningPort
+            if status:
+                if not (connected):
+                    connected = True
+                    self.clearReverseSSH()
+                    time.sleep(5)
+                    self.reverseSSH()
+            else:
+                print("Internet connection not available")
+                if connected:
+                    print "Disconnecting"
+                    connected = False
+
+    def checkInternetOn(self):
+        response = os.system("ping -c 1 " + self.serverName + " > /dev/null")
+        if response == 0:
+            return True
+        else:
+            return False
+
+    def reverseSSH(self):
+        """
+        - Since we have set a port forwarding to access the VM, -p is needed
+        - Parameter -f is so that it runs on the background
+        - Parameter -R is because it is a remote port forwarding
+        - Parameter -N
+        - SSH will go into the VM (ferran@pc-17321.ethz.ch or root@vagrant)
+        - Will setup a port forwarding such that all that you send at listeningPort
+          inside the VM, will be received at the local machine at the same port
+        """
+        command = "ssh -p {3} -f -N -R {0}:localhost:{0} {1}@{2}".format(self.listeningPort, self.userName,
+                                                                         self.serverName, self.openPort)
+        print("Trying to setup SSH tunnel: {0}".format(command))
+        subprocess.call(command, shell=True)
+
+    def clearReverseSSH(self):
+        """"""
+        # We kill the previous ssh tunnel command locally
+        command = "kill -9 $(ps aux | grep 'ssh -p {0} -f -N -R {1}' ".format(self.openPort,self.listeningPort)
+        command +=  "| awk '{print $2}')"
+        subprocess.call(command, shell=True)
+
+        # Then we will clear the port number
+        command = "ssh -p {3} {1}@{2} 'fuser -k -n tcp {0}'".format(self.listeningPort,self.userName,
+                                                                    self.serverName,self.openPort)
+        subprocess.call(command, shell=True)
+        for connection in self.connections:
+            connection.close()
+        self.connections = []
+
+    def serverThread(self):
+        # Start a thread that handles TCP connections
+        self.serverProcess = threading.Thread(target=self.serverStart, args=())
+        self.serverProcess.setDaemon(True)
+        self.serverProcess.start()
+
     def serverStart(self):
         """"""
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sock.bind((self.listeningIp, self.listeningPort))
-        self.sock.listen(5)
-        print("Server lisitening for connections on: {0}:{1}".format(self.listeningIp, self.listeningPort))
+        try:
+            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.sock.bind((self.listeningIp, self.listeningPort))
+            self.sock.listen(5)
+        except Exception as e:
+            print("Couldn't bind socket: {0}:{1}".format(self.listeningIp, self.listeningPort))
+            print("Error: {0}".format(e))
+        else:
+            print("Server lisitening for connections on: {0}:{1}".format(self.listeningIp, self.listeningPort))
+
         while True:
             self.conn, addr = self.sock.accept()
             self.connections.append(self.conn)
@@ -165,9 +254,7 @@ class RemoteDrawTopology(object):
 
 if __name__ == "__main__":
     import argparse
-
     parser = argparse.ArgumentParser()
-
     parser.add_argument('-k', '--k',
                         help='Fat-Tree parameter',
                         type=int,
@@ -178,11 +265,11 @@ if __name__ == "__main__":
                         type=int,
                         default=5010)
 
-    parser.add_argument('--ip',
-                        help='Ip where the link loads data is sent',
-                        type=str,
-                        default="192.168.33.1")
+    parser.add_argument('-r', '--remote',
+                        help='Is the network running in the remote server? (ETH)',
+                        type=bool,
+                        action='store_true',
+                        default=False)
 
     args = parser.parse_args()
-
-    RemoteDrawTopology(listeningIp=args.ip, listeningPort=args.port, k=args.k).run()
+    RemoteDrawTopology(listeningPort=args.port, k=args.k, remote=args.remote).run()

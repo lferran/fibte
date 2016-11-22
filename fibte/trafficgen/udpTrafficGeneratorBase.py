@@ -20,7 +20,7 @@ import logging
 
 controllerServer = CFG.get("DEFAULT","controller_UDS_name")
 
-MIN_PORT = 1
+MIN_PORT = 1001
 MAX_PORT = 2**16 -1
 RangePorts = xrange(MIN_PORT,MAX_PORT)
 
@@ -77,6 +77,7 @@ class TGParser(object):
         if args.terminate:
             print "Terminating ongoing traffic!"
             tgf.terminateTrafficAtHosts()
+            time.sleep(2)
             tgf.resetController()
 
         else:
@@ -536,7 +537,7 @@ class udpTrafficGeneratorBase(Base):
             log.info("Adding flows to the current traffic")
 
         # Set sync. delay
-        INITIAL_DELAY = 15
+        INITIAL_DELAY = 5
 
         # Add initial delay to all flows
         traffic_per_host = self.addInitialDelay(traffic_per_host, INITIAL_DELAY)
@@ -544,9 +545,20 @@ class udpTrafficGeneratorBase(Base):
         # Compute flows for which we need to start TCP server
         receive_per_host = self.computeReceiveList(traffic_per_host)
 
-        # Send to flowServers!
-        self.sendFlowLists(traffic_per_host)
+        #hosts = receive_per_host.keys()[:]
+        #receive_per_host.clear()
+        #for host in hosts:
+        #    tcpservers = {random.randint(2000, 65000) for i in range(100)}
+        #    receive_per_host[host] = [(1, p) for p in tcpservers]
+
+        # Send receiveLists first
         self.sendReceiveLists(receive_per_host)
+
+        log.info('Waiting a bit before sending flowlists...')
+        time.sleep(10)
+
+        # Send flowLists to flowServers!
+        self.sendFlowLists(traffic_per_host)
 
     def plan_from_flows_file(self, flows_file):
         """Opens the flows file and schedules the specified flows

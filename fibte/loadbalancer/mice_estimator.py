@@ -67,7 +67,8 @@ class MiceEstimatorThread(threading.Thread):
         # We assume that 20% of the link bandwidth accounts for mice flows.
         # We assume that the mice traffic sent by a host is evenly distributed for all other destinations
         self.mice_load = 0.2 * LINK_BANDWIDTH
-        self.avg_host_to_host_load = (self.mice_load) / ((self.k**3/4) - 1)
+        self.n_hosts = (self.k**3/4)
+        self.avg_host_to_host_load = (self.mice_load) / (self.n_hosts - 1)
 
         # Set debug level
         #log.setLevel(logging.DEBUG)
@@ -84,34 +85,34 @@ class MiceEstimatorThread(threading.Thread):
 
     def load_router_names(self):
         """FOR DEBUGGING PURPOSES ONLY"""
-        self.r_0_e0 = self.caps_graph.get_router_from_position('edge', 0,0)
-        self.r_0_e1 = self.caps_graph.get_router_from_position('edge', 1,0)
+        self.r0e0 = self.caps_graph.get_router_from_position('edge', 0,0)
+        self.r0e1 = self.caps_graph.get_router_from_position('edge', 1,0)
 
-        self.r_1_e0 = self.caps_graph.get_router_from_position('edge', 0,1)
-        self.r_1_e1 = self.caps_graph.get_router_from_position('edge', 1,1)
+        self.r1e0 = self.caps_graph.get_router_from_position('edge', 0,1)
+        self.r1e1 = self.caps_graph.get_router_from_position('edge', 1,1)
 
-        self.r_2_e0 = self.caps_graph.get_router_from_position('edge', 0,2)
-        self.r_2_e1 = self.caps_graph.get_router_from_position('edge', 1,2)
+        self.r2e0 = self.caps_graph.get_router_from_position('edge', 0,2)
+        self.r2e1 = self.caps_graph.get_router_from_position('edge', 1,2)
 
-        self.r_3_e0 = self.caps_graph.get_router_from_position('edge', 0,3)
-        self.r_3_e1 = self.caps_graph.get_router_from_position('edge', 1,3)
+        self.r3e0 = self.caps_graph.get_router_from_position('edge', 0,3)
+        self.r3e1 = self.caps_graph.get_router_from_position('edge', 1,3)
 
-        self.r_0_a0 = self.caps_graph.get_router_from_position('aggregation', 0, 0)
-        self.r_0_a1 = self.caps_graph.get_router_from_position('aggregation', 1, 0)
+        self.r0a0 = self.caps_graph.get_router_from_position('aggregation', 0, 0)
+        self.r0a1 = self.caps_graph.get_router_from_position('aggregation', 1, 0)
 
-        self.r_1_a0 = self.caps_graph.get_router_from_position('aggregation', 0, 1)
-        self.r_1_a1 = self.caps_graph.get_router_from_position('aggregation', 1, 1)
+        self.r1a0 = self.caps_graph.get_router_from_position('aggregation', 0, 1)
+        self.r1a1 = self.caps_graph.get_router_from_position('aggregation', 1, 1)
 
-        self.r_2_a0 = self.caps_graph.get_router_from_position('aggregation', 0, 2)
-        self.r_2_a1 = self.caps_graph.get_router_from_position('aggregation', 1, 2)
+        self.r2a0 = self.caps_graph.get_router_from_position('aggregation', 0, 2)
+        self.r2a1 = self.caps_graph.get_router_from_position('aggregation', 1, 2)
 
-        self.r_3_a0 = self.caps_graph.get_router_from_position('aggregation', 0, 3)
-        self.r_3_a1 = self.caps_graph.get_router_from_position('aggregation', 1, 3)
+        self.r3a0 = self.caps_graph.get_router_from_position('aggregation', 0, 3)
+        self.r3a1 = self.caps_graph.get_router_from_position('aggregation', 1, 3)
 
-        self.r_c0 = self.caps_graph.get_router_from_position('core', 0)
-        self.r_c1 = self.caps_graph.get_router_from_position('core', 1)
-        self.r_c2 = self.caps_graph.get_router_from_position('core', 2)
-        self.r_c3 = self.caps_graph.get_router_from_position('core', 3)
+        self.rc0 = self.caps_graph.get_router_from_position('core', 0)
+        self.rc1 = self.caps_graph.get_router_from_position('core', 1)
+        self.rc2 = self.caps_graph.get_router_from_position('core', 2)
+        self.rc3 = self.caps_graph.get_router_from_position('core', 3)
 
     def print_stuff(self, stuff):
         """
@@ -397,6 +398,7 @@ class MiceEstimatorThread(threading.Thread):
     def adapt_mice_dags(self, path):
         """Compute new link probabilities for the path where an elephant flow
         has been added or deleted, and generates new random DAGs"""
+
         # Modify the probabilities of the links in the path
         self.modify_path_probabilities(path)
 
@@ -415,12 +417,9 @@ class MiceEstimatorThread(threading.Thread):
                 self.set_probabilities_unchanged(prefix)
 
         if new_dags:
-
-            self._sendMainThreadToSleep(3000)
-            import ipdb; ipdb.set_trace()
-
             # Apply new dags all at same time
             self.sbmanager.add_dag_requirements_from(new_dags)
+            time.sleep(0.5)
 
             # We must re-propagate the mice loads!
             self.propagateLoadsOnDags()
@@ -430,6 +429,7 @@ class MiceEstimatorThread(threading.Thread):
 
     def run(self):
         # Fill up the loads according to current dags
+
         self.propagateLoadsOnDags()
 
         while True:
@@ -478,8 +478,7 @@ class MiceEstimatorThread(threading.Thread):
                 log.warning(order)
                 continue
 
-    @staticmethod
-    def propagate_sample(dag, source, target, load):
+    def propagate_sample(self, dag, source, target, load):
         if source == target:
             return []
         else:
@@ -490,7 +489,7 @@ class MiceEstimatorThread(threading.Thread):
             new_load = load / float(len(successors))
             edges = []
             for succ in successors:
-                edges += [(source, succ, new_load)] + MiceEstimatorThread.propagate_sample(dag, succ, target, new_load)
+                edges += [(source, succ, new_load)] + self.propagate_sample(dag, succ, target, new_load)
             return edges
 
     def propagatePrefixNoise(self, prefix, i):
@@ -536,7 +535,7 @@ class MiceEstimatorThread(threading.Thread):
                     # Collect sum of loads from connected prefixes
                     pxs = self.propagated_mice_levels_2.get_connected_destination_prefixes(er)
 
-                    # Take random samples for each source prefix connected to the edge router
+                    # Obtain the total load going from er to the upper lyer
                     er_load = sum([self.avg_host_to_host_load for px in pxs])
                     #log.debug(er_load)
 

@@ -88,9 +88,10 @@ def sendFlowTCP(dst="10.0.32.3", sport=5000, dport=5001, size=None, rate=None, d
             try:
                 s.connect((dst, dport))
                 break
-            except:
+            except Exception as e:
                 reconnections -=1
-                print "Trying to reconnect... reconnections left {0}".format(reconnections)
+                print ("Trying to reconnect to {1}:{2}... trials left {0}".format(reconnections, dst, dport))
+                print ("Error trace: {0}".format(e))
                 time.sleep(time_to_wait)
                 time_to_wait *= 2
 
@@ -323,7 +324,6 @@ def _sendFlow(notify=False, **flow):
 
     if not successful:
         log.error("Flow didn't finish successfully!")
-        print("Flow didn't finish successfully!")
 
     return successful
 
@@ -346,41 +346,33 @@ def writeEndingTime(file_name):
     with open(file_name, "a") as f:
         f.write(str(int(round(time.time() * 1000))) + "\n")
 
-def sendMiceFlow(client=None, server=None, **flow):
+def sendMiceFlow(logtime=False, **flow):
 
     file_name = None
-    if flow['proto'] == 'TCP':
+    if flow['proto'] == 'TCP' and logtime:
         # Save flow starting time
         file_name = writeStartingTime(flow)
 
     # Call internal sendFlow
     successful = _sendFlow(notify=False, **flow)
 
-    if file_name and successful:
+    if file_name and successful and logtime:
         writeEndingTime(file_name)
-
-    if client and server:
-        # Notify flowServer mice server that the mice flow finished
-        event = {'type': 'mice_stop', 'flow': flow}
-        client.send(json.dumps(event), server)
-
-        # Close the client
-        client.close()
 
     # Exit the function gracefully
     sys.exit(0)
 
-def sendElephantFlow(**flow):
+def sendElephantFlow(logtime=False, **flow):
     filename = None
 
     # Write starting time
-    if flow['proto'] == 'TCP':
+    if flow['proto'] == 'TCP' and logtime:
         filename = writeStartingTime(flow)
 
     # Call internal function
     successful = _sendFlow(notify=True, **flow)
 
-    if filename and successful:
+    if filename and successful and logtime:
         writeEndingTime(filename)
 
     # Exit the function gracefully

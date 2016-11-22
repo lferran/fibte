@@ -477,7 +477,7 @@ def traceroute_fast(src=None, dst=None, sport=5001, dport=5002, proto="udp", hop
             recv_socket.close()
 
     # TCP
-    elif proto ==  socket.getprotobyname("tcp"):
+    elif proto == socket.getprotobyname("tcp"):
         send_socket = socket.socket(socket.AF_INET, socket.SOCK_RAW, proto)
         # tell kernel not to put in headers, since we are providing it
         send_socket.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, 1)

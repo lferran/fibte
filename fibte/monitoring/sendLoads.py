@@ -31,6 +31,7 @@ class SendLoads(object):
         self.queue = Queue.Queue(maxsize=0)
         self.remoteIp = remoteIp
         self.remotePort = remotePort
+
         self.k = k
 
         self.time_interval = time_interval
@@ -45,6 +46,7 @@ class SendLoads(object):
         self.queue.put(self.link_loads)
 
     def connectToRemoteServer(self):
+        print("sendLoads(host:{0}, port:{1}".format(self.remoteIp, self.remotePort))
         self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.s.connect((self.remoteIp, self.remotePort))
 
@@ -183,7 +185,8 @@ if __name__ == "__main__":
     parser.add_argument('--ip',
                         help='Ip of the remote host to which we send the link loads data',
                         type=str,
-                        default="192.168.33.1")
+                        default="127.0.0.1")
+                        #default = "192.168.33.1")
 
     parser.add_argument('-i', '--time_interval',
                         help='Polling interval',

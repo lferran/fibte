@@ -24,7 +24,7 @@ from fibte.logger import log
 from fibte.trafficgen.flow import Base
 from fibte.misc.topology_graph import NamesToIps
 from fibte import tmp_files, db_topo
-
+from fibte.misc.ipalias import setup_alias
 
 def time_func(function):
     def wrapper(*args,**kwargs):
@@ -44,6 +44,9 @@ class FlowServer(object):
         # Setup flowServer name and ip
         self.name = name
         self.ip = own_ip
+
+        # Weather secondary ip's are present at the host or not
+        self.ip_alias = ip_alias
 
         # Get parent pid
         self.parentPid = os.getpid()
@@ -82,9 +85,6 @@ class FlowServer(object):
         self.scheduler_thread = Thread(target=self.scheduler.run)
         self.scheduler_thread.setDaemon(True)
 
-        # Weather secondary ip's are present at the host or not
-        self.ip_alias = ip_alias
-
         # To store mice estimation
         self.estimation_lock = Lock()
         self.samples_lock = Lock()
@@ -122,7 +122,6 @@ class FlowServer(object):
         # Keeps track of how many TCP receivers must start for this session
         self.tcpReceiversToStart = 0
         self.tcpLock = Lock()
-
 
     def miceCounterServer(self):
         """Thread that keeps track of the mice level observed by the host"""
@@ -164,15 +163,15 @@ class FlowServer(object):
         if not already_there:
             # It means it doesn't exist, so we have to set it!
             log.info("Setting up UDP black hole!")
-            cmd = "iptables -A INPUT -s {0} -p udp -j DROP".format(self.ip)
+            #cmd = "iptables -A INPUT -s {0} -p udp -j DROP".format(self.ip)
+            cmd = "iptables -A INPUT -p udp -j DROP".format(self.ip)
             subprocess.call(cmd, shell=True)
         else:
             log.info("UDP black hole already up!")
 
     def setICMPRateLimit(self):
         # Modify icmp ratelimit too
-        subprocess.call(['sysctl', '-w', 'net.ipv4.icmp_ratelimit=0'])
-
+        subprocess.call('sysctl -w net.ipv4.icmp_ratelimit=0', shell=True)
 
     def signal_term_handler(self, signal, frame):
         # Only parent will do this
@@ -258,12 +257,10 @@ class FlowServer(object):
                     # Start traceroute in a dedicated thread!
                     thread = multiprocessing.Process(target=self.tracerouteThread, args=(client,), kwargs=(flow))
                     thread.daemon = True
-
                     # thread.setDaemon(True)
                     thread.start()
                 else:
                     continue
-
         except KeyboardInterrupt:
             log.info("{0} : KeyboardInterrupt catched! Exiting".format(self.name))
             sys.exit(0)
@@ -280,8 +277,10 @@ class FlowServer(object):
         :param flow:
         """
         if isElephant(flow):
+            log_elephant_time = False
+
             # Start flow notifying controller
-            process = Process(target=flowGenerator.sendElephantFlow, kwargs=flow)
+            process = Process(target=flowGenerator.sendElephantFlow, args=(log_elephant_time,), kwargs=flow)
             process.daemon = True
             process.start()
 
@@ -298,11 +297,13 @@ class FlowServer(object):
 
         # if is Elephant
         else:
+            log_mices_time = True
+
             # Create client to send mice notification
             mice_client = UnixClient(self.own_mice_server_name)
 
             # Start flow without notifying controller
-            process = Process(target=flowGenerator.sendMiceFlow, args=(mice_client, self.name), kwargs=flow)
+            process = Process(target=flowGenerator.sendMiceFlow, args=(log_mices_time,), kwargs=flow)
             process.daemon = True
             process.start()
 
@@ -341,12 +342,12 @@ class FlowServer(object):
         if err:
             log.error(err)
 
-    def localStartReceiveTCP(self, dport):
+    def localStartReceiveTCP(self, dport, i, total):
         """"""
         # Start netcat process that listens on port
-        process = subprocess.Popen(["nc", "-l", "-p", str(dport)], stdout=open(os.devnull, 'w'), stderr=open(self.logfile, "a"))
+        process = subprocess.Popen(["nc", "-k", "-l", "-p", str(dport)], stdout=open(os.devnull, 'w'), stderr=open(self.logfile, "a"))
         self.popens.append(process)
-        log.info("{0} : Started TCP server at port {1}".format(self.name, dport))
+        log.info("{0} : Started TCP server at port {1} ({2}/{3})".format(self.name, dport, i, total))
         with self.tcpLock:
             self.tcpReceiversToStart -= 1
 
@@ -486,9 +487,6 @@ class FlowServer(object):
         # Cancel all upcoming scheduler events
         action = [self.scheduler.cancel(e) for e in self.scheduler.queue]
 
-        # Restart thread
-        self._restartSchedulerThread()
-
         # Terminate netcat processes
         #log.info("{0} : Killing all ongoing processes".format(self.name))
         for popen in self.popens:
@@ -503,6 +501,10 @@ class FlowServer(object):
                 except OSError:
                     pass
 
+
+        # Restart thread
+        self._restartSchedulerThread()
+
         # Restart lists
         self.processes = []
         self.popens = []
@@ -514,9 +516,9 @@ class FlowServer(object):
         self.mice_estimation_samples = {}
 
         # Schedule mice loads again
-        if self.ip_alias:
-            self.scheduleNotifyMiceLoads()
-            self.scheduleMiceSamplings()
+        #if self.ip_alias:
+        #   self.scheduleNotifyMiceLoads()
+        #   self.scheduleMiceSamplings()
 
         self.controllerNotFoundCount = 0
 
@@ -612,6 +614,16 @@ class FlowServer(object):
         # Start schedule.run()
         self.startSchedulerThread()
 
+    def applyReceiveList(self, receivelist):
+        # Iterate flowlist
+        i = 0
+        total = len(receivelist)
+        for (flowtime, dport) in receivelist:
+            self.localStartReceiveTCP(dport, i, total)
+            i += 1
+        log.debug("{0} : All TCP flow servers were scheduled!".format(self.name))
+        log.debug("{0} : Will receive a total of {1} TCP flows".format(self.name, len(receivelist)))
+
     def startSchedulerThread(self):
         """Starts the action of schedulerThread making sure that the queued
         events will be executed!"""
@@ -657,10 +669,10 @@ class FlowServer(object):
         self._startTrafficGeneratorListenerThread()
         self._startMiceCounterThread()
 
-        if self.ip_alias:
-            # Schedule notify mice loads
-            self.scheduleNotifyMiceLoads()
-            self.scheduleMiceSamplings()
+        #if self.ip_alias:
+        #    # Schedule notify mice loads
+        #    self.scheduleNotifyMiceLoads()
+        #    self.scheduleMiceSamplings()
 
         # Loop forever
         while True:
@@ -682,7 +694,8 @@ class FlowServer(object):
                         # Schedule times at which we need to start TCP servers
                         log.debug("{0} : Receive_list arrived".format(self.name))
                         #self.scheduleReceiveList(receivelist)
-                        self.scheduleReceiveList2(receivelist)
+                        #self.scheduleReceiveList2(receivelist)
+                        self.applyReceiveList(receivelist)
 
                 elif event['type'] == 'startReceiver':
                     port = event['data']

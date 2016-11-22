@@ -1,19 +1,26 @@
 
+# Some UDP flows ###########################################################################
+#src	sport	dst	dport	proto	start	size	rate	duration ######
+h_0_0	7582	h_1_3	5554	TCP	0:0:00	200M	10M	None
+h_0_1	7582	h_1_2	8221	TCP	0:0:02	200M	10M	None
+h_0_2	7582	h_1_1	8443	TCP	0:0:04	200M	10M	None
+h_0_3	7582	h_1_0	8113	TCP	0:0:06	200M	10M	None
+
+
+# For UDP: rate == size and rate field is ignored ##########################################
+
+
+
+
+
 # FLOWS THAT WILL BE STARTED HERE #####################################################
 
 #src	sport	dst	dport	proto	start	size	rate	duration ######
 #h_0_0	7111	h_3_1	2211	UDP	0:0:02	9.5M	9.5M	0:20:00
-
-
-
-
 #h_3_0	7000	h_0_0	2211	TCP	0:0:04	200M	5M	None
-
 #h_0_0	7222	h_3_0	2211	TCP	0:0:04	200M	10M	None
 #h_0_0	7333	h_2_3	2211	TCP	0:0:04	200M	10M	None
 #h_0_0	7000	h_2_2	2211	TCP	0:0:04	200M	10M	None
-
-
 
 
 #h_0_0	7512	h_3_3	5354	TCP	0:0:10	500M	5M	None
@@ -38,7 +45,7 @@
 #########################
 # Some TCP flows ##############################################################################
 #src	sport	dst	dport	proto	start	size	rate	duration ######
-h_0_0	7582	h_3_3	5554	TCP	0:0:00	100M	10M	None
+#h_0_0	7582	h_3_3	5554	TCP	0:0:00	100M	10M	None
 
 # Rate-limited TCP flow that tries to send size bytes of data. It will last at least: size/rate
 
@@ -53,11 +60,4 @@ h_0_0	7582	h_3_3	5554	TCP	0:0:00	100M	10M	None
 
 
 
-# Some UDP flows ###########################################################################
-#src	sport	dst	dport	proto	start	size	rate	duration ######
-#h_0_0	7582	h_3_3	5554	UDP	0:0:00	10M	10M	0:20:00
-#h_0_1	7582	h_3_2	8221	UDP	0:0:02	10M	10M	0:20:00
-#h_0_2	7582	h_3_1	8443	UDP	0:0:04	10M	10M	0:20:00
-#h_0_3	7582	h_3_0	8113	UDP	0:0:06	10M	10M	0:20:00
 
-# For UDP: rate == size and rate field is ignored ##########################################

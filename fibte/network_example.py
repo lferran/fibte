@@ -162,8 +162,12 @@ def stopCounterCollectors(topo):
         path = "/tmp/ifDescr_{0}".format(rid)
         del_file(path)
 
+def setupSecondaryIps(net):
+    print('*** Setting up secondary ips at hosts')
+    for host in net.hosts:
+        setup_alias(host)
 
-def launch_network(k=4, bw=10, ip_alias=False):
+def launch_network(k=4, bw=10, ip_alias=True):
     signal.signal(signal.SIGTERM, signal_term_handler)
 
     # Cleanup the network
@@ -179,9 +183,6 @@ def launch_network(k=4, bw=10, ip_alias=False):
     subprocess.call(["iptables", "-t", "mangle" ,"-X"])
 
     # Topology
-    #topo = TestTopo1()
-    #topo = TestTopo2()
-    #topo = TestTopo3()
     topo = FatTree(k=k, sflow=False, ovs_switches=False)
 
     # Interfaces
@@ -198,6 +199,9 @@ def launch_network(k=4, bw=10, ip_alias=False):
     net.start()
 
     startCounterCollectors(topo, interval=1)
+
+    if ip_alias:
+        setupSecondaryIps(net)
 
     # Start the Fibbing CLI
     FibbingCLI(net)
@@ -237,7 +241,7 @@ if __name__ == '__main__':
                         type=int, default=4)
 
     parser.add_argument('--ip_alias', help='Configure ip alias if argument is present',
-                        action="store_true", default=False)
+                        action="store_true", default=True)
 
     args = parser.parse_args()
     if args.debug:

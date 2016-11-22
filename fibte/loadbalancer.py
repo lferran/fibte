@@ -29,7 +29,7 @@ from fibte.loadbalancer.mice_estimator import MiceEstimatorThread
 from fibte.misc.topology_graph import TopologyGraph
 from fibte.monitoring.getLoads import GetLoads
 from fibte import tmp_files, db_topo, LINK_BANDWIDTH, UDS_server_name, UDS_server_traceroute, C1_cfg, getLoads_path
-from fibte.misc.flowEstimation import EstimateDemands
+from fibte.misc.flowEstimation import EstimateDemands, EstimateDemandError
 
 # Threading event to signal that the initial topo graph
 # has been received from the Fibbing controller
@@ -90,8 +90,7 @@ class LBController(object):
         # Start the Southbound manager in a different thread
         self.sbmanager = MyGraphProvider()
         #self.sbmanager = MyGraphProvider2()
-        t = threading.Thread(target=self.sbmanager.run, name="Southbound Manager thread")
-        t.start()
+        t = threading.Thread(target=self.sbmanager.run, name="Southbound Manager thread").start()
 
         # Blocks until initial graph received from SouthBound Manager
         HAS_INITIAL_GRAPH.wait()
@@ -128,11 +127,7 @@ class LBController(object):
         self.add_del_flow_lock = threading.Lock() # Access lock (!)
 
         # Start getLoads thread that reads from counters
-        in_out_name = self._getAlgorithmName() # Get the name of the GetLoads result file
-        self.gl = GetLoads(k=self.k, time_interval=1, lb_algorithm=in_out_name)
-        self.gl_thread = Thread(target=self.gl.run, name="GetLoads thread")
-        self.gl_thread.setDaemon(True)
-        self.gl_thread.start()
+        self._startGetLoadsThread()
 
         # Object useful to make some unit conversions
         self.base = Base()
@@ -195,6 +190,13 @@ class LBController(object):
     @abc.abstractmethod
     def _getAlgorithmName(self):
         """Returns a string with the name of the algorithm!"""
+
+    def _startGetLoadsThread(self):
+        in_out_name = self._getAlgorithmName() # Get the name of the GetLoads result file
+        self.gl = GetLoads(k=self.k, time_interval=1, lb_algorithm=in_out_name)
+        self.gl_thread = Thread(target=self.gl.run, name="GetLoads thread")
+        self.gl_thread.setDaemon(True)
+        self.gl_thread.start()
 
     def _startTracerouteService(self):
         # UDS server where we listen for the traceroute data
@@ -278,7 +280,7 @@ class LBController(object):
 
                 if not self.isTracerouteWaitingForFlow(flow):
                     # Omit the data
-                    log.debug("discarded data!")
+                    log.warning("discarded data!")
                     continue
 
                 src_n = self.topology.getHostName(flow['src'])
@@ -388,6 +390,12 @@ class LBController(object):
         log.error("EEEEEP ERROR FORT")
         self._sendMainThreadToSleep(4000)
         import ipdb; ipdb.set_trace()
+
+        for fun in [self.topology.getRouterName, self.topology.getRouterFromPrivateIp, self.topology.getRouterFromInterfaceIp]:
+            try:
+                return fun(addr)
+            except KeyError:
+                continue
 
         raise ValueError("{0} is neither a private ip, router id or interface ip".format(addr))
 
@@ -690,7 +698,7 @@ class LBController(object):
         :return:
         """
         # Remove the logifile
-        subprocess.call(['rm', self.logfile])
+        #subprocess.call(['rm', self.logfile])
 
         # Set all dags to original ospf dag
         self.current_elephant_dags = copy.deepcopy(self.initial_elep_dags)
@@ -718,6 +726,12 @@ class LBController(object):
 
         # Reset flow demands
         self.flowDemands = EstimateDemands()
+
+        # Flush all events in the queue
+        with self.q_server.mutex:
+            self.q_server.queue.clear()
+
+        log.info('Loadbalancer was reset successfully')
 
     def getLinkCapacity(self, link, exclude=[]):
         """Returns the difference between link bandwidth and
@@ -893,8 +907,16 @@ class LBController(object):
         """
         Subclass this method
         """
+        # Return if dealocate flow was successful
+        successful = True
+
         # Get final rate of flow
-        rate = self.flowDemands.getDemand(flow)
+        try:
+            rate = self.flowDemands.getDemand(flow)
+        except EstimateDemandError:
+            log.warning('Flow couldn\'t be deallocated: it wasn\'t in flowDemands data structure')
+            successful = False
+            return successful
 
         # Remove flow from estimation matrix
         self.flowDemands.estimateDemands(flow, action='del')
@@ -905,6 +927,7 @@ class LBController(object):
         dport = flow['dport']
         rate = self.base.setSizeToStr(rate * LINK_BANDWIDTH)
         log.debug("Flow FINISHED: Flow({0}:({1}) -> {2}:({3}) | #{4})".format(src, sport, dst, dport, rate))
+        return successful
 
     def tracerouteFlow(self, flow):
         """Starts a traceroute"""
@@ -1143,24 +1166,55 @@ class ECMPController(LBController):
             return
 
         # Get default path of flow
-        #self.findNewPathsForFlows([flow])
+        self.findNewPathsForFlows([flow])
 
     def deallocateFlow(self, flow):
         """Removes flow from flow->path data structure"""
-        super(ECMPController, self).deallocateFlow(flow)
+        if super(ECMPController, self).deallocateFlow(flow):
 
-        # Check if flow is within same subnetwork
-        if self.isFlowToSameNetwork(flow):
-            # No need to loadbalance anything
-            # For TCP: we need to update the matrix
-            return
+            # Check if flow is within same subnetwork
+            if self.isFlowToSameNetwork(flow):
+                # No need to loadbalance anything
+                # For TCP: we need to update the matrix
+                return
 
-        # Remove flow from path
-        #path = self.delFlowFromPath(flow)tt
+            # Remove flow from path
+            path = self.delFlowFromPath(flow)
+
+
+
+
+
+
+
+
 
 class MiceDAGShifter(LBController):
     def __init__(self, *args, **kwargs):
         super(MiceDAGShifter, self).__init__(algorithm='mice-dag-shifter', *args, **kwargs)
+
+        test = True
+        if test:
+            # Invent flow
+            h30 = self.topology.getHostIp('h_3_0')
+            h00 = self.topology.getHostIp('h_0_0')
+            flow = {'src': h00, 'sport': 5555, 'dport': 5555, 'dst': h30, 'proto': 'TCP', 'size': LINK_BANDWIDTH*30, 'duration': None, 'rate': LINK_BANDWIDTH}
+
+            # Add it to the demands
+            self.flowDemands.estimateDemands(flow, action='add')
+
+            # Invent path
+            pathn = ('r_0_e0', 'r_0_a0', 'r_c0', 'r_3_a0', 'r_3_e0')
+            path = [self.topology.getRouterId(r) for r in pathn]
+
+            #path = path[2:4]
+
+            # Add it to the path
+            self.addFlowToPath(flow, path)
+
+            self.adaptMiceDags(path)
+
+            self._sendMainThreadToSleep(3000)
 
     def reset(self):
         super(MiceDAGShifter, self).reset()
@@ -1195,19 +1249,27 @@ class MiceDAGShifter(LBController):
 
     def deallocateFlow(self, flow):
         """Removes flow from flow->path data structure"""
-        super(MiceDAGShifter, self).deallocateFlow(flow)
+        if super(MiceDAGShifter, self).deallocateFlow(flow):
 
-        # Check if flow is within same subnetwork
-        if self.isFlowToSameNetwork(flow):
-            # No need to loadbalance anything
-            # For TCP: we need to update the matrix
-            return
+            # Check if flow is within same subnetwork
+            if self.isFlowToSameNetwork(flow):
+                # No need to loadbalance anything
+                # For TCP: we need to update the matrix
+                return
 
-        # Remove flow from path
-        old_path = self.delFlowFromPath(flow)
+            # Remove flow from path
+            old_path = self.delFlowFromPath(flow)
 
-        # Adapt mice DAGs to new capacities!
-        self.adaptMiceDags(path=old_path)
+            # Adapt mice DAGs to new capacities!
+            self.adaptMiceDags(path=old_path)
+
+
+
+
+
+
+
+
 
 class ElephantDAGShifter(LBController):
     def __init__(self, capacity_threshold=1, congProb_threshold=0.0, sample=False, *args, **kwargs):
@@ -1223,7 +1285,7 @@ class ElephantDAGShifter(LBController):
         # Call init of subclass
         super(ElephantDAGShifter, self).__init__(algorithm='elephant-dag-shifter', *args, **kwargs)
 
-        tests = True
+        tests = False
         if tests:
             h33 = self.topology.getHostIp('h_3_3')
             h32 = self.topology.getHostIp('h_3_2')
@@ -1232,21 +1294,24 @@ class ElephantDAGShifter(LBController):
             starttime = 10
 
             flow1 = {'src': h00, 'sport': sport, 'dport': 1111, 'dst': h33, 'proto': 'TCP', 'size': LINK_BANDWIDTH*30,
-                    'duration': None, 'rate': LINK_BANDWIDTH, 'start_time': starttime}
-
-            flow2 = {'src': h00, 'sport': sport, 'dport': 1111, 'dst': h32, 'proto': 'TCP', 'size': LINK_BANDWIDTH*30,
-                    'duration': None, 'rate': LINK_BANDWIDTH, 'start_time': starttime}
+                    'duration': None, 'rate': LINK_BANDWIDTH}
 
             import ipdb; ipdb.set_trace()
 
-            self.startFlow(flow1)
+            self.startFlow(flow1, starttime=2)
 
-    def startFlow(self, flow):
+    def startFlow(self, flow, starttime=2):
         # Get source ip
         srcip = flow.get('src')
         dstip = flow.get('dst')
         srcname = self.topology.getHostName(srcip)
         dstname = self.topology.getHostName(dstip)
+
+        BUFFER_TIME_S = 2
+
+        # Insert startime
+        flow.update({'starttime': starttime})
+
         # Send flowlist
         if flow.get('proto') == 'UDP':
             flowlist = [flow]
@@ -1254,7 +1319,7 @@ class ElephantDAGShifter(LBController):
 
         else:
             starttime = flow.get('start_time')
-            rcv_start = max(0, starttime-2)
+            rcv_start = max(0, starttime - BUFFER_TIME_S)
             receivelist = [(rcv_start, flow.get('dport'))]
 
             # Sends flowlist to the sender's server
@@ -1325,7 +1390,8 @@ class ElephantDAGShifter(LBController):
         #best_dag.plot(img_name)
 
         # Log a bit
-        log.info("Best DAG was found with a cost: {0} and karma: {1} (img: {2})".format(dagcost, dagkarma, img_name))
+        #log.info("Best DAG was found with a cost: {0} and karma: {1} (img: {2})".format(dagcost, dagkarma, img_name))
+        log.info("Best DAG was found with a cost: {0} and karma: {1}".format(dagcost, dagkarma))
 
         # Force it with Fibbing
         self.saveCurrentDag(dst_px, best_dag)
@@ -1334,19 +1400,20 @@ class ElephantDAGShifter(LBController):
         self.findNewPathsForFlows(dst_ongoing_flows)
 
     def deallocateFlow(self, flow):
-        super(ElephantDAGShifter, self).deallocateFlow(flow)
+        successful = super(ElephantDAGShifter, self).deallocateFlow(flow)
+        if successful:
 
-        # Get destination
-        dst = self.getDestinationPrefixFromFlow(flow)
+            # Get destination
+            dst = self.getDestinationPrefixFromFlow(flow)
 
-        # Check if flow is within same subnetwork
-        if self.isFlowToSameNetwork(flow):
-            # No need to loadbalance anything
-            # For TCP: we need to update the matrix
-            return
+            # Check if flow is within same subnetwork
+            if self.isFlowToSameNetwork(flow):
+                # No need to loadbalance anything
+                # For TCP: we need to update the matrix
+                return
 
-        # Deallocate if from the network
-        old_path = self.delFlowFromPath(flow)
+            # Deallocate if from the network
+            old_path = self.delFlowFromPath(flow)
 
     def findBestSourcePodDag(self, src_pod, complete_dag, ongoing_flows):
         """"""
@@ -1767,6 +1834,9 @@ class ElephantDAGShifter(LBController):
                     for newpath in newpaths:
                         paths.append(newpath)
         return paths
+
+
+
 
 
 

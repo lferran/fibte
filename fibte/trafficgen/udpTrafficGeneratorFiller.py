@@ -12,17 +12,17 @@ class TGFillerParser(TGParser):
         self.parser.add_argument('--elephant_load', help='Level of elephant load', type=float, default=0.0)
         self.parser.add_argument('--n_elephants', help='Number of elephant flows to maintain', type=int, default=16)
         self.parser.add_argument('--mice_load', help='Level of mice load', type=float, default=0.0)
-        self.parser.add_argument('--n_mice', help='Number of mice flows to maintain', type=int, default=32)
+        self.parser.add_argument('--n_mices', help='Number of mice flows to maintain', type=int, default=32)
 
 class udpTrafficGeneratorFiller(udpTrafficGeneratorBase):
-    def __init__(self, elephant_load=0.8, n_elephants=32, mice_load=0.2, n_mice=64, *args, **kwargs):
+    def __init__(self, elephant_load=0.8, n_elephants=32, mice_load=0.2, n_mices=64, *args, **kwargs):
         super(udpTrafficGeneratorFiller, self).__init__(*args, **kwargs)
 
         # Set target link load
         self.elephant_load = elephant_load
         self.n_elephants = n_elephants
         self.mice_load = mice_load
-        self.n_mice = n_mice
+        self.n_mices = n_mices
 
     def get_filename(self):
         """Return filename sample pattern"""
@@ -35,7 +35,7 @@ class udpTrafficGeneratorFiller(udpTrafficGeneratorBase):
                         str(self.elephant_load).replace('.', ','),
                         str(self.n_elephants),
                         str(self.mice_load).replace('.', ','),
-                        str(self.n_mice),
+                        str(self.n_mices),
                         self.totalTime, self.timeStep)
 
         filename += '.traffic'
@@ -253,7 +253,7 @@ class udpTrafficGeneratorFiller(udpTrafficGeneratorBase):
     def scheduleMiceTCP(self, all_mice_flows, flows_per_sender, next_id):
         if self.mice_load > 0.0:
             # Compute number of mice flows and fixed sizes
-            mice_per_host = int(self.n_mice / float(len(self.senders)))
+            mice_per_host = int(self.n_mices / float(len(self.senders)))
             mice_size = (self.mice_load * LINK_BANDWIDTH) / mice_per_host
 
             # Start fws_per_host at each sender
@@ -412,7 +412,7 @@ if __name__ == "__main__":
     tgf = udpTrafficGeneratorFiller(elephant_load=args.elephant_load,
                                     n_elephants=args.n_elephants,
                                     mice_load=args.mice_load,
-                                    n_mice=args.n_mice,
+                                    n_mices=args.n_mices,
                                     pattern=args.pattern,
                                     pattern_args=args.pattern_args,
                                     totalTime=args.time,
