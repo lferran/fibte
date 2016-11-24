@@ -267,7 +267,6 @@ if __name__ == "__main__":
 
     parser.add_argument('-r', '--remote',
                         help='Is the network running in the remote server? (ETH)',
-                        type=bool,
                         action='store_true',
                         default=False)
 
