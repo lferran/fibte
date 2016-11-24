@@ -25,7 +25,7 @@ MIN_MICE_PORT = MIN_PORT
 MAX_MICE_PORT = MIN_MICE_PORT + 1000
 MAX_PORT = 2**16 -1
 MiceRangePorts = xrange(MIN_PORT, MAX_MICE_PORT)
-ElephantRangePorts = (MAX_MICE_PORT, MAX_PORT)
+ElephantRangePorts = xrange(MAX_MICE_PORT, MAX_PORT)
 
 SAVED_TRAFFIC_DIR = os.path.join(os.path.dirname(__file__), 'saved_traffic/')
 
@@ -717,7 +717,7 @@ class udpTrafficGeneratorBase(Base):
         Chooses non colliding source and destiantion ports and re-writes ip addresses
         """
         # Keep track of available ports here
-        availablePorts = {s: {'src': set(ElephantRangePorts), 'dst': set(ElephantRangePorts)} for s in flows_per_sender.keys()}
+        availablePorts = {s: set(ElephantRangePorts) for s in flows_per_sender.keys()}
 
         # Return results here
         new_flows_per_sender = {}
@@ -730,21 +730,22 @@ class udpTrafficGeneratorBase(Base):
             # Iterate flowlist
             for flow_tmp in flowlist:
                 # Get available source ports for sender
-                avSrcPorts = availablePorts[sender]['src']
+                avSrcPorts = availablePorts[sender]
 
                 # Get flow's destination
                 dstHost = flow_tmp['dstHost']
 
                 # Get available destination ports
-                avDstPorts = availablePorts[dstHost]['dst']
+                avDstPorts = availablePorts[dstHost]
 
                 # Make a choice
                 sport = random.choice(list(avSrcPorts))
                 dport = random.choice(list(avDstPorts))
 
+
                 # Update used ports
-                availablePorts[sender]['src'] = avSrcPorts - {sport}
-                availablePorts[dstHost]['dst'] = avDstPorts - {dport}
+                availablePorts[sender] -= {sport}
+                availablePorts[dstHost] -= {dport}
 
                 # Get ips
                 srcIp = self.topology.getHostIp(flow_tmp['srcHost'])
