@@ -17,18 +17,17 @@ class tcpElephantFiller(udpTrafficGeneratorBase):
 
         # Set target link load
         self.n_elephants = n_elephants
-        self.mice_load = 0
-        self.n_mice = 0
 
     def get_filename(self):
         """Return filename sample pattern"""
         pattern_args_fn = self.get_pattern_args_filename()
         filename = '{0}'.format(self.saved_traffic_dir)
-        anames = ['tgf_tcp', '{0}', pattern_args_fn, 'nelep{1}', 't{2}', 'ts{3}']
+        anames = ['tgf_tcp', '{0}', pattern_args_fn, 'nelep{1}','mavg{2}' 't{3}', 'ts{4}']
         filename += '_'.join([a for a in anames if a != None])
 
         filename = filename.format(self.pattern,
                                    str(self.n_elephants),
+                                   str(self.mice_avg).replace('.', ','),
                                    self.totalTime, self.timeStep)
 
         filename += '.traffic'
@@ -62,7 +61,7 @@ class tcpElephantFiller(udpTrafficGeneratorBase):
         tfs = self._get_stopping_flows(all_flows, period)
         return tfs
 
-    def plan_flows(self):
+    def plan_elephant_flows(self):
         """
         """
         # The resulting traffic is stored here
@@ -188,7 +187,7 @@ class tcpElephantFiller(udpTrafficGeneratorBase):
 
         # Re-write correct source and destination ports per each sender
         print("Choosing correct ports for flows...")
-        flows_per_sender = self.choose_corrent_src_dst_ports(new_flows_per_sender)
+        flows_per_sender = self.choose_correct_src_dst_ports(new_flows_per_sender)
         return flows_per_sender
 
 if __name__ == "__main__":
@@ -203,6 +202,7 @@ if __name__ == "__main__":
     tgf = tcpElephantFiller(n_elephants=args.n_elephants,
                             pattern=args.pattern,
                             pattern_args=args.pattern_args,
+                            mice_avg=args.mice_avg,
                             totalTime=args.time,
                             timeStep=args.time_step)
 

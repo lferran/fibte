@@ -1,10 +1,10 @@
-
 # Some UDP flows ###########################################################################
 #src	sport	dst	dport	proto	start	size	rate	duration ######
-h_0_0	7582	h_1_3	5554	TCP	0:0:00	200M	10M	None
-h_0_1	7582	h_1_2	8221	TCP	0:0:02	200M	10M	None
-h_0_2	7582	h_1_1	8443	TCP	0:0:04	200M	10M	None
-h_0_3	7582	h_1_0	8113	TCP	0:0:06	200M	10M	None
+h_0_0	7582	h_1_3	5553	TCP	0:0:00	200M	10M	None
+h_1_3	5553	h_2_2	8221	TCP	0:0:02	200M	10M	None
+
+#h_0_2	7582	h_1_1	8443	TCP	0:0:04	200M	10M	None
+#h_0_3	7582	h_1_0	8113	TCP	0:0:06	200M	10M	None
 
 
 # For UDP: rate == size and rate field is ignored ##########################################

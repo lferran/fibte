@@ -5,7 +5,7 @@ import argparse
 import abc
 import json
 import scipy.stats as stats
-
+import numpy as np
 try:
     import cPickle as pickle
 except:
@@ -21,8 +21,11 @@ import logging
 controllerServer = CFG.get("DEFAULT","controller_UDS_name")
 
 MIN_PORT = 1001
+MIN_MICE_PORT = MIN_PORT
+MAX_MICE_PORT = MIN_MICE_PORT + 1000
 MAX_PORT = 2**16 -1
-RangePorts = xrange(MIN_PORT,MAX_PORT)
+MiceRangePorts = xrange(MIN_PORT, MAX_MICE_PORT)
+ElephantRangePorts = (MAX_MICE_PORT, MAX_PORT)
 
 SAVED_TRAFFIC_DIR = os.path.join(os.path.dirname(__file__), 'saved_traffic/')
 
@@ -55,6 +58,7 @@ class TGParser(object):
         self.parser.add_argument('--addtc', help='Add flows to current traffic --it doesnt reset the controller', action="store_true", default=False)
         self.parser.add_argument('--pattern', help='Communication pattern', choices=['random','staggered','bijection','stride'], type=str, default='random')
         self.parser.add_argument('--pattern_args', help='Communication pattern arguments', type=json.loads, default='{}')
+        self.parser.add_argument('--mice_avg', help="Specifiy the average for the poisson arrival process for mice flows", type=float, default=0.0)
         self.parser.add_argument('-t', '--time', help='Duration of the traffic generator', type=int, default=120)
         self.parser.add_argument('-s', '--time_step', help="Granularity at which we inspect the generated traffic so that the rates are kept", type=int, default=1)
         self.parser.add_argument('--save_traffic', help='Saves traffic in a file so it can be repeated',action="store_true")
@@ -83,22 +87,20 @@ class TGParser(object):
         else:
             # Check if flow file has been given
             if not args.flows_file:
-
                 # If traffic must be loaded
                 if args.load_traffic:
-                    msg = "Loading traffic from file <- {0}"
-                    print msg.format(args.load_traffic)
-
-                    # Fetch traffic from file
-                    traffic = pickle.load(open(args.load_traffic, "r"))
-
-                    # Convert hostnames to current ips
-                    traffic = tgf.changeTrafficHostnamesToIps(traffic)
+                    elephants_per_host, mice_bijections = tgf.loadTraffic(args.load_traffic)
 
                 else:
-                    print "Generating traffic ..."
+                    print("Generating elephant traffic ...")
                     # Generate traffic
-                    traffic = tgf.plan_flows()
+                    elephants_per_host = tgf.plan_elephant_flows()
+
+                    if args.mice_avg != 0.0:
+                        print("Generating mice traffic ...")
+                        mice_bijections = tgf.calculate_mice_port_bijections()
+                    else:
+                        mice_bijections = None
 
                     # If it must be saved
                     if args.save_traffic:
@@ -107,35 +109,27 @@ class TGParser(object):
                         else:
                             filename = args.file_name
 
-                        # Log it
-                        msg = "Saving traffic to file -> {0}"
-                        print msg.format(filename)
-
-                        # Convert current ip's to hostnames
-                        traffic_to_save = tgf.changeTrafficIpsToHostnames(traffic)
-
-                        with open(filename, "w") as f:
-                            pickle.dump(traffic_to_save, f)
+                        # Save it
+                        tgf.saveTraffic(filename, elephants_per_host, mice_bijections, mice_average=args.mice_avg)
 
                 # Orchestrate the traffic (either loaded or generated)
-                print "Scheduling traffic..."
-                tgf.schedule(traffic, add=args.addtc)
+                print("Scheduling traffic...")
+                tgf.schedule(elephants_per_host, mice_bijections, args.mice_avg)
 
             # Flow file has been given
             else:
-                print "Scheduling flows specified in file: {0}".format(args.flows_file)
-
+                print("Scheduling elephant flows specified in TEST file: {0}".format(args.flows_file))
                 # Generate traffic from flows file
-                traffic = tgf.plan_from_flows_file(args.flows_file)
+                elephants_per_host = tgf.plan_from_flows_file(args.flows_file)
 
                 # Schedule it
-                tgf.schedule(traffic, add=args.addtc)
+                tgf.schedule(elephants_per_host)
 
     def printArgs(self, args):
         import ipdb; ipdb.set_trace()
 
 class udpTrafficGeneratorBase(Base):
-    def __init__(self, pattern='random', pattern_args={}, totalTime=100, timeStep=1, *args, **kwargs):
+    def __init__(self, pattern='random', pattern_args={}, mice_avg=1, totalTime=100, timeStep=1, *args, **kwargs):
         super(udpTrafficGeneratorBase, self).__init__(*args, **kwargs)
 
         # Fodler where we store the traffic files
@@ -147,6 +141,9 @@ class udpTrafficGeneratorBase(Base):
         # Get attributes
         self.pattern = pattern
         self.pattern_args = pattern_args
+
+        # Get mice average
+        self.mice_avg = mice_avg
 
         self.totalTime = totalTime
         self.timeStep = timeStep
@@ -436,13 +433,39 @@ class udpTrafficGeneratorBase(Base):
                     return r
 
     @abc.abstractmethod
-    def plan_flows(self):
+    def plan_elephant_flows(self):
         """
         Generates a traffic plan for specified traffic pattern, during a certain
         amount of time.
 
         :return: dictionary host -> flowlist
         """
+
+    def saveTraffic(self, filename, elephants_per_host, mice_bijections=None, mice_average=0.0):
+        # Log it
+        print("Saving traffic to file -> {0}".format(filename))
+
+        # Convert current ip's to hostnames
+        elephants_per_host = self.changeTrafficIpsToHostnames(elephants_per_host)
+        traffic_to_save = {'elephant': elephants_per_host,
+                           'mice': {'bijections': mice_bijections, 'average': mice_average}}
+
+        with open(filename, "w") as f:
+            pickle.dump(traffic_to_save, f)
+
+    def loadTraffic(self, filename):
+        print("Loading traffic from file <- {0}".format(filename))
+
+        # Fetch traffic from file
+        saved_traffic = pickle.load(open(filename, "r"))
+        elephants_per_host = saved_traffic.get('elephant')
+        mice = saved_traffic.get('mice')
+        mice_bijections = mice.get('bijections')
+        mice_average = mice.get('average')
+
+        # Convert hostnames to current ips
+        elephants_per_host = self.changeTrafficHostnamesToIps(elephants_per_host)
+        return elephants_per_host, mice_bijections, mice_average
 
     def resetController(self):
         # Reset controller first
@@ -510,7 +533,25 @@ class udpTrafficGeneratorBase(Base):
 
         return new_traffic_per_host
 
-    def schedule(self, traffic_per_host, add=False):
+    def resetCurrentTraffic(self):
+        log.info("Resetting current traffic")
+
+        # Terminate traffic at the hosts
+        self.terminateTrafficAtHosts()
+
+        # Send reset to controller
+        self.resetController()
+
+    def schedule(self, elephants_per_host, mice_bijections=None, mice_avg=None):
+        """
+        """
+        if mice_bijections:
+            self.scheduleMices(mice_bijections, mice_avg)
+
+        if elephants_per_host:
+            self.scheduleElephants(elephants_per_host)
+
+    def scheduleElephants(self, elephants_per_host):
         """
         Sends the flowlists to their respective senders, together with the
         scheduling starting time.
@@ -518,47 +559,40 @@ class udpTrafficGeneratorBase(Base):
         :param traffic_per_host:
         :return:
         """
-        # Compute all hosts
-        all_hosts = list({h for h in self.topology.getHosts()})
-
-        # Force that we always send terminate!
-        add = False
-
-        if not add:
-            log.info("Resetting current traffic")
-
-            # Terminate traffic at the hosts
-            self.terminateTrafficAtHosts()
-
-            # Send reset to controller
-            self.resetController()
-
-        else:
-            log.info("Adding flows to the current traffic")
-
-        # Set sync. delay
-        INITIAL_DELAY = 5
-
-        # Add initial delay to all flows
-        traffic_per_host = self.addInitialDelay(traffic_per_host, INITIAL_DELAY)
-
         # Compute flows for which we need to start TCP server
-        receive_per_host = self.computeReceiveList(traffic_per_host)
+        receive_per_host = self.computeReceiveList(elephants_per_host)
 
-        #hosts = receive_per_host.keys()[:]
-        #receive_per_host.clear()
-        #for host in hosts:
-        #    tcpservers = {random.randint(2000, 65000) for i in range(100)}
-        #    receive_per_host[host] = [(1, p) for p in tcpservers]
+        # Compute average
+        sums = [len(r) for s, r in receive_per_host.iteritems()]
+        if sums:
+            receive_avg = np.asarray(sums)
+            receive_avg = float(receive_avg.mean())
+            waiting_time = receive_avg/10.0
 
-        # Send receiveLists first
-        self.sendReceiveLists(receive_per_host)
+            # Add initial delay to all flows
+            INITIAL_DELAY = waiting_time + 1
+            elephants_per_host = self.addInitialDelay(elephants_per_host, INITIAL_DELAY)
 
-        log.info('Waiting a bit before sending flowlists...')
-        time.sleep(10)
+            # Send receiveLists first
+            self.sendReceiveLists(receive_per_host)
 
-        # Send flowLists to flowServers!
-        self.sendFlowLists(traffic_per_host)
+            log.info('Waiting {0}s before sending flowlists...'.format(waiting_time))
+            time.sleep(waiting_time)
+
+            # Send flowLists to flowServers!
+            self.sendFlowLists(elephants_per_host)
+
+    def scheduleMices(self, port_bijections, mice_avg):
+        # Schedule all the flows
+        log.info("Sending MICE bijections to hosts")
+        for h, bijections in port_bijections.iteritems():
+            try:
+                # Sends flowlist to the sender's server
+                data = {'bijections': bijections, 'average': mice_avg}
+                self.unixClient.send(json.dumps({"type": "mice_bijections", "data": data}), h)
+
+            except Exception as e:
+                log.error("Host {0} could not be informed about flowlist.".format(h))
 
     def plan_from_flows_file(self, flows_file):
         """Opens the flows file and schedules the specified flows
@@ -678,63 +712,12 @@ class udpTrafficGeneratorBase(Base):
 
         return traffic_copy
 
-    def choose_correct_ports(self, flowlist_tmp):
-        """
-        Given a temporal flow list, the ports of the flows have to be randomly
-        choosen in such a way that no two active outgoing flows from the sender
-        use the same source port.
-
-        :param flowlist_tmp: temporal flowlist
-        :return: final flowlist
-        """
-        # Final flowlist
-        flowlist = []
-
-        allPorts = set(RangePorts)
-
-        for index, flow_tmp in enumerate(flowlist_tmp):
-            # Current flow start time
-            start_time  = flow_tmp['startTime']
-
-            # Filter out the flows that are not active anymore
-            active_flows = [v_flow for v_flow in flowlist_tmp[:index] if self._getFlowEndTime(v_flow)*3 >= start_time]
-
-            # Collect used port numbers
-            usedPorts = set([a_flow['sport'] for a_flow in active_flows])
-
-            # Calculate available ports
-            availablePorts = allPorts - usedPorts
-
-            # Choose random source port from the available
-            sport = random.choice(list(availablePorts))
-
-            # Choose also random destination port: no restrictions here
-            dport = random.choice(RangePorts)
-
-            # Get hosts ip addresses
-            srcIp = self.topology.getHostIp(flow_tmp['srcHost'])
-            dstIp = self.topology.getHostIp(flow_tmp['dstHost'])
-
-            # Create the flow object
-            flow = Flow(src=srcIp, dst=dstIp, sport=sport, dport=dport,
-                        proto=flow_tmp['proto'],
-                        start_time=flow_tmp['startTime'],
-                        size=flow_tmp['size'],
-                        rate=flow_tmp['rate'],
-                        duration=flow_tmp['duration'])
-
-            # Append it to the list -- must be converted to dictionary to be serializable
-            flowlist.append(flow.toDICT())
-
-        # Return flowlist
-        return flowlist
-
-    def choose_corrent_src_dst_ports(self, flows_per_sender):
+    def choose_correct_src_dst_ports(self, flows_per_sender):
         """
         Chooses non colliding source and destiantion ports and re-writes ip addresses
         """
-        # Keep track of used ports here
-        usedPorts = {s: {'src': set(RangePorts), 'dst': set(RangePorts)} for s in flows_per_sender.keys()}
+        # Keep track of available ports here
+        availablePorts = {s: {'src': set(ElephantRangePorts), 'dst': set(ElephantRangePorts)} for s in flows_per_sender.keys()}
 
         # Return results here
         new_flows_per_sender = {}
@@ -746,23 +729,22 @@ class udpTrafficGeneratorBase(Base):
 
             # Iterate flowlist
             for flow_tmp in flowlist:
-
                 # Get available source ports for sender
-                avSrcPorts = usedPorts[sender]['src']
+                avSrcPorts = availablePorts[sender]['src']
 
                 # Get flow's destination
                 dstHost = flow_tmp['dstHost']
 
                 # Get available destination ports
-                avDstPorts = usedPorts[dstHost]['dst']
+                avDstPorts = availablePorts[dstHost]['dst']
 
                 # Make a choice
                 sport = random.choice(list(avSrcPorts))
                 dport = random.choice(list(avDstPorts))
 
                 # Update used ports
-                usedPorts[sender]['src'] = avSrcPorts - {sport}
-                usedPorts[dstHost]['dst'] = avDstPorts - {dport}
+                availablePorts[sender]['src'] = avSrcPorts - {sport}
+                availablePorts[dstHost]['dst'] = avDstPorts - {dport}
 
                 # Get ips
                 srcIp = self.topology.getHostIp(flow_tmp['srcHost'])
@@ -778,3 +760,67 @@ class udpTrafficGeneratorBase(Base):
 
         # Return flowlist
         return new_flows_per_sender
+
+    def calculate_mice_port_bijections(self):
+        """
+        - Each host has N TCP connections limultaneously open
+        - We have to make sure that there are no port collisions
+        :return:
+        """
+        N_CONNECTIONS = 100
+
+        # Keep track of available ports here
+        availablePorts = {s: set(MiceRangePorts) for s in self.senders}
+
+        # Randomly shuffle hosts
+        shuffled_hosts = self.senders[:]
+        random.shuffle(shuffled_hosts)
+
+        # Accumulate result here
+        port_bijections = {s: {'toReceive': [], 'toSend': []} for s in self.senders}
+
+        # Iterate hosts
+        for host in shuffled_hosts:
+            other_hosts = list(set(self.senders) - {host})
+            for conn in range(N_CONNECTIONS):
+                # Choose source port
+                avSrcPorts = list(availablePorts[host])
+                sport = random.choice(avSrcPorts)
+
+                # Choose random destination
+                dst = random.choice(other_hosts)
+
+                # Get destination ip
+                dstIp = self.topology.getHostIp(dst)
+
+                # Choose random dport from its available
+                avDstPorts = list(availablePorts[dst])
+                dport = random.choice(avDstPorts)
+
+                # Update bijectoin mappings
+                port_bijections[host]['toSend'].append({'sport': sport, 'dst': dstIp, 'dport': dport})
+                port_bijections[dst]['toReceive'].append(dport)
+
+                # Update availablePorts
+                availablePorts[host] -= {sport}
+                availablePorts[dst] -= {dport}
+
+        # Return it
+        #for h in self.senders:
+        #    if h != 'h_0_0':
+        #        port_bijections[h]['toSend'] = []
+
+        return port_bijections
+
+
+if __name__ == '__main__':
+    tf = udpTrafficGeneratorBase()
+    bijections = tf.calculate_mice_port_bijections()
+    import ipdb; ipdb.set_trace()
+
+
+
+
+
+
+

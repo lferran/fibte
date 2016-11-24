@@ -183,6 +183,139 @@ def sendFlowTCP(dst="10.0.32.3", sport=5000, dport=5001, size=None, rate=None, d
         #print "Finishing flow gracefully"
         return True
 
+def setupTCPConnection(dst="10.0.32.3", sport=5000, dport=5001, **kwargs):
+    # Setup TCP connection
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    s.setsockopt(socket.IPPROTO_TCP, socket.TCP_MAXSEG, 1500)
+    s.bind(('', sport))
+
+    reconnections = 1
+    time_to_wait = 0.1
+    while reconnections != 0:
+        try:
+            s.connect((dst, dport))
+            break
+        except Exception as e:
+            reconnections -= 1
+            print ("Trying to reconnect to {1}:{2}... trials left {0}".format(reconnections, dst, dport))
+            print ("Error trace: {0}".format(e))
+            time.sleep(time_to_wait)
+            time_to_wait *= 2
+
+    # Could not connect to the server
+    if reconnections == 0:
+        print "We couldn't connect to the server {1}:{0}! Returning...".format(dport, dst)
+        s.close()
+        return None
+
+    else:
+        # Return open socket with the established connection
+        return s
+
+def sendMiceThroughOpenSocket(s, queue, sending, completionTimeFile=None):
+    """
+    s: open TCP socket
+    queue: queue from where it gets the events: new mice sizes to start and terminate
+    sending: threading event that is set() when the function is sending, clear() otherwise
+    completionTimeFile: file name pattern where the completion times will be written
+    """
+    try:
+        terminate = False
+        round = 0
+        fname_pattern = completionTimeFile
+
+        while not terminate:
+            # Blocking get from the queue
+            event = queue.get()
+            queue.task_done()
+
+            if event == 'terminate':
+                print("Terminate received")
+                terminate = True
+                continue
+
+            else:
+                size = event
+                rate = None
+                #print("ROUND: {0}".format(round))
+
+                # Set state to sending
+                sending.set()
+
+                # If rate not specified
+                if not rate:
+                    # We try at highest rate possible
+                    rate = setSizeToInt(LINK_BANDWIDTH)
+
+                else:
+                    # Limit it to LINK_BANDWIDTH
+                    rate = min(setSizeToInt(rate), LINK_BANDWIDTH)
+
+                # Express it in bytes and bytes/s
+                totalSize = setSizeToInt(size)/8
+                rate = rate/8
+
+                # Compute real rate and size due to TCP/IP overhead
+                headers_overhead = minSizeTCP * (rate / 4096)
+                headers_overhead_total = minSizeTCP * (totalSize / 4096)
+                rate = rate - (headers_overhead)
+                totalSize = totalSize - (headers_overhead_total)
+
+                estimated_duration = totalSize/float(rate)
+
+                # We send the size in bytes with rate as maximum rate
+                startTime = time.time()
+                i = 0
+                time_step_s = 1
+
+                # Write down final time here
+                if completionTimeFile:
+                    filename = fname_pattern.format(round)
+                    flow = {'proto': 'tcp', 'size': totalSize, 'rate': rate}
+                    filename = writeStartingTime(flow, filename=filename)
+
+                start = time.time()
+                # While still some data to send
+                while (totalSize > minSizeTCP):
+                    #print "Sending a bit more..."
+                    # Compute data to send next second
+                    rate = min(rate, totalSize - minSizeUDP)
+                    # Send it
+                    send_msg(s, "A" * rate)
+                    # Substract it from the remaining data
+                    totalSize -= rate
+                    # Increment round count
+                    i += 1
+                    # Compute how much to sleep until the next second
+                    next_send_time = startTime + i * time_step_s
+                    # Sleep
+                    time.sleep(max(0, next_send_time - time.time()))
+
+                # Write down final time here
+                if completionTimeFile:
+                    writeEndingTime(filename=filename)
+
+                # Send status to finished
+                sending.clear()
+
+                # Increment round
+                round = round + 1
+
+    except socket.error as e:
+        print "socket.error: {0}".format(e)
+        s.close()
+        return False
+
+    except Exception as e:
+        print "Other exception: {0}".format(e)
+
+    finally:
+        s.close()
+        return True
+
 def recvFlowTCP(dport=5001):
     subprocess.Popen(["nc", "-l", "-p", str(dport)], stdout=open(os.devnull, "w"))
     return
@@ -327,29 +460,34 @@ def _sendFlow(notify=False, **flow):
 
     return successful
 
-def writeStartingTime(flow):
-    file_name = str(delay_folder) + "{0}_{1}_{2}_{3}".format(flow["src"],flow["sport"],
-                                                                        flow["dst"],flow["dport"])
-    if flow['proto'] == 'UDP':
+def writeStartingTime(flow, filename=None):
+    if not filename:
+        file_name = str(delay_folder) + "{0}_{1}_{2}_{3}".format(flow["src"],
+                                                                 flow["sport"],
+                                                                 flow["dst"],
+                                                                 flow["dport"])
+    else:
+        file_name = str(delay_folder) + filename
+
+    if flow['proto'].lower() == 'udp':
         duration = flow.get('duration')
     else:
-        duration = flow.get('size')/flow.get('rate')
+        duration = flow.get('size')/float(flow.get('rate'))
 
     # Save flow starting time
     with open(file_name, "w") as f:
-        f.write("expected {0}".format(duration+1) + "\n")
+        f.write("expected {0}".format(duration) + "\n")
         f.write(str(int(round(time.time() * 1000))) + "\n")
     return file_name
 
-def writeEndingTime(file_name):
+def writeEndingTime(filename):
     # Write finishing time
-    with open(file_name, "a") as f:
+    with open(filename, "a") as f:
         f.write(str(int(round(time.time() * 1000))) + "\n")
 
 def sendMiceFlow(logtime=False, **flow):
-
     file_name = None
-    if flow['proto'] == 'TCP' and logtime:
+    if flow['proto'].lower() == 'tcp' and logtime:
         # Save flow starting time
         file_name = writeStartingTime(flow)
 
@@ -366,7 +504,7 @@ def sendElephantFlow(logtime=False, **flow):
     filename = None
 
     # Write starting time
-    if flow['proto'] == 'TCP' and logtime:
+    if flow['proto'].lower() == 'tcp' and logtime:
         filename = writeStartingTime(flow)
 
     # Call internal function

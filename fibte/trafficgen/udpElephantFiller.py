@@ -19,21 +19,19 @@ class udpElephantFiller(udpTrafficGeneratorBase):
         # Set target link load
         self.elephant_load = elephant_load
         self.n_elephants = n_elephants
-        self.mice_load = 0
-        self.n_mice = 0
+
 
     def get_filename(self):
         """Return filename sample pattern"""
         pattern_args_fn = self.get_pattern_args_filename()
         filename = '{0}'.format(self.saved_traffic_dir)
-        anames = ['tgf_udp', '{0}', pattern_args_fn, 'eload{1}', 'nelep{2}', 'mload{3}', 'nmice{4}', 't{5}', 'ts{6}']
+        anames = ['tgf_udp', '{0}', pattern_args_fn, 'eload{1}', 'nelep{2}', 'mavg{3}', 't{4}', 'ts{5}']
         filename += '_'.join([a for a in anames if a != None])
 
         filename = filename.format(self.pattern,
                                    str(self.elephant_load).replace('.', ','),
                                    str(self.n_elephants),
-                                   str(self.mice_load).replace('.', ','),
-                                   str(self.n_mice),
+                                   str(self.mice_avg).replace('.', ','),
                                    self.totalTime, self.timeStep)
 
         filename += '.traffic'
@@ -274,7 +272,7 @@ class udpElephantFiller(udpTrafficGeneratorBase):
 
         # Re-write correct source and destination ports per each sender
         print("Choosing correct ports for flows...")
-        flows_per_sender = self.choose_corrent_src_dst_ports(new_flows_per_sender)
+        flows_per_sender = self.choose_correct_src_dst_ports(new_flows_per_sender)
         return flows_per_sender
 
 if __name__ == "__main__":
@@ -291,6 +289,7 @@ if __name__ == "__main__":
                                     n_elephants=args.n_elephants,
                                     pattern=args.pattern,
                                     pattern_args=args.pattern_args,
+                                    mice_avg=args.mice_avg,
                                     totalTime=args.time,
                                     timeStep=args.time_step)
 

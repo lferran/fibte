@@ -65,8 +65,13 @@ class DelaysComparator(object):
         """
         flows_to_delay = {}
         for flowfile in os.listdir(folder):
-            (src, sport, dst, dport) = flowfile.split('_')
-            flow = (src, sport, dst, dport)
+            fields = flowfile.split('_')
+            if len(fields) == 4:
+                (src, sport, dst, dport) = fields
+                round = 0
+            elif len(fields) == 5:
+                (src, sport, dst, dport, round) = fields
+            flow = (src, sport, dst, dport, round)
             with open(os.path.join(folder, flowfile), 'r') as f:
                 expected = float(f.readline().strip('\n').split(' ')[1])
                 starttime_ms = float(f.readline().strip('\n'))

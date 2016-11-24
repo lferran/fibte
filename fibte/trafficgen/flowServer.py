@@ -13,7 +13,7 @@ import logging
 import Queue
 import numpy as np
 import subprocess
-from threading import Thread, Lock
+from threading import Thread, Lock, Event
 
 import flowGenerator
 from fibte.monitoring.traceroute import traceroute, traceroute_fast
@@ -25,6 +25,7 @@ from fibte.trafficgen.flow import Base
 from fibte.misc.topology_graph import NamesToIps
 from fibte import tmp_files, db_topo
 from fibte.misc.ipalias import setup_alias
+from fibte import LINK_BANDWIDTH
 
 def time_func(function):
     def wrapper(*args,**kwargs):
@@ -122,6 +123,14 @@ class FlowServer(object):
         # Keeps track of how many TCP receivers must start for this session
         self.tcpReceiversToStart = 0
         self.tcpLock = Lock()
+
+        # Open mice connections data
+        self.open_mice_connections = []
+        # Keep sending mices
+        self.keep_mices = False
+        # We store the current mice thread here
+        self.mices_thread = None
+
 
     def miceCounterServer(self):
         """Thread that keeps track of the mice level observed by the host"""
@@ -345,9 +354,9 @@ class FlowServer(object):
     def localStartReceiveTCP(self, dport, i, total):
         """"""
         # Start netcat process that listens on port
-        process = subprocess.Popen(["nc", "-k", "-l", "-p", str(dport)], stdout=open(os.devnull, 'w'), stderr=open(self.logfile, "a"))
+        process = subprocess.Popen(["nc", "-k", "-l", "-p", str(dport)], stdout=open(os.devnull, 'w'), close_fds=True)
         self.popens.append(process)
-        log.info("{0} : Started TCP server at port {1} ({2}/{3})".format(self.name, dport, i, total))
+        #log.info("{0} : Started TCP server at port {1} ({2}/{3})".format(self.name, dport, i, total))
         with self.tcpLock:
             self.tcpReceiversToStart -= 1
 
@@ -483,15 +492,24 @@ class FlowServer(object):
     def terminateTraffic(self):
         # No need to terminate startFlow processes, since they are killed when
         # the scheduler process is terminated!
-
         # Cancel all upcoming scheduler events
         action = [self.scheduler.cancel(e) for e in self.scheduler.queue]
 
-        # Terminate netcat processes
-        #log.info("{0} : Killing all ongoing processes".format(self.name))
-        for popen in self.popens:
-            popen.kill()
+        # Terminate all mice processes/threads
+        self.keep_mices = False
+        for conndata in self.open_mice_connections:
+            thread = conndata.get('thread')
+            queue = conndata.get('queue')
+            queue.put('terminate')
+            thread.join()
+        self.open_mice_connections = []
+        if self.mices_thread:
+            try:
+                self.mices_thread.join()
+            except Exception as e:
+                log.exception(e)
 
+        # Terminate all tcpSenders
         for process in self.processes:
             if process.is_alive():
                 try:
@@ -501,6 +519,9 @@ class FlowServer(object):
                 except OSError:
                     pass
 
+        for popen in self.popens:
+            popen.kill()
+            popen.wait()
 
         # Restart thread
         self._restartSchedulerThread()
@@ -618,11 +639,96 @@ class FlowServer(object):
         # Iterate flowlist
         i = 0
         total = len(receivelist)
-        for (flowtime, dport) in receivelist:
+        for item in receivelist:
+            if isinstance(item, tuple) and len(item) == 2:
+                (flowtime, dport) = item
+            else:
+                dport = item
+
             self.localStartReceiveTCP(dport, i, total)
             i += 1
         log.debug("{0} : All TCP flow servers were scheduled!".format(self.name))
         log.debug("{0} : Will receive a total of {1} TCP flows".format(self.name, len(receivelist)))
+
+    @staticmethod
+    def getMiceSize():
+        min_len_mice = 0.2
+        max_len_mice = 6
+
+        # Get mice size flow
+        duration_mean = 3.0
+        mice_duration = random.expovariate(1 / duration_mean)
+        while mice_duration > max_len_mice or mice_duration < min_len_mice:
+            mice_duration = random.expovariate(1 / duration_mean)
+
+        mice_size = mice_duration * LINK_BANDWIDTH
+        return mice_size
+
+    def startSenderThreads(self, toSend, average):
+        # Establish TCP connections first
+        for flowdata in toSend:
+            sport = flowdata['sport']
+            dport = flowdata['dport']
+            dst = flowdata['dst']
+            socket = flowGenerator.setupTCPConnection(**flowdata)
+            if socket:
+                log.info("{0} : Connection established successfully!".format(self.name))
+
+                # Create queue
+                queue = Queue.Queue(0)
+
+                # Create Event
+                sending = Event()
+
+                # Get completiontime file pattern
+                completionTimeFile = "{0}_{1}_{2}_{3}".format(self.ip, sport, dst, dport)
+                completionTimeFile += "_{0}"
+
+                # Start Thread
+                thread = Thread(target=flowGenerator.sendMiceThroughOpenSocket, args=(socket, queue, sending, completionTimeFile)).start()
+
+                connection_data = {'queue': queue, 'socket': socket,
+                                   'sending': sending, 'filename': completionTimeFile,
+                                   'thread': thread}
+                self.open_mice_connections.append(connection_data)
+            else:
+                log.error("{2} : Connection at {0}:{1} could not be established".format(dst, dport, self.name))
+                continue
+
+        if not self.open_mice_connections:
+            log.error("{0} : There are no established mice connections. Returning...".format(self.name))
+            return
+
+        self.keep_mices = True
+        while self.keep_mices:
+            #log.info("{0} : Entering in sending mice loop!".format(self.name))
+
+            # Start flows following at Poisson arrival times
+            next_flow = random.expovariate(1/float(average))
+
+            # Sleep until then
+            log.debug("{0} : Sleeping for {1}s".format(self.name, next_flow))
+            time.sleep(next_flow)
+
+            # Get one of the sockets at random
+            unactive_connections = [conn for conn in self.open_mice_connections if not conn['sending'].isSet() ]
+            if unactive_connections:
+                # Pick one at random
+                conn = random.choice(unactive_connections)
+
+                # Get mice size
+                mice_size = self.getMiceSize()
+
+                # Put it into the queue
+                queue = conn['queue']
+                queue.put(mice_size)
+
+            else:
+                log.warning("{0} : All connections are active already!".format(self.name))
+                continue
+
+        log.info("{0} : Finishing mice threads".format(self.name))
+
 
     def startSchedulerThread(self):
         """Starts the action of schedulerThread making sure that the queued
@@ -673,8 +779,8 @@ class FlowServer(object):
         #    # Schedule notify mice loads
         #    self.scheduleNotifyMiceLoads()
         #    self.scheduleMiceSamplings()
-
         # Loop forever
+
         while True:
             try:
                 # Read from TG queue
@@ -693,8 +799,6 @@ class FlowServer(object):
                     if receivelist:
                         # Schedule times at which we need to start TCP servers
                         log.debug("{0} : Receive_list arrived".format(self.name))
-                        #self.scheduleReceiveList(receivelist)
-                        #self.scheduleReceiveList2(receivelist)
                         self.applyReceiveList(receivelist)
 
                 elif event['type'] == 'startReceiver':
@@ -705,6 +809,20 @@ class FlowServer(object):
                     # Stop traffic during ongoing traffic
                     log.debug("{0} : Terminate event received!".format(self.name))
                     self.terminateTraffic()
+
+                elif event["type"] == "mice_bijections":
+                    data = event['data']
+                    average = data['average']
+                    bijections = data['bijections']
+                    toReceive = bijections['toReceive']
+                    toSend = bijections['toSend']
+
+                    # Start receiver threads
+                    self.applyReceiveList(toReceive)
+                    time.sleep(5)
+                    # Start sender threads
+                    self.mices_thread = Thread(target=self.startSenderThreads, args=(toSend, average)).run()
+                    #self.startSenderThreads(toSend, average)
 
                 else:
                     log.debug("{0} : Unknown event received {1}".format(self.name, event))

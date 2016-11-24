@@ -11,31 +11,28 @@ class TGFillerParser(TGParser):
         # Load additional arguments
         self.parser.add_argument('--elephant_load', help='Level of elephant load', type=float, default=0.0)
         self.parser.add_argument('--n_elephants', help='Number of elephant flows to maintain', type=int, default=16)
-        self.parser.add_argument('--mice_load', help='Level of mice load', type=float, default=0.0)
-        self.parser.add_argument('--n_mices', help='Number of mice flows to maintain', type=int, default=32)
 
 class udpTrafficGeneratorFiller(udpTrafficGeneratorBase):
-    def __init__(self, elephant_load=0.8, n_elephants=32, mice_load=0.2, n_mices=64, *args, **kwargs):
+    def __init__(self, elephant_load=0.8, n_elephants=32, *args, **kwargs):
         super(udpTrafficGeneratorFiller, self).__init__(*args, **kwargs)
 
         # Set target link load
         self.elephant_load = elephant_load
         self.n_elephants = n_elephants
-        self.mice_load = mice_load
-        self.n_mices = n_mices
+        self.mice_load = 0
+        self.n_mices = 0
 
     def get_filename(self):
         """Return filename sample pattern"""
         pattern_args_fn = self.get_pattern_args_filename()
         filename = '{0}'.format(self.saved_traffic_dir)
-        anames = ['tgf', '{0}', pattern_args_fn, 'eload{1}', 'nelep{2}', 'mload{3}', 'nmice{4}', 't{5}', 'ts{6}']
+        anames = ['tgf', '{0}', pattern_args_fn, 'eload{1}', 'nelep{2}', 'mavg{3}', 't{4}', 'ts{5}']
         filename += '_'.join([a for a in anames if a != None])
 
         filename = filename.format(self.pattern,
                         str(self.elephant_load).replace('.', ','),
                         str(self.n_elephants),
-                        str(self.mice_load).replace('.', ','),
-                        str(self.n_mices),
+                        str(self.mice_avg).replace('.', ','),
                         self.totalTime, self.timeStep)
 
         filename += '.traffic'
@@ -396,7 +393,7 @@ class udpTrafficGeneratorFiller(udpTrafficGeneratorBase):
 
         # Re-write correct source and destination ports per each sender
         print "Choosing correct ports..."
-        flows_per_sender = self.choose_corrent_src_dst_ports(flows_per_sender)
+        flows_per_sender = self.choose_correct_src_dst_ports(flows_per_sender)
         return flows_per_sender
 
 if __name__ == "__main__":
@@ -411,8 +408,7 @@ if __name__ == "__main__":
     # Start the TG object
     tgf = udpTrafficGeneratorFiller(elephant_load=args.elephant_load,
                                     n_elephants=args.n_elephants,
-                                    mice_load=args.mice_load,
-                                    n_mices=args.n_mices,
+
                                     pattern=args.pattern,
                                     pattern_args=args.pattern_args,
                                     totalTime=args.time,
