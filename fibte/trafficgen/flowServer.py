@@ -8,10 +8,8 @@ import sched
 import time
 import sys
 import random
-import traceback
 import logging
 import Queue
-import numpy as np
 import subprocess
 from threading import Thread, Lock, Event
 
@@ -24,7 +22,6 @@ from fibte.logger import log
 from fibte.trafficgen.flow import Base
 from fibte.misc.topology_graph import NamesToIps
 from fibte import tmp_files, db_topo
-from fibte.misc.ipalias import setup_alias
 from fibte import LINK_BANDWIDTH
 
 def time_func(function):
@@ -130,24 +127,6 @@ class FlowServer(object):
         self.keep_mices = False
         # We store the current mice thread here
         self.mices_thread = None
-
-
-    def miceCounterServer(self):
-        """Thread that keeps track of the mice level observed by the host"""
-        while True:
-            # Wait until mice start/stop events arrive
-            data = json.loads(self.own_mice_server.receive())
-
-            if data['type'] == 'mice_stop':
-                mice_flow = data['flow']
-                # Decrease estimation
-                self.decreaseMiceLoad(mice_flow)
-
-            elif data['type'] == 'reset':
-                with self.estimation_lock:
-                    self.mice_estimation.clear()
-            else:
-                continue
 
     def setup_logging(self):
         """"""
@@ -274,12 +253,6 @@ class FlowServer(object):
             log.info("{0} : KeyboardInterrupt catched! Exiting".format(self.name))
             sys.exit(0)
 
-    def setStartTime(self, starttime):
-        if time.time() < starttime:
-            self.starttime = starttime
-        else:
-            raise ValueError("starttime is older than the current time!")
-
     def startFlow(self, flow):
         """
         Start flow
@@ -322,105 +295,22 @@ class FlowServer(object):
             # Add size of flow to
             self.increaseMiceLoad(flow)
 
-    def remoteStartReceiveTCP(self, dst, dport):
-        """"""
-        if 'h_' not in dst:
-            # Convert dst ip to dname
-            dname = self.namesToIps['ipToName'][dst]
-
-        # Only for debugging
-        else:
-            dname = dst
-
-        # Start netcat process that listens on port
-        process = subprocess.Popen(["mx", dname, "nc", "-l", "-p", str(dport)], stdout=open(os.devnull, "w"))
-        self.popens.append(process)
-
-    def threadedStartReceiveTCP(self, dport):
-        """"""
-        # Start netcat process that listens on port
-        th = Thread(target=self._localStartReceiveTCP, args=[dport])
-        th.start()
-
-    def _localStartReceiveTCP(self, dport):
-        log.debug("{0} : Started TCP server at port {1}".format(self.name, dport))
-
-        # Start netcat process that listens on port
-        process = subprocess.Popen(["nc", "-l", "-p", str(dport)], stdout=open(os.devnull, "w"), stderr=subprocess.PIPE)
-        out, err = process.communicate()
-        if err:
-            log.error(err)
-
     def localStartReceiveTCP(self, dport, i, total):
         """"""
         # Start netcat process that listens on port
         process = subprocess.Popen(["nc", "-k", "-l", "-p", str(dport)], stdout=open(os.devnull, 'w'), close_fds=True)
         self.popens.append(process)
         #log.info("{0} : Started TCP server at port {1} ({2}/{3})".format(self.name, dport, i, total))
-        with self.tcpLock:
-            self.tcpReceiversToStart -= 1
-
-    def increaseMiceLoad(self, flow):
-        """"""
-        if flow['proto'] == 'UDP':
-            to_increase = flow['size']
-
-        else:
-            to_increase = flow['rate']
-
-        # Take flow destination
-        dst = flow['dst']
-
-        with self.estimation_lock:
-            if dst in self.mice_estimation.keys():
-                self.mice_estimation[dst] += to_increase
-            else:
-                self.mice_estimation[dst] = to_increase
-
-        #log.info("(+) mice estimation")
-
-    def decreaseMiceLoad(self, flow):
-        """"""
-        if flow['proto'] == 'UDP':
-            to_decrease = flow['size']
-
-        else:
-            to_decrease = flow['rate']
-
-        # Take flow destination
-        dst = flow['dst']
-        with self.estimation_lock:
-            if dst in self.mice_estimation.keys():
-                self.mice_estimation[dst] -= to_decrease
-            else:
-                log.error("Decreasing flow that wasn't increased previously")
-
-        #log.info("(-) mice estimation")
-
-    def takeMiceLoadSample(self):
-        """Start process that takes sample"""
-        try:
-            with self.samples_lock:
-                with self.estimation_lock:
-                    for (dst, load) in self.mice_estimation.iteritems():
-                        if dst in self.mice_estimation_samples.keys():
-                            self.mice_estimation_samples[dst].append(load)
-                        else:
-                            self.mice_estimation_samples[dst] = [load]
-            #log.info("[+] sample taken!")
-        except Exception as e:
-            log.error("Error while taking mice load sample")
-            log.exception(e)
 
     def _getFlowEndTime(self, flow):
         """"""
         return flow.get('startTime') + self._getFlowDuration(flow)
 
     def _getFlowDuration(self, flow):
-        if flow['proto'] == 'UDP':
+        if flow['proto'].lower() == 'udp':
             return flow.get('duration')
         else:
-            return flow.get('size')/flow.get('rate')
+            return flow.get('size')/float(flow.get('rate'))
 
     def getTrafficDuration(self, flowlist):
         """
@@ -431,63 +321,6 @@ class FlowServer(object):
         else:
             log.error("NO FLOWLIST FOR THIS HOST! ")
             return 3600
-
-    def scheduleNotifyMiceLoads(self):
-        """
-        Schedules the notifications of the mice loads to the controller
-        """
-        if self.controllerNotFoundCount > 40:
-            log.warning("{0} : Not scheduling mice notifications anymore".format(self.name))
-            pass
-        else:
-            looptime = 100
-
-            # Log a bit
-            log.info("{0} : Scheduling mice notificationss: every {1}s".format(self.name, self.notify_period))
-
-            # Schedule samplings at correct sampling intervals
-            for st in range(0, looptime, self.notify_period):
-                self.scheduler.enter(st, 1, self.notifyMiceLoads, [])
-
-            # Schedule himself too!
-            self.scheduler.enter(looptime-1, 1, self.scheduleNotifyMiceLoads, [])
-
-    def scheduleMiceSamplings(self):
-        """
-        Schedules the samplings for the mice estimation
-        """
-        if self.controllerNotFoundCount > 40:
-            log.warning("{0} : Not scheduling mice samplings anymore".format(self.name))
-            pass
-
-        else:
-            looptime = 100
-
-            sampling_period = 1 / self.sampling_rate
-            log.info("{0} : Scheduling mice samplings: every {1}s".format(self.name, 1 / self.sampling_rate))
-
-            # Schedule samplings at correct sampling intervals
-            for sp in range(0, looptime, sampling_period):
-                self.scheduler.enter(sp, 1, self.takeMiceLoadSample, [])
-
-            # Schedule himself too!
-            self.scheduler.enter(looptime-1, 1, self.scheduleMiceSamplings, [])
-
-    def notifyMiceLoads(self):
-        """Send samples from last period to controller"""
-        try:
-            with self.samples_lock:
-                # Copy dict
-                samples_to_send = self.mice_estimation_samples.copy()
-
-                # Empty previous samples
-                self.mice_estimation_samples.clear()
-
-            # Send them to the controller
-            self.client_to_controller.send(json.dumps({"type": "miceEstimation", 'data': {'src': self.name, 'samples': samples_to_send}}), "")
-        except Exception as e:
-            self.controllerNotFoundCount += 1
-            log.error("{0} : Controller not found: {1}".format(self.name, e))
 
     def terminateTraffic(self):
         # No need to terminate startFlow processes, since they are killed when
@@ -536,11 +369,6 @@ class FlowServer(object):
 
         self.mice_estimation_samples = {}
 
-        # Schedule mice loads again
-        #if self.ip_alias:
-        #   self.scheduleNotifyMiceLoads()
-        #   self.scheduleMiceSamplings()
-
         self.controllerNotFoundCount = 0
 
         with self.tcpLock:
@@ -562,12 +390,6 @@ class FlowServer(object):
         tcp_server_thread = Thread(target = self.server_from_tg.run)
         tcp_server_thread.setDaemon(True)
         tcp_server_thread.start()
-
-    def _startMiceCounterThread(self):
-        # Start thread that counts the mice sizes
-        mice_thread = Thread(target=self.miceCounterServer)
-        #mice_thread.setDaemon(True)
-        mice_thread.start()
 
     def scheduleFlowList(self, flowlist):
         """Schedules a list of flows to start"""
@@ -665,6 +487,10 @@ class FlowServer(object):
         return mice_size
 
     def startSenderThreads(self, toSend, average):
+        """"""
+        # Sleep a bit initially, to leave time to he TCP receivers to setup
+        time.sleep(5)
+
         # Establish TCP connections first
         for flowdata in toSend:
             sport = flowdata['sport']
@@ -729,7 +555,6 @@ class FlowServer(object):
 
         log.info("{0} : Finishing mice threads".format(self.name))
 
-
     def startSchedulerThread(self):
         """Starts the action of schedulerThread making sure that the queued
         events will be executed!"""
@@ -773,13 +598,6 @@ class FlowServer(object):
 
         # Start some threads
         self._startTrafficGeneratorListenerThread()
-        self._startMiceCounterThread()
-
-        #if self.ip_alias:
-        #    # Schedule notify mice loads
-        #    self.scheduleNotifyMiceLoads()
-        #    self.scheduleMiceSamplings()
-        # Loop forever
 
         while True:
             try:
@@ -813,16 +631,14 @@ class FlowServer(object):
                 elif event["type"] == "mice_bijections":
                     data = event['data']
                     average = data['average']
-                    bijections = data['bijections']
-                    toReceive = bijections['toReceive']
-                    toSend = bijections['toSend']
+                    toReceive = data['bijections']['toReceive']
+                    toSend = data['bijections']['toSend']
 
                     # Start receiver threads
                     self.applyReceiveList(toReceive)
-                    time.sleep(5)
+
                     # Start sender threads
                     self.mices_thread = Thread(target=self.startSenderThreads, args=(toSend, average)).run()
-                    #self.startSenderThreads(toSend, average)
 
                 else:
                     log.debug("{0} : Unknown event received {1}".format(self.name, event))
