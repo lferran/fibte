@@ -545,11 +545,11 @@ class udpTrafficGeneratorBase(Base):
     def schedule(self, elephants_per_host, mice_bijections=None, mice_avg=None):
         """
         """
-        if mice_bijections:
-            self.scheduleMices(mice_bijections, mice_avg)
-
         if elephants_per_host:
             self.scheduleElephants(elephants_per_host)
+
+        if mice_bijections:
+            self.scheduleMices(mice_bijections, mice_avg)
 
     def scheduleElephants(self, elephants_per_host):
         """
@@ -768,7 +768,7 @@ class udpTrafficGeneratorBase(Base):
         - We have to make sure that there are no port collisions
         :return:
         """
-        N_CONNECTIONS = 100
+        N_CONNECTIONS = 50
 
         # Keep track of available ports here
         availablePorts = {s: set(MiceRangePorts) for s in self.senders}
@@ -805,11 +805,6 @@ class udpTrafficGeneratorBase(Base):
                 # Update availablePorts
                 availablePorts[host] -= {sport}
                 availablePorts[dst] -= {dport}
-
-        # Return it
-        #for h in self.senders:
-        #    if h != 'h_0_0':
-        #        port_bijections[h]['toSend'] = []
 
         return port_bijections
 

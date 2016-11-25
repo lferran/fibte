@@ -183,14 +183,14 @@ def sendFlowTCP(dst="10.0.32.3", sport=5000, dport=5001, size=None, rate=None, d
         #print "Finishing flow gracefully"
         return True
 
-def setupTCPConnection(dst="10.0.32.3", sport=5000, dport=5001, **kwargs):
+def setupTCPConnection(src='', dst="10.0.32.3", sport=5000, dport=5001, **kwargs):
     # Setup TCP connection
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
     s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     s.setsockopt(socket.IPPROTO_TCP, socket.TCP_MAXSEG, 1500)
-    s.bind(('', sport))
+    s.bind((src, sport))
 
     reconnections = 1
     time_to_wait = 0.1
@@ -233,9 +233,8 @@ def sendMiceThroughOpenSocket(s, queue, sending, completionTimeFile=None):
             queue.task_done()
 
             if event == 'terminate':
-                print("Terminate received")
                 terminate = True
-                continue
+                terminate
 
             else:
                 size = event
@@ -279,7 +278,7 @@ def sendMiceThroughOpenSocket(s, queue, sending, completionTimeFile=None):
 
                 start = time.time()
                 # While still some data to send
-                while (totalSize > minSizeTCP):
+                while (totalSize > minSizeTCP) and sending.isSet():
                     #print "Sending a bit more..."
                     # Compute data to send next second
                     rate = min(rate, totalSize - minSizeUDP)
