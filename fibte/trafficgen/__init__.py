@@ -6,15 +6,12 @@ def isElephant(flow):
 
     returns: boolean
     """
-    if flow['proto'] == 'UDP':
+    if flow['proto'].lower() == 'udp':
         return flow['size'] >= ELEPHANT_SIZE_RANGE[0]
 
-    elif flow['proto'] == 'TCP':
-        if flow.get('duration'):
-            return flow['duration'] >= 20
-        else:
-            duration = flow.get('size')/flow.get('rate')
-            return duration >= 20
+    elif flow['proto'].lower() == 'tcp':
+        duration = flow.get('size')/float(flow.get('rate'))
+        return duration >= 20
 
 def isMice(flow):
     """

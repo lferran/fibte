@@ -9,10 +9,10 @@ class TGFillerParser(TGParser):
         super(TGFillerParser, self).loadParser()
 
         # Load additional arguments
-        self.parser.add_argument('--n_elephants', help='Number of elephant flows to maintain', type=int, default=16)
+        self.parser.add_argument('--n_elephants', help='Number of elephant flows to maintain', type=int, default=0)
 
 class tcpElephantFiller(udpTrafficGeneratorBase):
-    def __init__(self, n_elephants=32, *args, **kwargs):
+    def __init__(self, n_elephants=0, *args, **kwargs):
         super(tcpElephantFiller, self).__init__(*args, **kwargs)
 
         # Set target link load
@@ -93,7 +93,7 @@ class tcpElephantFiller(udpTrafficGeneratorBase):
                     data_size = min_duration * max_rate
 
                     # Rate reduction
-                    rate_reduction = random.uniform(0.5, 0.9)
+                    rate_reduction = random.uniform(0.3, 0.8)
                     estimated_rate = (LINK_BANDWIDTH/elep_per_host) * rate_reduction
 
                     # Random start time
@@ -110,7 +110,7 @@ class tcpElephantFiller(udpTrafficGeneratorBase):
                          'type': 'e',
                          'srcHost': sender,
                          'dstHost': destination,
-                         'proto': 'TCP',
+                         'proto': 'tcp',
                          'startTime': new_starttime,
                          'size': data_size,
                          'rate': LINK_BANDWIDTH,
@@ -138,7 +138,7 @@ class tcpElephantFiller(udpTrafficGeneratorBase):
                         data_size = min_duration * max_rate
 
                         # Rate reduction
-                        rate_reduction = random.uniform(0.5, 0.9)
+                        rate_reduction = random.uniform(0.3, 0.8)
                         estimated_rate = (LINK_BANDWIDTH / elep_per_host) * rate_reduction
 
                         # Previous endtime
@@ -158,7 +158,7 @@ class tcpElephantFiller(udpTrafficGeneratorBase):
                              'type': 'e',
                              'srcHost': original_sender,
                              'dstHost': destination,
-                             'proto': 'TCP',
+                             'proto': 'tcp',
                              'startTime': new_starttime,
                              'size': data_size,
                              'rate': LINK_BANDWIDTH,

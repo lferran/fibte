@@ -10,7 +10,7 @@ class TGFillerParser(TGParser):
 
         # Load additional arguments
         self.parser.add_argument('--elephant_load', help='Level of elephant load', type=float, default=0.0)
-        self.parser.add_argument('--n_elephants', help='Number of elephant flows to maintain', type=int, default=16)
+        self.parser.add_argument('--n_elephants', help='Number of elephant flows to maintain', type=int, default=0)
 
 class udpElephantFiller(udpTrafficGeneratorBase):
     def __init__(self, elephant_load=0.8, n_elephants=32, mice_load=0.2, n_mice=64, *args, **kwargs):

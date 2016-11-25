@@ -11,12 +11,12 @@ import random
 import logging
 import Queue
 import subprocess
-from threading import Thread, Lock, Event
+from threading import Thread, Event, Timer
 
 import flowGenerator
 from fibte.monitoring.traceroute import traceroute, traceroute_fast
 from fibte.misc.unixSockets import UnixServerTCP, UnixClientTCP, UnixServer, UnixClient
-from fibte.trafficgen import isElephant, isMice
+from fibte.trafficgen import isElephant
 from fibte.misc.ipalias import get_secondary_ip
 from fibte.logger import log
 from fibte.trafficgen.flow import Base
@@ -152,11 +152,11 @@ class FlowServer(object):
             self.traceroute_server.close()
             self.server_from_tg.close()
             for process in self.processes:
-                log.info("{0} : Terminating pid: {1}".format(self.name, process))
+                log.info("{0}: Terminating pid: {1}".format(self.name, process))
                 process.terminate()
             sys.exit(0)
         else:
-            log.info("{0} : Children exiting!".format(self.name))
+            log.info("{0}: Children exiting!".format(self.name))
             sys.exit(0)
 
     def tracerouteThread(self, client, **flow):
@@ -234,7 +234,7 @@ class FlowServer(object):
                 else:
                     continue
         except KeyboardInterrupt:
-            log.info("{0} : KeyboardInterrupt catched! Exiting".format(self.name))
+            log.info("{0}: KeyboardInterrupt catched! Exiting".format(self.name))
             sys.exit(0)
 
     def startElephantFlow(self, flow, logDelay=False):
@@ -243,7 +243,7 @@ class FlowServer(object):
         """
         if isElephant(flow):
             # Start flow notifying controller
-            process = Process(target=flowGenerator.sendElephantFlow, args=(logDelay,), kwargs=flow)
+            process = Process(target=flowGenerator.sendElephantFlow, args=(logDelay,), kwargs=(flow))
             process.daemon = True
             process.start()
 
@@ -256,9 +256,9 @@ class FlowServer(object):
             duration = self._getFlowDuration(flow)
             dst = self.namesToIps['ipToName'][flow['dst']]
             proto = flow['proto']
-            log.debug("{0} : Starting {4} elephant -> {1} rate: {2} duration: {3}".format(self.name, dst, rate, duration, proto))
+            log.debug("{0}: Starting {4} elephant -> {1} rate: {2} duration: {3}".format(self.name, dst, rate, duration, proto))
         else:
-            log.error("{0} : not an elephant flow! {1}".format(self.name, flow))
+            log.error("{0}: not an elephant flow! {1}".format(self.name, flow))
 
     def localStartReceiveTCP(self, dport):
         """"""
@@ -292,26 +292,6 @@ class FlowServer(object):
         # Cancel all upcoming scheduler events
         action = [self.scheduler.cancel(e) for e in self.scheduler.queue]
 
-        # Terminate all mice processes/threads
-        self.keep_mices = False
-        for conndata in self.open_mice_connections:
-            thread = conndata.get('thread')
-            queue = conndata.get('queue')
-            sending = conndata.get('sending')
-            # Stop flow if it is sending
-            if sending.isSet(): sending.clear()
-            # Terminate sendeing thread
-            queue.put('terminate')
-            # Join the thread
-            if thread: thread.join()
-
-        self.open_mice_connections = []
-        if self.mices_thread:
-            try:
-                self.mices_thread.join()
-            except Exception as e:
-                log.exception(e)
-
         # Terminate all tcpSenders
         for process in self.processes:
             if process.is_alive():
@@ -325,6 +305,27 @@ class FlowServer(object):
         for popen in self.popens:
             popen.kill()
             popen.wait()
+
+        # Terminate all mice processes/threads
+        self.mices_timer.cancel()
+        self.keep_mices = False
+        for conndata in self.open_mice_connections:
+            thread = conndata.get('thread')
+            queue = conndata.get('queue')
+            sending = conndata.get('sending')
+            # Stop flow if it is sending
+            if sending.isSet(): sending.clear()
+            # Terminate sendeing thread
+            queue.put('terminate')
+            # Join the thread
+            if thread: thread.join()
+        self.open_mice_connections = []
+
+        if self.mices_thread:
+            try:
+                self.mices_thread.join()
+            except Exception as e:
+                log.exception(e)
 
         # Restart thread
         self._restartSchedulerThread()
@@ -358,7 +359,7 @@ class FlowServer(object):
             # Schedule startFlow
             self.scheduler.enter(starttime, 1, self.startElephantFlow, [flow, logDelay])
         # Log a bit
-        log.debug("{0} : Scheduled {1} elephant flows: [tcp: {2} | udp: {3}]".format(self.name, len(flowlist), tcp, udp))
+        log.debug("{0}: Scheduled {1} elephant flows: [tcp: {2} | udp: {3}]".format(self.name, len(flowlist), tcp, udp))
         # Start schedule.run()
         self.startSchedulerThread()
 
@@ -369,7 +370,7 @@ class FlowServer(object):
         # Iterate flowlist
         for (flowtime, dport) in receivelist:
             self.scheduler.enter(flowtime - buffer_time, 1, self.localStartReceiveTCP, [dport])
-        log.debug("{0} : scheduled {1} TCP servers".format(self.name, len(receivelist)))
+        log.debug("{0}: scheduled {1} TCP servers".format(self.name, len(receivelist)))
         # Start schedule.run()
         self.startSchedulerThread()
 
@@ -386,20 +387,17 @@ class FlowServer(object):
             else:
                 dport = item
             self.localStartReceiveTCP(dport)
-        log.debug("{0} : started {1} TCP servers".format(self.name, len(receivelist)))
+        log.debug("{0}: started {1} TCP servers".format(self.name, len(receivelist)))
 
     @staticmethod
     def getMiceSize():
-        min_len_mice = 0.2
-        max_len_mice = 6
-
         # Get mice size flow
-        duration_mean = 3.0
-        mice_duration = random.expovariate(1 / duration_mean)
-        while mice_duration > max_len_mice or mice_duration < min_len_mice:
-            mice_duration = random.expovariate(1 / duration_mean)
-
-        mice_size = mice_duration * LINK_BANDWIDTH
+        duration_mean = 2
+        mice_size = random.expovariate(1 / float(duration_mean)) * LINK_BANDWIDTH
+        duration = mice_size / float(LINK_BANDWIDTH)
+        while duration > 20:
+            mice_size = random.expovariate(1 / float(duration_mean)) * LINK_BANDWIDTH
+            duration = mice_size / float(LINK_BANDWIDTH)
         return mice_size
 
     def establishOutgoingMiceTCPConns(self, toSend, logDelay=False):
@@ -420,6 +418,7 @@ class FlowServer(object):
                 src = self.primary_ip
 
             flow = {'src': src, 'sport': sport, 'dst': dst, 'dport': dport}
+            log.info("{0}: mice flow: {1}".format(self.name, flow))
 
             # Setup connection
             socket = flowGenerator.setupTCPConnection(**flow)
@@ -451,7 +450,7 @@ class FlowServer(object):
                 erroneous_conns += 1
                 continue
 
-        log.debug("{0} : {1}/{2} connections established".format(self.name, total_send_conns - erroneous_conns,
+        log.debug("{0}: {1}/{2} connections established".format(self.name, total_send_conns - erroneous_conns,
                                                                  total_send_conns))
 
     def startMiceSenderThread(self, toSend, average, logDelay=False):
@@ -465,7 +464,7 @@ class FlowServer(object):
         self.establishOutgoingMiceTCPConns(toSend, logDelay)
 
         if not self.open_mice_connections:
-            log.error("{0} : There are no established mice connections. Returning...".format(self.name))
+            log.error("{0}: There are no established mice connections. Returning...".format(self.name))
             return
 
         self.keep_mices = True
@@ -486,10 +485,14 @@ class FlowServer(object):
                 queue.put(self.getMiceSize())
 
             elif self.keep_mices:
-                log.warning("{0} : All connections are active already!".format(self.name))
+                log.warning("{0}: All connections are active already!".format(self.name))
                 continue
 
-        log.info("{0} : Finishing mice threads".format(self.name))
+        log.info("{0}: Finishing mice threads".format(self.name))
+
+    def stopMiceSenderThread(self):
+        log.info("{0}: Stopping generating more mice traffic".format(self.name))
+        self.keep_mices = False
 
     def startSchedulerThread(self):
         """Starts the action of schedulerThread making sure that the queued
@@ -513,6 +516,23 @@ class FlowServer(object):
             #log.info("Scheduler thread successfully started!")
             pass
 
+    def scheduleMices(self, event, logDelays=False):
+        average = event['data']['average']
+        toReceive = event['data']['bijections']['toReceive']
+        toSend = event['data']['bijections']['toSend']
+        totalTime = event['data']['totalTime']
+
+        # Start receiver threads
+        self.startTCPServers(toReceive)
+
+        # Stop mice traffic after totalTime
+        self.mices_timer = Timer(totalTime, self.stopMiceSenderThread)
+        self.mices_timer.start()
+
+        # Start sender threads
+        self.mices_thread = Thread(target=self.startMiceSenderThread, args=(toSend, average, logDelays))
+        self.mices_thread.start()
+
     def _restartSchedulerThread(self):
         """Joins the previous scheduler thread and creates a new instance
         so that self.scheduler.run can be called again!
@@ -532,9 +552,9 @@ class FlowServer(object):
     def run(self):
         # Choose whether to log completion times for mices and elephants
         LOG_ELEPHANTS_COMPLETION_TIME = False
-        LOG_MICE_COMPLETION_TIME = False
+        LOG_MICE_COMPLETION_TIME = True
 
-        log.info("{0} : flowServer started!".format(self.name))
+        log.info("{0}: flowServer started!".format(self.name))
 
         # Start thread that listends for commands and puts them in the queue
         self._startTrafficGeneratorListenerThread()
@@ -549,14 +569,14 @@ class FlowServer(object):
                     flowlist = event["data"]
                     if flowlist:
                         # Schedule flows relative to current time
-                        log.debug("{0} : Flow_list arrived".format(self.name))
+                        log.debug("{0}: Flow_list arrived".format(self.name))
                         self.scheduleElephants(flowlist=flowlist, logDelay=LOG_ELEPHANTS_COMPLETION_TIME)
 
                 elif event['type'] == "receivelist":
                     receivelist = event['data']
                     if receivelist:
                         # Schedule times at which we need to start TCP servers
-                        log.debug("{0} : Receive_list arrived".format(self.name))
+                        log.debug("{0}: Receive_list arrived".format(self.name))
                         self.scheduleTCPServers(receivelist, buffer_time=2)
 
                 elif event['type'] == 'startReceiver':
@@ -565,32 +585,22 @@ class FlowServer(object):
 
                 elif event["type"] == "terminate":
                     # Stop traffic during ongoing traffic
-                    log.debug("{0} : Terminate event received!".format(self.name))
+                    log.debug("{0}: Terminate event received!".format(self.name))
                     self.terminateTraffic()
 
                 elif event["type"] == "mice_bijections":
-                    # Parse data from event
-                    average = event['data']['average']
-                    toReceive = event['data']['bijections']['toReceive']
-                    toSend = event['data']['bijections']['toSend']
-
-                    # Start receiver threads
-                    self.startTCPServers(toReceive)
-
-                    # Start sender threads
-                    self.mices_thread = Thread(target=self.startMiceSenderThread, args=(toSend, average))
-                    self.mices_thread.start()
+                    self.scheduleMices(event, logDelays=LOG_MICE_COMPLETION_TIME)
 
                 else:
-                    log.debug("{0} : Unknown event received {1}".format(self.name, event))
+                    log.debug("{0}: Unknown event received {1}".format(self.name, event))
                     continue
 
             except KeyboardInterrupt:
-                log.info("{0} : KeyboardInterrupt catched! Exiting".format(self.name))
+                log.info("{0}: KeyboardInterrupt catched! Exiting".format(self.name))
                 self.terminateTraffic()
                 break
 
-        log.info("{0} : Shutting down".format(self.name))
+        log.info("{0}: Shutting down".format(self.name))
         sys.exit(0)
 
 if __name__ == "__main__":

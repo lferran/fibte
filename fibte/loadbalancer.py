@@ -809,7 +809,7 @@ class LBController(object):
                 else:
                     raise ValueError("Weird: flow was already in the data structure")
 
-    def addFlowToPath(self, flow, path, do_log=True):
+    def addFlowToPath(self, flow, path, do_log=False):
         """Adds a new flow to path datastructures"""
         # Get key from flow
         fkey = self.flowToKey(flow)
@@ -838,7 +838,7 @@ class LBController(object):
         if do_log:
             self.logFlowToPath(action='add', flow=flow, path=path)
 
-    def delFlowFromPath(self, flow, do_log=True):
+    def delFlowFromPath(self, flow, do_log=False):
         """Removes an ongoing flow from path"""
         # Get key from flow
         fkey = self.flowToKey(flow)
@@ -873,7 +873,7 @@ class LBController(object):
 
         return old_path
 
-    def updateFlowPath(self, flow, new_path, do_log=True):
+    def updateFlowPath(self, flow, new_path, do_log=False):
         """Updates path from an already existing flow"""
         if not self.isOngoingFlow(flow):
             raise ValueError("We are updating a flow that is not yet registered!!!")
@@ -901,7 +901,8 @@ class LBController(object):
         rate = self.base.setSizeToStr(rate * LINK_BANDWIDTH)
         sport = flow['sport']
         dport = flow['dport']
-        log.debug("New flow STARTED: Flow({0}:({1}) -> {2}:({3}) | Demand: {4})".format(src, sport, dst, dport, rate))
+        proto = flow['proto']
+        log.debug("Flow STARTED: {5}Flow({0}:({1}) -> {2}:({3}) | Demand: {4})".format(src, sport, dst, dport, rate, proto))
 
     def deallocateFlow(self, flow):
         """
@@ -914,7 +915,7 @@ class LBController(object):
         try:
             rate = self.flowDemands.getDemand(flow)
         except EstimateDemandError:
-            log.warning('Flow couldn\'t be deallocated: it wasn\'t in flowDemands data structure')
+            log.warning("Flow couldn't be deallocated: it wasn't in flowDemands data structure")
             successful = False
             return successful
 
@@ -926,7 +927,8 @@ class LBController(object):
         sport = flow['sport']
         dport = flow['dport']
         rate = self.base.setSizeToStr(rate * LINK_BANDWIDTH)
-        log.debug("Flow FINISHED: Flow({0}:({1}) -> {2}:({3}) | #{4})".format(src, sport, dst, dport, rate))
+        proto = flow['proto']
+        log.debug("Flow FINISHED: {5}Flow({0}:({1}) -> {2}:({3}) | #{4})".format(src, sport, dst, dport, rate, proto))
         return successful
 
     def tracerouteFlow(self, flow):
@@ -1114,34 +1116,33 @@ class LBController(object):
                         self.q_server.task_done()
                         log.info("LB not active - event received: {0}".format(json.loads(event)))
                 else:
-                    # Read from TCP server's queue
                     try:
-                        event = json.loads(self.q_server.get(timeout=0.3))
-                        self.q_server.task_done()
-
+                        # Read from TCP server's queue
+                        event = json.loads(self.q_server.get(timeout=0.01))
                     except Queue.Empty:
                         continue
 
                     if event["type"] == "reset":
-                        log.info("RESET event received")
                         self.reset()
 
                     elif event["type"] in ["startingFlow", "stoppingFlow"]:
-                        log.info("{0} event received".format(event['type']))
                         self.handleFlow(event)
 
                     elif event["type"] == "miceEstimation":
                         estimation_data = event['data']
-                        #log.info("{0} event received".format(event['type']))
                         self.handleMiceEstimation(estimation_data)
 
                     elif event['type'] == 'sleep':
-                        log.info("Sleep order received. Sleeping for {0} seconds...".format(event['data']))
+                        log.info("<SLEEP> event received. Sleeping for {0} seconds".format(event['data']))
                         time.sleep(event['data'])
-                        log.info("WOKE UP!")
+                        log.warning("WOKE UP from <SLEEP> event!")
 
                     else:
-                        log.error("Unknown event: {0}".format(event))
+                        log.error("<Unknown> event: {0}".format(event))
+
+                    # Inform server about task done
+                    self.q_server.task_done()
+
 
             except KeyboardInterrupt:
                 # Exit load balancer

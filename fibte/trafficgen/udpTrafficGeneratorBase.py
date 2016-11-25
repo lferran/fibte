@@ -89,12 +89,14 @@ class TGParser(object):
             if not args.flows_file:
                 # If traffic must be loaded
                 if args.load_traffic:
-                    elephants_per_host, mice_bijections = tgf.loadTraffic(args.load_traffic)
+                    elephants_per_host, mice_bijections, mice_average = tgf.loadTraffic(args.load_traffic)
 
                 else:
                     print("Generating elephant traffic ...")
                     # Generate traffic
                     elephants_per_host = tgf.plan_elephant_flows()
+
+                    mice_average = args.mice_avg
 
                     if args.mice_avg != 0.0:
                         print("Generating mice traffic ...")
@@ -110,11 +112,11 @@ class TGParser(object):
                             filename = args.file_name
 
                         # Save it
-                        tgf.saveTraffic(filename, elephants_per_host, mice_bijections, mice_average=args.mice_avg)
+                        tgf.saveTraffic(filename, elephants_per_host, mice_bijections, mice_average)
 
                 # Orchestrate the traffic (either loaded or generated)
                 print("Scheduling traffic...")
-                tgf.schedule(elephants_per_host, mice_bijections, args.mice_avg)
+                tgf.schedule(elephants_per_host, mice_bijections, mice_average)
 
             # Flow file has been given
             else:
@@ -159,6 +161,9 @@ class udpTrafficGeneratorBase(Base):
 
         # Get sender hosts
         self.senders = self.topology.getHosts().keys()
+        # Shuffle them
+        random.shuffle(self.senders)
+
         self.possible_destinations = self._createPossibleDestinations()
 
         log.setLevel(logging.INFO)
@@ -284,6 +289,40 @@ class udpTrafficGeneratorBase(Base):
             return random.uniform(MICE_SIZE_RANGE[0], MICE_SIZE_RANGE[1])
         else:
             raise ValueError("Unknown flow type: {0}".format(flow_type))
+
+    def get_mice_size(self, proto='tcp'):
+        if proto.lower() == 'tcp':
+            size = random.expovariate(1 / 12.0) * 10e6
+            rate = LINK_BANDWIDTH
+            duration = size / float(rate)
+            while duration > 20:
+                size = random.expovariate(1 / 12.0) * 10e6
+                rate = LINK_BANDWIDTH
+                duration = size / float(rate)
+            return size
+        elif proto.lower() == 'udp':
+            return random.uniform(MICE_SIZE_RANGE[0], MICE_SIZE_RANGE[1])
+
+    def get_elephant_size(self, proto='tcp'):
+        if proto.lower() == 'tcp':
+            size = random.expovariate(1 / 12.0) * 10e6
+            rate = LINK_BANDWIDTH
+            duration = size / float(rate)
+            while duration < 20:
+                size = random.expovariate(1 / 12.0) * 10e6
+                rate = LINK_BANDWIDTH
+                duration = size / float(rate)
+            return size
+
+        elif proto.lower() == 'udp':
+            size_range = range(int(ELEPHANT_SIZE_RANGE[0]), int(ELEPHANT_SIZE_RANGE[1] + ELEPHANT_SIZE_STEP),
+                               int(ELEPHANT_SIZE_STEP))
+            # Draw exponential sample
+            point = stats.expon.rvs(scale=2, size=1)
+            point_index = int(round(point))
+            point_index = max(0, point_index)
+            point_index = min(point_index, len(size_range) - 1)
+            return size_range[point_index]
 
     @staticmethod
     def _getFlowEndTime(flow):
@@ -448,7 +487,8 @@ class udpTrafficGeneratorBase(Base):
         # Convert current ip's to hostnames
         elephants_per_host = self.changeTrafficIpsToHostnames(elephants_per_host)
         traffic_to_save = {'elephant': elephants_per_host,
-                           'mice': {'bijections': mice_bijections, 'average': mice_average}}
+                           'mice': {'bijections': mice_bijections, 'average': mice_average},
+                           'totalTime': self.totalTime}
 
         with open(filename, "w") as f:
             pickle.dump(traffic_to_save, f)
@@ -462,6 +502,9 @@ class udpTrafficGeneratorBase(Base):
         mice = saved_traffic.get('mice')
         mice_bijections = mice.get('bijections')
         mice_average = mice.get('average')
+        self.mice_avg = mice_average
+        totalTime = saved_traffic.get('totalTime')
+        self.totalTime = totalTime
 
         # Convert hostnames to current ips
         elephants_per_host = self.changeTrafficHostnamesToIps(elephants_per_host)
@@ -512,7 +555,7 @@ class udpTrafficGeneratorBase(Base):
 
         for sender, flowlist in traffic_per_host.iteritems():
             for flow in flowlist:
-                if flow['proto'] == 'TCP':
+                if flow['proto'].lower() == 'tcp':
                     dst_name = self.topology.getHostName(flow['dst'])
                     dport = flow['dport']
                     start_time = flow['start_time']
@@ -588,7 +631,7 @@ class udpTrafficGeneratorBase(Base):
         for h, bijections in port_bijections.iteritems():
             try:
                 # Sends flowlist to the sender's server
-                data = {'bijections': bijections, 'average': mice_avg}
+                data = {'bijections': bijections, 'average': mice_avg, 'totalTime': self.totalTime}
                 self.unixClient.send(json.dumps({"type": "mice_bijections", "data": data}), h)
 
             except Exception as e:
@@ -768,7 +811,7 @@ class udpTrafficGeneratorBase(Base):
         - We have to make sure that there are no port collisions
         :return:
         """
-        N_CONNECTIONS = 50
+        N_CONNECTIONS = 100
 
         # Keep track of available ports here
         availablePorts = {s: set(MiceRangePorts) for s in self.senders}
@@ -805,6 +848,13 @@ class udpTrafficGeneratorBase(Base):
                 # Update availablePorts
                 availablePorts[host] -= {sport}
                 availablePorts[dst] -= {dport}
+                # Return it
+
+        test = False
+        if test:
+            for h in self.senders:
+                if h != 'h_0_0':
+                    port_bijections[h]['toSend'] = []
 
         return port_bijections
 

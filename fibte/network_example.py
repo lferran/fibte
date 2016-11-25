@@ -126,7 +126,6 @@ class TestTopo3(IPTopo):
         c1 = self.addController(cfg.C1, cfg_path=cfg.C1_cfg)
         self.addLink(c1, r1, cost=1000)
 
-
 def startCounterCollectors(topo, interval=1):
     """"""
     print("*** Starting counterCollectors")
@@ -140,7 +139,6 @@ def startCounterCollectors(topo, interval=1):
 
         # Start counter collector
         subprocess.call(cc_cmd.format(rid, interval, counterCollector_path), shell=True)
-
 
 def stopCounterCollectors(topo):
     """"""

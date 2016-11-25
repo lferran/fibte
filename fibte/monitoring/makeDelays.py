@@ -1,8 +1,12 @@
 import os
 import numpy as np
 import matplotlib.pyplot as plt
+import six
+from matplotlib import colors
 
 from fibte.monitoring import algo_styles
+
+color_list = list(six.iteritems(colors.cnames))
 
 class DelaysComparator(object):
     def __init__(self, algo_list=[]):
@@ -17,6 +21,8 @@ class DelaysComparator(object):
 
         # Load them
         self.algo_to_delays = self.load_measurements()
+        self.color_index = 0
+
 
     def extractAlgoNameFromFilename(self, filename):
         if 'ecmp' in filename.lower():
@@ -85,6 +91,19 @@ class DelaysComparator(object):
 
         return flows_to_delay
 
+    def get_algo_style(self, algo):
+        try:
+            color = algo_styles[algo]['color']
+            linestyle = algo_styles[algo]['linestyle']
+            linewidth = algo_styles[algo]['linewidth']
+            return color, linestyle, linewidth
+        except KeyError:
+            color = color_list[self.color_index][1]
+            linestyle = '-'
+            linewidth = 2
+            self.color_index += 1
+            return color, linestyle, linewidth
+
     def plot_delay_distribution_comparison(self, ideal=True):
         """"""
         fig = plt.figure(figsize=(80, 20))
@@ -110,9 +129,7 @@ class DelaysComparator(object):
 
             # Plot it!
             label = 'Ideal'
-            color = algo_styles[label]['color']
-            linestyle = algo_styles[label]['linestyle']
-            linewidth = algo_styles[label]['linewidth']
+            color, linestyle, linewidth = self.get_algo_style(label)
 
             plt.plot(bins[:-1], cumulative, c=color, linestyle=linestyle, linewidth=linewidth, label=label)
 
@@ -130,11 +147,8 @@ class DelaysComparator(object):
             cumulative /= float(len(measured))
 
             # Plot it!
-            color = algo_styles[algo]['color']
-            linestyle = algo_styles[algo]['linestyle']
-            linewidth = algo_styles[algo]['linewidth']
             label = algo
-
+            color, linestyle, linewidth = self.get_algo_style(algo)
             plt.plot(bins[:-1], cumulative, c=color, linestyle=linestyle, linewidth=linewidth, label=label)
 
         # Write legend and plot

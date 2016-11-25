@@ -90,97 +90,70 @@ def sendFlowTCP(dst="10.0.32.3", sport=5000, dport=5001, size=None, rate=None, d
                 break
             except Exception as e:
                 reconnections -=1
-                print ("Trying to reconnect to {1}:{2}... trials left {0}".format(reconnections, dst, dport))
+                print ("Trying to reconnect to {1}:{2} [trials left: {0}]".format(reconnections, dst, dport))
                 print ("Error trace: {0}".format(e))
                 time.sleep(time_to_wait)
                 time_to_wait *= 2
 
         # Could not connect to the server
         if reconnections == 0:
-            print "We couldn't connect to the server {1}:{0}! Returning...".format(dport, dst)
+            print("Impossible to establish TCP connection with {1}:{0}".format(dport, dst))
             s.close()
             return False
 
-        # If rate and duration are specified
-        if not size and rate and duration:
-            # Convert rate to integer (bytes/s)
-            rate = setSizeToInt(rate)/8
-
-            # Minimum time (assuming the rate we limit is possible)
-            totalTime = int(duration)
-
-            # Compute real rate and size due to TCP/IP overhead
-            headers_overhead = minSizeTCP * (rate / 4096)
-            rate = rate - (headers_overhead)
-
-            # Start sending at specified rate durint that amount of time
-            startTime = time.time()
-            # Round counter
-            i = 0
-            time_step_s = 1
-            # While totalTime hasn't passed yet
-            while (time.time() - startTime <= totalTime):
-                # Send at specified rate
-                send_msg(s, "A" * rate)
-                i += 1
-                # Sleep until the next second
-                next_send_time = startTime + i * time_step_s
-                time.sleep(max(0, next_send_time - time.time()))
-
-        # If size is given
-        elif size:
-            # If rate not specified
-            if not rate:
-                # We try at highest rate possible
-                rate = LINK_BANDWIDTH
-            else:
-                # Limit it to LINK_BANDWIDTH
-                rate = min(setSizeToInt(rate), LINK_BANDWIDTH)
-
-            # Express it in bytes and bytes/s
-            totalSize = setSizeToInt(size)/8
-            rate = rate/8
-
-            # Compute real rate and size due to TCP/IP overhead
-            headers_overhead = minSizeTCP * (rate / 4096)
-            headers_overhead_total = minSizeTCP * (totalSize / 4096)
-            rate = rate - (headers_overhead)
-            totalSize = totalSize - (headers_overhead_total)
-
-            # We send the size in bytes with rate as maximum rate
-            startTime = time.time()
-            i = 0
-            time_step_s = 1
-            # While still some data to send
-            while (totalSize > minSizeTCP):
-                #print "Sending a bit more..."
-                # Compute data to send next second
-                rate = min(rate, totalSize - minSizeUDP)
-                # Send it
-                send_msg(s, "A" * rate)
-                # Substract it from the remaining data
-                totalSize -= rate
-                # Increment round count
-                i += 1
-                # Compute how much to sleep until the next second
-                next_send_time = startTime + i * time_step_s
-                # Sleep
-                time.sleep(max(0, next_send_time - time.time()))
-            #print "Finished sending!"
-
+        # If rate not specified
+        if not rate:
+            # We try at highest rate possible
+            rate = setSizeToInt(LINK_BANDWIDTH)
         else:
-            print "Wrong arguments!"
-            s.close()
-            return False
+            # Limit it to LINK_BANDWIDTH
+            rate = min(setSizeToInt(rate), LINK_BANDWIDTH)
+
+        # Express it in bytes and bytes/s
+        totalSize = setSizeToInt(size)/8
+        rate = rate/8
+
+        # Compute real rate and size due to TCP/IP overhead
+        headers_overhead = minSizeTCP * (rate / 4096)
+        headers_overhead_total = minSizeTCP * (totalSize / 4096)
+        rate = rate - (headers_overhead)
+        totalSize = totalSize - (headers_overhead_total)
+
+        # We send the size in bytes with rate as maximum rate
+        startTime = time.time()
+        i = 0
+        time_step_s = 1
+
+        # While still some data to send
+        while (totalSize > minSizeTCP):
+            #print ("Sending a bit more. TotalSize left: {0}".format(totalSize))
+            # Compute data to send next second
+            rate = min(rate, totalSize - minSizeUDP)
+            # Send it
+            send_msg(s, "A" * rate)
+            # Substract it from the remaining data
+            totalSize -= rate
+            # Increment round count
+            i += 1
+            # Compute how much to sleep until the next second
+            next_send_time = startTime + i * time_step_s
+            # Sleep
+            time.sleep(max(0, next_send_time - time.time()))
+        #print ("Finished sending!")
 
     except socket.error as e:
-        print "socket.error: {0}".format(e)
+        print ("socket.error: {0}".format(e))
         s.close()
         return False
 
-    finally:
+    except Exception as e:
+        print ("Error in sendFlowTCP: {0}".format(e))
         s.close()
-        #print "Finishing flow gracefully"
+        return False
+
+    else:
+        s.close()
+        #print ("Flow finishing gracefully")
         return True
 
 def setupTCPConnection(src='', dst="10.0.32.3", sport=5000, dport=5001, **kwargs):
@@ -234,8 +207,7 @@ def sendMiceThroughOpenSocket(s, queue, sending, completionTimeFile=None):
 
             if event == 'terminate':
                 terminate = True
-                terminate
-
+                break
             else:
                 size = event
                 rate = None
@@ -311,7 +283,7 @@ def sendMiceThroughOpenSocket(s, queue, sending, completionTimeFile=None):
     except Exception as e:
         print "Other exception: {0}".format(e)
 
-    finally:
+    else:
         s.close()
         return True
 
@@ -417,7 +389,6 @@ def _sendFlow(notify=False, **flow):
     """
     Starts sending flow as specified and notifies the controller when needed
     """
-
     # Take the time
     now  = time.time()
     successful = False
@@ -433,14 +404,15 @@ def _sendFlow(notify=False, **flow):
             log.error("Controller cound not be informed about startingFlow event")
 
     # Sleep a bit before starting the flow
-    time.sleep(max(0, SLEEP_BEFORE_FLOW_S - (time.time() - now)))
+    if SLEEP_BEFORE_FLOW_S:
+        time.sleep(max(0, SLEEP_BEFORE_FLOW_S - (time.time() - now)))
 
     # If flow is UDP
-    if flow['proto'] == 'UDP':
+    proto = flow['proto'].lower()
+    if proto == 'upd':
         # Start UDP flow
         successful = sendFlowUDP(**flow)
-
-    else:# flow['proto'] == 'TCP':
+    elif proto == 'tcp':
         # Start TCP flow
         successful = sendFlowTCP(**flow)
 
@@ -458,31 +430,6 @@ def _sendFlow(notify=False, **flow):
         log.error("Flow didn't finish successfully!")
 
     return successful
-
-def writeStartingTime(flow, filename=None):
-    if not filename:
-        file_name = str(delay_folder) + "{0}_{1}_{2}_{3}".format(flow["src"],
-                                                                 flow["sport"],
-                                                                 flow["dst"],
-                                                                 flow["dport"])
-    else:
-        file_name = str(delay_folder) + filename
-
-    if flow['proto'].lower() == 'udp':
-        duration = flow.get('duration')
-    else:
-        duration = flow.get('size')/float(flow.get('rate'))
-
-    # Save flow starting time
-    with open(file_name, "w") as f:
-        f.write("expected {0}".format(duration) + "\n")
-        f.write(str(int(round(time.time() * 1000))) + "\n")
-    return file_name
-
-def writeEndingTime(filename):
-    # Write finishing time
-    with open(filename, "a") as f:
-        f.write(str(int(round(time.time() * 1000))) + "\n")
 
 def sendMiceFlow(logtime=False, **flow):
     file_name = None
@@ -514,6 +461,31 @@ def sendElephantFlow(logtime=False, **flow):
 
     # Exit the function gracefully
     sys.exit(0)
+
+def writeStartingTime(flow, filename=None):
+    if not filename:
+        file_name = str(delay_folder) + "{0}_{1}_{2}_{3}".format(flow["src"],
+                                                                 flow["sport"],
+                                                                 flow["dst"],
+                                                                 flow["dport"])
+    else:
+        file_name = str(delay_folder) + filename
+
+    if flow['proto'].lower() == 'udp':
+        duration = flow.get('duration')
+    else:
+        duration = flow.get('size')/float(flow.get('rate'))
+
+    # Save flow starting time
+    with open(file_name, "w") as f:
+        f.write("expected {0}".format(duration) + "\n")
+        f.write(str(int(round(time.time() * 1000))) + "\n")
+    return file_name
+
+def writeEndingTime(filename):
+    # Write finishing time
+    with open(filename, "a") as f:
+        f.write(str(int(round(time.time() * 1000))) + "\n")
 
 # Not used
 def stopFlowNotifyController(**flow):
