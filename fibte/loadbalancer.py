@@ -1128,7 +1128,7 @@ class MiceDAGShifter(LBController):
     def __init__(self, *args, **kwargs):
         super(MiceDAGShifter, self).__init__(algorithm='mice-dag-shifter', *args, **kwargs)
 
-        test = True
+        test = False
         if test:
             # Invent flow
             h30 = self.topology.getHostIp('h_3_0')
@@ -1146,6 +1146,8 @@ class MiceDAGShifter(LBController):
 
             # Add it to the path
             self.addFlowToPath(flow, path)
+
+            import ipdb; ipdb.set_trace()
 
             self.adaptMiceDags(path)
 
@@ -1197,13 +1199,6 @@ class MiceDAGShifter(LBController):
 
             # Adapt mice DAGs to new capacities!
             self.adaptMiceDags(path=old_path)
-
-
-
-
-
-
-
 
 
 class ElephantDAGShifter(LBController):

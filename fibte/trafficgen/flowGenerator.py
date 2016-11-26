@@ -165,7 +165,7 @@ def setupTCPConnection(src='', dst="10.0.32.3", sport=5000, dport=5001, **kwargs
     s.setsockopt(socket.IPPROTO_TCP, socket.TCP_MAXSEG, 1500)
     s.bind((src, sport))
 
-    reconnections = 1
+    reconnections = 3
     time_to_wait = 0.1
     while reconnections != 0:
         try:

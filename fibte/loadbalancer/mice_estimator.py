@@ -393,7 +393,6 @@ class MiceEstimatorThread(threading.Thread):
                 self.set_probabilities_unchanged(prefix)
 
         if new_dags:
-
             # Apply new dags all at same time
             self.sbmanager.add_dag_requirements_from(new_dags)
             time.sleep(0.5)
