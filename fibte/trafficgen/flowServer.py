@@ -345,9 +345,12 @@ class FlowServer(object):
 
         # Terminate all elephant receivers (subprocess.Popen)
         for popen in self.elephant_rx_handlers:
-            popen.kill()
-            popen.wait()
-
+            try:
+                popen.kill()
+                popen.wait()
+            except:
+                pass
+            
         # Restart lists
         self.elephant_tx_handlers = []
         self.elephant_rx_handlers = []
