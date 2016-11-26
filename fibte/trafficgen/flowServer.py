@@ -418,7 +418,6 @@ class FlowServer(object):
                 src = self.primary_ip
 
             flow = {'src': src, 'sport': sport, 'dst': dst, 'dport': dport}
-            log.info("{0}: mice flow: {1}".format(self.name, flow))
 
             # Setup connection
             socket = flowGenerator.setupTCPConnection(**flow)
@@ -552,7 +551,7 @@ class FlowServer(object):
     def run(self):
         # Choose whether to log completion times for mices and elephants
         LOG_ELEPHANTS_COMPLETION_TIME = False
-        LOG_MICE_COMPLETION_TIME = True
+        LOG_MICE_COMPLETION_TIME = False
 
         log.info("{0}: flowServer started!".format(self.name))
 

@@ -9,15 +9,10 @@ import json
 import networkx as nx
 from threading import Thread
 import ipaddress as ip
-import random
-import subprocess
 import abc
 import Queue
 import numpy as np
-import sys
-import signal
 import itertools as it
-import collections
 
 from fibbingnode.algorithms.southbound_interface import SouthboundManager#, DstSpecificSouthboundManager
 from fibbingnode import CFG as CFG_fib
@@ -444,28 +439,19 @@ class LBController(object):
         # Here we store the estimated mice levels
         self.hosts_notified = []
         self.total_hosts = ((self.k/2)**2)*self.k
-        self.mice_dbs = {}
-        self.mice_dbs_lock = threading.Lock()
         self.mice_caps_graph = self._createElephantsCapsGraph()
         self.mice_caps_lock = threading.Lock()
         self.mice_orders_queue= Queue.Queue()
-        self.mice_result_queue = Queue.Queue()
 
         # Create the mice estimator thread
         self.miceEstimatorThread = MiceEstimatorThread(sbmanager= self.sbmanager,
                                                        orders_queue = self.mice_orders_queue,
-                                                       results_queue = self.mice_result_queue,
-                                                       mice_distributions = self.mice_dbs,
-                                                       mice_distributions_lock = self.mice_dbs_lock,
                                                        capacities_graph = self.mice_caps_graph,
                                                        capacities_lock = self.mice_caps_lock,
                                                        dags = self.current_mice_dags,
-                                                       samples = 10,
                                                        q_server=self.q_server)
         # Start the thread
         self.miceEstimatorThread.start()
-
-        self.estimationCounter = 0
 
     def _createElephantsCapsGraph(self):
         graph = DCGraph(k=self.k, prefix_type='secondary')
@@ -697,15 +683,13 @@ class LBController(object):
         Sets the load balancer to its initial state
         :return:
         """
-        # Remove the logifile
-        #subprocess.call(['rm', self.logfile])
-
         # Set all dags to original ospf dag
         self.current_elephant_dags = copy.deepcopy(self.initial_elep_dags)
         self.current_mice_dags = copy.deepcopy(self.initial_mice_dags)
 
         # Remove all attraction points and lsas
         self.sbmanager.remove_all_dag_requirements()
+        time.sleep(2)
 
         # Terminate pevious mice estimator thread
         self.miceEstimatorThread.orders_queue.put({'type': 'terminate'})
@@ -963,51 +947,6 @@ class LBController(object):
             flow = event['flow']
             self.deallocateFlow(flow)
 
-    def handleMiceEstimation(self, estimation_data):
-        """"""
-        src_ip = self.topology.hostsIpMapping['nameToIp'][estimation_data['src']]
-        src_px = self.getSourcePrefixFromFlow({'src': src_ip})
-        src_mice_px = ipalias.get_secondary_ip_prefix(src_px)
-        if src_mice_px in self.hosts_notified:
-            #log.error("Notification catch up!")
-            self.notified_flows = []
-
-        self.hosts_notified.append(src_mice_px)
-
-        # Get the lock first
-        with self.mice_dbs_lock:
-            # Get per-destination samples
-            dst_samples = estimation_data['samples']
-            for (dst_ip, samples) in dst_samples.iteritems():
-                dst_px = self.getDestinationPrefixFromFlow({'dst': dst_ip})
-                dst_mice_px = ipalias.get_secondary_ip_prefix(dst_px)
-                if dst_mice_px not in self.mice_dbs.keys():
-                    self.mice_dbs[dst_mice_px] = {}
-
-                samples = np.asarray(samples)
-                avg, std = samples.mean(), samples.std()
-
-                # Add new average and std values
-                if src_mice_px not in self.mice_dbs[dst_mice_px].keys():
-                    self.mice_dbs[dst_mice_px][src_mice_px] = {'avg': collections.deque(maxlen=3), 'std': collections.deque(maxlen=3)}
-
-                # Append new values to circular queue
-                self.mice_dbs[dst_mice_px][src_mice_px]['avg'].append(avg)
-                self.mice_dbs[dst_mice_px][src_mice_px]['std'].append(std)
-
-        # Check if all hosts have notified this round
-        if len(self.hosts_notified) == self.total_hosts:
-            # Reset list of hosts that have notified
-            self.hosts_notified = []
-
-            log.info("All hosts notified! propagating distributions!")
-
-            # Order mice estimator thread to update its distributoins
-            order = {'type': 'propagate_new_distributions'}
-            self.miceEstimatorThread.orders_queue.put(order)
-
-            self.estimationCounter += 1
-
     def _runGetLoads(self):
         getLoads = GetLoads(k=self.k)
         getLoads.run()
@@ -1128,10 +1067,6 @@ class LBController(object):
                     elif event["type"] in ["startingFlow", "stoppingFlow"]:
                         self.handleFlow(event)
 
-                    elif event["type"] == "miceEstimation":
-                        estimation_data = event['data']
-                        self.handleMiceEstimation(estimation_data)
-
                     elif event['type'] == 'sleep':
                         log.info("<SLEEP> event received. Sleeping for {0} seconds".format(event['data']))
                         time.sleep(event['data'])
@@ -1142,7 +1077,6 @@ class LBController(object):
 
                     # Inform server about task done
                     self.q_server.task_done()
-
 
             except KeyboardInterrupt:
                 # Exit load balancer

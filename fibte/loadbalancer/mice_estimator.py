@@ -19,17 +19,14 @@ def time_func(function):
     return wrapper
 
 class MiceEstimatorThread(threading.Thread):
-    def __init__(self, sbmanager, orders_queue, results_queue,
-                 mice_distributions, mice_distributions_lock,
-                 capacities_graph, capacities_lock,
-                 dags, q_server, samples=10, *args, **kwargs):
+    def __init__(self, sbmanager, orders_queue, capacities_graph, capacities_lock,
+                 dags, q_server, *args, **kwargs):
+
         # Superclass __init__()
         super(MiceEstimatorThread, self).__init__(*args, **kwargs)
 
         # Get params
         self.sbmanager = sbmanager           # Fibbign southbound manager instance
-        self.mice_dbs = mice_distributions   # Mice flow average level distributions
-        self.mice_dbs_lock = mice_distributions_lock
         self.caps_graph = capacities_graph   # Capacities left by the elephant flows
         self.caps_lock = capacities_lock
         self.dags = dags                     # Current Mice traffic dags
@@ -42,16 +39,9 @@ class MiceEstimatorThread(threading.Thread):
 
         # Here we store the propagated mice loads
         self.propagated_mice_levels = self.caps_graph.copy()
-        self.propagated_mice_levels_2 = self.caps_graph.copy()
-
-        # Number of samples to use
-        self.samples = samples
 
         # Where to receive orders from
         self.orders_queue = orders_queue
-
-        # Queue where to store the results
-        self.results_queue = results_queue
 
         # Create link probabilities graph
         self.link_probs_graph = self._start_link_probabilities_graph()
@@ -138,6 +128,8 @@ class MiceEstimatorThread(threading.Thread):
                 if dst_prefix in self.link_probs_graph[src][dst]:
                     dependant_probability += self.link_probs_graph[src][dst][dst_prefix]['final_probability']
                 else:
+                    log.error("Something wrong is happening")
+                    self._sendMainThreadToSleep(2000)
                     import ipdb;ipdb.set_trace()
 
             return dependant_probability/float(len(slinks))
@@ -224,8 +216,6 @@ class MiceEstimatorThread(threading.Thread):
                 link_probs[(u,v)] = {mykey: self.link_probs_graph[u][v][prefix][mykey] for mykey in ['changed', 'final_probability']}
             else:
                 log.error("Something weird is happening...")
-                self._sendMainThreadToSleep(3000)
-                import ipdb;ipdb.set_trace()
         return link_probs
 
     def set_probabilities_unchanged(self, prefix):
@@ -258,8 +248,6 @@ class MiceEstimatorThread(threading.Thread):
 
             else:
                 log.error("Wrong data")
-                self._sendMainThreadToSleep(3000)
-                import ipdb;ipdb.set_trace()
                 raise ValueError("wrong link")
         else:
             if srctype == 'aggregation' and dsttype == 'edge':
@@ -275,8 +263,6 @@ class MiceEstimatorThread(threading.Thread):
 
             else:
                 log.error("Wrong data")
-                self._sendMainThreadToSleep(3000)
-                import ipdb;ipdb.set_trace()
                 raise ValueError("wrong link")
 
         return destinations
@@ -301,24 +287,25 @@ class MiceEstimatorThread(threading.Thread):
         return rate_dests
 
     def get_link_mice_load(self, src, dst):
-        """
-        Returns the sum of the loads in the link directed to destinations
-        """
-        #return random.choice(self.propagated_mice_levels[src][dst]['loads'])
-        if 'loads' in self.propagated_mice_levels[src][dst].keys():
-            return self.propagated_mice_levels[src][dst]['loads'].mean()
-        else:
-            return 0
-
-    def get_link_mice_load2(self, src, dst):
-        if 'load' in self.propagated_mice_levels_2[src][dst].keys():
-            return self.propagated_mice_levels_2[src][dst]['load']
+        if 'load' in self.propagated_mice_levels[src][dst].keys():
+            return self.propagated_mice_levels[src][dst]['load']
         else:
             return 0
 
     def get_remaining_elephant_capacity(self, src, dst):
         with self.caps_lock:
             return max(0, LINK_BANDWIDTH - self.caps_graph[src][dst]['elephants_capacity'])
+
+    @time_func
+    def modify_path_probabilities(self, path):
+        # We traverse the path inversely, because of dependencies between
+        # predecessor edges
+        links_on_path = self.get_links_from_path(path)
+        links_on_path.reverse()
+
+        # Compute new probabilities for the links first
+        for link in links_on_path:
+            self.modify_link_probabilities(link)
 
     def modify_link_probabilities(self, link):
         # Extract src and dst
@@ -328,7 +315,7 @@ class MiceEstimatorThread(threading.Thread):
         dests = self.get_prefixes_using_link(src, dst)
 
         # Get all load incoming to that link, directed to those destinations
-        mice_load = self.get_link_mice_load2(src, dst)
+        mice_load = self.get_link_mice_load(src, dst)
 
         # Get remaining capacity after elephants
         remaining_capacity = self.get_remaining_elephant_capacity(src, dst)
@@ -379,17 +366,6 @@ class MiceEstimatorThread(threading.Thread):
                 return
 
     @time_func
-    def modify_path_probabilities(self, path):
-        # We traverse the path inversely, because of dependencies between
-        # predecessor edges
-        links_on_path = self.get_links_from_path(path)
-        links_on_path.reverse()
-
-        # Compute new probabilities for the links first
-        for link in links_on_path:
-            self.modify_link_probabilities(link)
-
-    @time_func
     def plotAllNewDags(self, new_dags):
         for px, dag in new_dags.iteritems():
             dag.plot('images/{0}_{1}.png'.format(px.replace('/', '|'), time.time()))
@@ -417,6 +393,7 @@ class MiceEstimatorThread(threading.Thread):
                 self.set_probabilities_unchanged(prefix)
 
         if new_dags:
+
             # Apply new dags all at same time
             self.sbmanager.add_dag_requirements_from(new_dags)
             time.sleep(0.5)
@@ -429,49 +406,24 @@ class MiceEstimatorThread(threading.Thread):
 
     def run(self):
         # Fill up the loads according to current dags
-
         self.propagateLoadsOnDags()
 
         while True:
             try:
                 order = self.orders_queue.get(block=True)
-            except:
+            except Exception as e:
+                log.exception(e)
                 exit(0)
 
             # Checked received order
             order_type = order['type']
 
-            if order_type == 'compute_mice_congestion_probability':
-                # Create copy of dc_graph first
-                with self.caps_lock:
-                    caps_graph = self.caps_graph.copy()
-
-                # Compute it
-                congProb = self.totalCongestionProbability(caps_graph, threshold=self.congestion_threshold)
-
-                # Return result to main thread
-                self.results_queue.put(congProb)
-
-                # Log a bit
-                log.info("Mice congestion probability: {0} \t --threshold = {1}".format(congProb, self.max_mice_cong_prob))
-
-                # If congestion is over the threshold
-                if congProb >= self.max_mice_cong_prob:
-                    log.info("Modifying mice DAGs to avoid most congested links...")
-                    self.avoid_most_congested_links(caps_graph)
-                # TODO: Increase probabilities of not-loaded paths such that they are also chosen
-
-            elif order_type == 'propagate_new_distributions':
-                # Take new samples based on new distributions
-                self.takePropagationSamples()
-
-            elif order_type == 'adapt_mice_to_elephants':
+            if order_type == 'adapt_mice_to_elephants':
                 # Extract path first
-                flow_path = order['path']
-                self.adapt_mice_dags(path=flow_path)
+                self.adapt_mice_dags(path=order['path'])
 
             elif order_type == 'terminate':
-                log.info("MiceEstimatorThread: self-shutting down...")
+                log.info("MiceEstimatorThread: <TERMINATE> event received. Shutting down")
                 break
 
             else:
@@ -492,36 +444,12 @@ class MiceEstimatorThread(threading.Thread):
                 edges += [(source, succ, new_load)] + self.propagate_sample(dag, succ, target, new_load)
             return edges
 
-    def propagatePrefixNoise(self, prefix, i):
-        """Propagates the sampled average load of the hosts towards prefix over
-        the network graph"""
-        # Fetch current prefix dag
-        dag = self.dags[prefix]['dag']
-        gw = self.dags[prefix]['gateway']
-
-        # Iterate all other edge routers
-        for er in self.propagated_mice_levels.edge_routers_iter():
-            if er != gw:
-                # Collect sum of loads from connected prefixes
-                pxs = self.propagated_mice_levels.get_connected_destination_prefixes(er)
-
-                # Take random samples for each source prefix connected to the edge router
-                er_load = sum([random.choice(self.mice_dbs[prefix][px]['avg']) for px in pxs if prefix in self.mice_dbs and px in self.mice_dbs[prefix]])
-                log.debug(er_load)
-
-                # Propagate it
-                edges = self.propagate_sample(dag=dag, source=er, target=gw, load=er_load)
-
-                # Iterate edges and sum pertinent load
-                for (u, v, load) in edges:
-                    self.propagated_mice_levels[u][v]['loads'][i] += load
-
     @time_func
     def propagateLoadsOnDags(self):
         """Propagates the sampled average load of the hosts towards prefix over
         the network graph"""
         # Insert arrays to accumulate load samples
-        for (a, b, data) in self.propagated_mice_levels_2.edges_iter(data=True):
+        for (a, b, data) in self.propagated_mice_levels.edges_iter(data=True):
             data['load'] = 0.0
 
         for prefix in self.prefixes:
@@ -530,10 +458,10 @@ class MiceEstimatorThread(threading.Thread):
             gw = self.dags[prefix]['gateway']
 
             # Iterate all other edge routers
-            for er in self.propagated_mice_levels_2.edge_routers_iter():
+            for er in self.propagated_mice_levels.edge_routers_iter():
                 if er != gw:
                     # Collect sum of loads from connected prefixes
-                    pxs = self.propagated_mice_levels_2.get_connected_destination_prefixes(er)
+                    pxs = self.propagated_mice_levels.get_connected_destination_prefixes(er)
 
                     # Obtain the total load going from er to the upper lyer
                     er_load = sum([self.avg_host_to_host_load for px in pxs])
@@ -544,121 +472,14 @@ class MiceEstimatorThread(threading.Thread):
 
                     # Iterate edges and sum pertinent load
                     for (u, v, load) in edges:
-                        self.propagated_mice_levels_2[u][v]['load'] += load
+                        self.propagated_mice_levels[u][v]['load'] += load
 
     def propagateAllPrefixes(self, i):
         """Propagates all noise distributions"""
         for prefix in self.prefixes:
             self.propagatePrefixNoise(prefix, i)
 
-    def takePropagationSamples(self):
-        """Propagates all noise distributions over the dc_graph"""
-        # Insert arrays to accumulate load samples
-        for (a, b, data) in self.propagated_mice_levels.edges_iter(data=True):
-            data['loads'] = np.zeros(self.samples)
 
-        with self.mice_dbs_lock:
-            # Take as many samples!
-            for i in range(self.samples):
-                self.propagateAllPrefixes(i)
-
-    ## Other unused functions functions #################################
-
-    def _totalCongestionProbability(self, threshold=0.3):
-        """
-        This way of computing the congestion probability is wrong, because the
-        individual link's congestion probability are dependant on each other.
-        """
-        # Create copy of dc_graph first
-        with self.caps_lock:
-            caps_graph = self.caps_graph.copy()
-
-        # Propagate current mice distributions
-        caps_graph = self.takePropagationSamples(caps_graph)
-
-        # Accumulate congestion probabilites
-        cps = []
-        for (u, v, data) in caps_graph.edges_iter(data=True):
-            if data.has_key('loads'):
-                loads = data['loads']
-                cp = self.linkCongestionProbability(loads, threshold)
-                cps.append(cp)
-            else:
-                import ipdb; ipdb.set_trace()
-
-        return self.union_congestion_probability(cps)
-
-    def totalCongestionProbability(self, caps_graph, threshold=0.3):
-        """
-        Propagate distribution samples and then, check for at least one
-        congested link in all the network at every sample
-
-        Assumes that noise level has been propagated in self.propagated_noise_level
-        """
-        # Compute maximum allowed bandwidth usage
-        max_load = LINK_BANDWIDTH * threshold
-
-        samples_with_congestion = 0
-
-        for i in range(self.samples):
-            for (u, v, data) in caps_graph.edges_iter(data=True):
-                # Get the currently used capacity on the edge
-                used_capacity = data.get('elephants_capacity', 0)
-                mice_level = self.propagated_mice_levels[u][v]['loads'][i]
-
-                # Check for congestion
-                congestion = (mice_level + used_capacity) >= max_load
-                if congestion:
-                        samples_with_congestion += 1
-                        break
-
-        # Return ratio of congested samples
-        congestion_probability = samples_with_congestion/float(self.samples)
-
-        return congestion_probability
-
-    def linkCongestionProbability(self, loads, threshold):
-        """Computes the probability of the samples for a given link to be
-        over the specified threshold.
-        Returns the ratio of load samples over the threshold
-        """
-        total_samples = float(len(loads))
-        congested_samples = len([l for l in loads if l > LINK_BANDWIDTH*threshold])
-        return congested_samples/total_samples
-
-    def avoid_most_congested_links(self, caps_graph):
-        """
-        Modifies mice dags such that the most congested links are avoided
-        """
-
-        # Accumulate here the links with higher congestion probability
-        congested_links = []
-        for (u, v, data) in self.propagated_mice_levels.edges_iter(data=True):
-            elephant_capacity = caps_graph[u][v].get('elephants_capacity', 0)
-            loads = data['loads'] + elephant_capacity
-            linkCongProb = self.linkCongestionProbability(loads, threshold=self.congestion_threshold)
-            if linkCongProb >= self.max_mice_cong_prob:
-                congested_links.append((u, v))
-
-        # Modify link probabilities in the dags for each link
-        for (u, v) in congested_links:
-            self.modify_link_probabilities(u, v)
-
-        # Choose random dangs for each prefix
-        new_dags = {}
-        for prefix in self.prefixes:
-            link_probabilities = self.get_link_probabilities(prefix)
-            if self.link_probabilities_changed(link_probabilities):
-                # Generate new random dag
-                new_random_dag = self.choose_random_dag(prefix, link_probabilities)
-                new_dags[prefix] = new_random_dag
-                self.dags[prefix]['dag'] = new_random_dag
-
-                # Reset changed = False
-                self.set_probabilities_unchanged(prefix)
-
-        # Apply new dags all at same time
-        self.sbmanager.add_dag_requirements_from(new_dags)
 
 if __name__ == "__main__":
     import argparse
@@ -677,5 +498,4 @@ if __name__ == "__main__":
     # For the moment, the DCDags will be generated here, although in practice,
     # they need to be transmitted from the LBController too
     me = MiceEstimatorThread(k=args.k, dc_graph=dc_graph, dst_dags=None)
-    cp = me.totalCongestionProbability(threshold=args.threshold)
     import ipdb; ipdb.set_trace()
