@@ -70,6 +70,9 @@ class LBController(object):
         # Loadbalancing strategy/algorithm
         self.algorithm = algorithm
 
+        # Makes the mice DAG shifter part to be active
+        self.mice_dag_shifter = False
+
         # Configure logging
         self._do_logging_stuff()
 
@@ -131,41 +134,41 @@ class LBController(object):
         self._startTracerouteService()
 
         # Start mice thread
-        self._startMiceEstimatorThread()
+        self.createMiceEstimatorThread()
 
         # Start object that estimates flow demands
         self.flowDemands = EstimateDemands()
 
         # This is for debugging purposes only --should be removed
         if load_variables == True and self.k == 4:
-            self.r_0_e0 = self.topology.getRouterId('r_0_e0')
-            self.r_0_e1 = self.topology.getRouterId('r_0_e1')
+            self.r0e0 = self.topology.getRouterId('r_0_e0')
+            self.r0e1 = self.topology.getRouterId('r_0_e1')
 
-            self.r_1_e0 = self.topology.getRouterId('r_1_e0')
-            self.r_1_e1 = self.topology.getRouterId('r_1_e1')
+            self.r1e0 = self.topology.getRouterId('r_1_e0')
+            self.r1e1 = self.topology.getRouterId('r_1_e1')
 
-            self.r_2_e0 = self.topology.getRouterId('r_2_e0')
-            self.r_2_e1 = self.topology.getRouterId('r_2_e1')
+            self.r2e0 = self.topology.getRouterId('r_2_e0')
+            self.r2e1 = self.topology.getRouterId('r_2_e1')
 
-            self.r_3_e0 = self.topology.getRouterId('r_3_e0')
-            self.r_3_e1 = self.topology.getRouterId('r_3_e1')
+            self.r3e0 = self.topology.getRouterId('r_3_e0')
+            self.r3e1 = self.topology.getRouterId('r_3_e1')
 
-            self.r_0_a0 = self.topology.getRouterId('r_0_a0')
-            self.r_0_a1 = self.topology.getRouterId('r_0_a1')
+            self.r0a0 = self.topology.getRouterId('r_0_a0')
+            self.r0a1 = self.topology.getRouterId('r_0_a1')
 
-            self.r_1_a0 = self.topology.getRouterId('r_1_a0')
-            self.r_1_a1 = self.topology.getRouterId('r_1_a1')
+            self.r1a0 = self.topology.getRouterId('r_1_a0')
+            self.r1a1 = self.topology.getRouterId('r_1_a1')
 
-            self.r_2_a0 = self.topology.getRouterId('r_2_a0')
-            self.r_2_a1 = self.topology.getRouterId('r_2_a1')
+            self.r2a0 = self.topology.getRouterId('r_2_a0')
+            self.r2a1 = self.topology.getRouterId('r_2_a1')
 
-            self.r_3_a0 = self.topology.getRouterId('r_3_a0')
-            self.r_3_a1 = self.topology.getRouterId('r_3_a1')
+            self.r3a0 = self.topology.getRouterId('r_3_a0')
+            self.r3a1 = self.topology.getRouterId('r_3_a1')
 
-            self.r_c0 = self.topology.getRouterId('r_c0')
-            self.r_c1 = self.topology.getRouterId('r_c1')
-            self.r_c2 = self.topology.getRouterId('r_c2')
-            self.r_c3 = self.topology.getRouterId('r_c3')
+            self.rc0 = self.topology.getRouterId('r_c0')
+            self.rc1 = self.topology.getRouterId('r_c1')
+            self.rc2 = self.topology.getRouterId('r_c2')
+            self.rc3 = self.topology.getRouterId('r_c3')
 
     @staticmethod
     def get_links_from_path(path):
@@ -435,23 +438,23 @@ class LBController(object):
                     return path
         return None
 
-    def _startMiceEstimatorThread(self):
+    def createMiceEstimatorThread(self):
         # Here we store the estimated mice levels
         self.hosts_notified = []
         self.total_hosts = ((self.k/2)**2)*self.k
         self.mice_caps_graph = self._createElephantsCapsGraph()
         self.mice_caps_lock = threading.Lock()
-        self.mice_orders_queue= Queue.Queue()
+        self.mice_orders_queue= Queue.Queue(0)
+        self.flowpath_queue= Queue.Queue(0)
 
         # Create the mice estimator thread
-        self.miceEstimatorThread = MiceEstimatorThread(sbmanager= self.sbmanager,
-                                                       orders_queue = self.mice_orders_queue,
+        self.miceEstimatorThread = MiceEstimatorThread(active=self.mice_dag_shifter,
+                                                       sbmanager=self.sbmanager,
+                                                       orders_queue=self.mice_orders_queue,
+                                                       flowpath_queue=self.flowpath_queue,
                                                        capacities_graph = self.mice_caps_graph,
-                                                       capacities_lock = self.mice_caps_lock,
                                                        dags = self.current_mice_dags,
                                                        q_server=self.q_server)
-        # Start the thread
-        self.miceEstimatorThread.start()
 
     def _createElephantsCapsGraph(self):
         graph = DCGraph(k=self.k, prefix_type='secondary')
@@ -696,7 +699,7 @@ class LBController(object):
         self.miceEstimatorThread.join()
 
         # Restart Mice Estimator Thread
-        self._startMiceEstimatorThread()
+        self.createMiceEstimatorThread()
 
         # Empty flow to path and edges data structures
         with self.add_del_flow_lock:
@@ -805,7 +808,6 @@ class LBController(object):
                 self.flows_to_paths[fkey] = {'path': path, 'to_update': False}
             else:
                 raise ValueError("Weird: flow was already in the data structure")
-
             # Upadte links too
             for link in self.get_links_from_path(path):
                 if link in self.edges_to_flows.keys():
@@ -813,10 +815,9 @@ class LBController(object):
                 else:
                     raise ValueError("Weird: flow was already in the data structure")
 
-        # Get lock
-        with self.mice_caps_lock:
-            for (u, v) in self.get_links_from_path(path):
-                self.mice_caps_graph[u][v]['elephants_capacity'] += flow['size']
+        # Send notification to mice LB
+        data = (flow, path, 'add')
+        self.flowpath_queue.put(data)
 
         # Log a bit
         if do_log:
@@ -846,10 +847,9 @@ class LBController(object):
                     log.error("Weird: link not in the data structure")
                     return
 
-        # Update mice estimator structure
-        with self.mice_caps_lock:
-            for (u, v) in self.get_links_from_path(old_path):
-                self.mice_caps_graph[u][v]['elephants_capacity'] -= flow['size']
+        # Send notificatoin to mice LB
+        data = (flow, old_path, 'del')
+        self.flowpath_queue.put(data)
 
         # Log a bit
         if do_log:
@@ -1118,40 +1118,43 @@ class ECMPController(LBController):
 
 
 
-
-
-
-
-
-
 class MiceDAGShifter(LBController):
     def __init__(self, *args, **kwargs):
         super(MiceDAGShifter, self).__init__(algorithm='mice-dag-shifter', *args, **kwargs)
 
+        # Start thread
+        self.mice_dag_shifter = True
+        self.createMiceEstimatorThread()
+        self.miceEstimatorThread.start()
+
         test = False
         if test:
             # Invent flow
-            h30 = self.topology.getHostIp('h_3_0')
             h00 = self.topology.getHostIp('h_0_0')
-            flow = {'src': h00, 'sport': 5555, 'dport': 5555, 'dst': h30, 'proto': 'TCP', 'size': LINK_BANDWIDTH*30, 'duration': None, 'rate': LINK_BANDWIDTH}
+            h10 = self.topology.getHostIp('h_1_0')
+            h20 = self.topology.getHostIp('h_2_0')
+            h30 = self.topology.getHostIp('h_3_0')
 
-            # Add it to the demands
-            self.flowDemands.estimateDemands(flow, action='add')
+            flow1 = {'src': h00, 'sport': 5522, 'dport': 1155, 'dst': h30, 'proto': 'TCP', 'size': LINK_BANDWIDTH * 30,
+                    'duration': None, 'rate': LINK_BANDWIDTH}
 
-            # Invent path
-            pathn = ('r_0_e0', 'r_0_a0', 'r_c0', 'r_3_a0', 'r_3_e0')
-            path = [self.topology.getRouterId(r) for r in pathn]
-
-            #path = path[2:4]
-
-            # Add it to the path
-            self.addFlowToPath(flow, path)
+            flow2 = {'src': h10, 'sport': 5555, 'dport': 5555, 'dst': h20, 'proto': 'TCP', 'size': LINK_BANDWIDTH * 30,
+                    'duration': None, 'rate': LINK_BANDWIDTH}
 
             import ipdb; ipdb.set_trace()
 
-            self.adaptMiceDags(path)
+            # Add it to the demands
+#            self.flowDemands.estimateDemands(flow1, action='add')
+            self.flowDemands.estimateDemands(flow2, action='add')
 
-            self._sendMainThreadToSleep(3000)
+            # Invent path
+            path1 = (self.r0e0, self.r0a0, self.rc0, self.r3a0, self.r3e0)
+            path2 = (self.r1e0, self.r1a0, self.rc1, self.r2a0, self.r2e0)
+            time.sleep(2)
+
+            # Add it to the path
+            self.addFlowToPath(flow1, path1)
+            self.addFlowToPath(flow2, path2)
 
     def reset(self):
         super(MiceDAGShifter, self).reset()
@@ -1178,12 +1181,6 @@ class MiceDAGShifter(LBController):
         # Traceroute new flow
         self.findNewPathsForFlows([flow])
 
-        # Get default path of flow
-        current_path = self.getFlowPath(flow)
-
-        # Adapt mice DAGs to new capacities!
-        self.adaptMiceDags(path=current_path)
-
     def deallocateFlow(self, flow):
         """Removes flow from flow->path data structure"""
         if super(MiceDAGShifter, self).deallocateFlow(flow):
@@ -1193,12 +1190,6 @@ class MiceDAGShifter(LBController):
                 # No need to loadbalance anything
                 # For TCP: we need to update the matrix
                 return
-
-            # Remove flow from path
-            old_path = self.delFlowFromPath(flow)
-
-            # Adapt mice DAGs to new capacities!
-            self.adaptMiceDags(path=old_path)
 
 
 class ElephantDAGShifter(LBController):

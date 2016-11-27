@@ -597,7 +597,8 @@ class DCGraph(DCDiGraph):
                         n_iterations += 1
 
                     if not at_least_one_link:
-                        #log.error("Probabilities might be too low for all possible links -> Activate ECMP on all links!")
+                        #log.error
+                        print("Probabilities might be too low for all possible links -> Activate ECMP on all links!")
                         for link in possible_edge_to_aggr_links:
                             dc_dag.add_uplink(link[0], link[1])
                         continue
@@ -631,6 +632,7 @@ class DCGraph(DCDiGraph):
                         n_iterations += 1
 
                     if not at_least_one_link:
+                        print("Probabilities might be too low for all possible links -> Activate ECMP on all links!")
                         for link in possible_agg_core_links:
                             dc_dag.add_uplink(link[0], link[1])
                         continue

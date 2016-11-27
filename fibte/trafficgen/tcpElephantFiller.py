@@ -16,7 +16,11 @@ class tcpElephantFiller(udpTrafficGeneratorBase):
         super(tcpElephantFiller, self).__init__(*args, **kwargs)
 
         # Set target link load
-        self.n_elephants = n_elephants
+        if n_elephants < 16 and n_elephants != 0:
+            print("ERROR: Can't generate less than 1 mice per host!")
+            exit(0)
+        else:
+            self.n_elephants = n_elephants
 
     def get_filename(self):
         """Return filename sample pattern"""
@@ -103,6 +107,7 @@ class tcpElephantFiller(udpTrafficGeneratorBase):
                     estimated_endtime = new_starttime + (data_size / (estimated_rate))
 
                     # Get a new destination
+                    #import ipdb; ipdb.set_trace()
                     destination = self.get_flow_destination(sender)
 
                     fid = next_id
