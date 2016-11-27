@@ -1117,7 +1117,6 @@ class ECMPController(LBController):
             path = self.delFlowFromPath(flow)
 
 
-
 class MiceDAGShifter(LBController):
     def __init__(self, *args, **kwargs):
         super(MiceDAGShifter, self).__init__(algorithm='mice-dag-shifter', *args, **kwargs)
@@ -1190,7 +1189,6 @@ class MiceDAGShifter(LBController):
                 # No need to loadbalance anything
                 # For TCP: we need to update the matrix
                 return
-
 
 class ElephantDAGShifter(LBController):
     def __init__(self, capacity_threshold=1, congProb_threshold=0.0, sample=False, *args, **kwargs):
@@ -1757,9 +1755,17 @@ class ElephantDAGShifter(LBController):
         return paths
 
 
+class FullDAGShifter(ElephantDAGShifter):
+    def __init__(self, sample=False, *args, **kwargs):
+        super(FullDAGShifter, self).__init__(sample=sample, *args, **kwargs)
 
+        # Start thread
+        self.mice_dag_shifter = True
+        self.createMiceEstimatorThread()
+        self.miceEstimatorThread.start()
 
-
+    def _getAlgorithmName(self):
+        return "full-dag-shifter_k_{0}".format(self.k)
 
 if __name__ == '__main__':
     from fibte.logger import log
@@ -1805,9 +1811,12 @@ if __name__ == '__main__':
         log.info("Sample on DAGs? {0}".format(args.sample))
 
         lb = ElephantDAGShifter(doBalance=args.doBalance, k=args.k,
-                                  congProb_threshold=args.cong_prob,
-                                  capacity_threshold=args.cap_threshold,
-                                  sample=args.sample)
+                                congProb_threshold=args.cong_prob,
+                                capacity_threshold=args.cap_threshold,
+                                sample=args.sample)
+    elif args.algorithm == 'full-dag-shifter':
+        lb = FullDAGShifter(doBalance=args.doBalance, k=args.k,
+                                sample=args.sample)
     else:
         print("Unknown algorithm: {0}".format(args.algorithm))
         exit()
