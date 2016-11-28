@@ -20,6 +20,7 @@ from fibte.misc.DCTCInterface import DCTCIntf
 from fibte.misc.ipalias import setup_alias
 import fibte.res.config as cfg
 from fibte import counterCollector_path, ifDescrNamespace_path, tmp_files
+from fibte.misc.hashSeed import HashSeedConfig
 
 def signal_term_handler(signal, frame):
     import sys
@@ -165,6 +166,12 @@ def setupSecondaryIps(net):
     for host in net.hosts:
         setup_alias(host)
 
+def setupHashSeeds(topo):
+    hashSeedConfig = HashSeedConfig()
+    print('*** Setting up hash seeds for all routers!')
+    for rid in topo.routers():
+        hashSeedConfig.setSeed(rid)
+
 def launch_network(k=4, bw=10, ip_alias=True):
     signal.signal(signal.SIGTERM, signal_term_handler)
 
@@ -196,6 +203,10 @@ def launch_network(k=4, bw=10, ip_alias=True):
     # Start the network
     net.start()
 
+    # Setup hash seeds
+    setupHashSeeds(topo)
+
+    # Start intreface collectors
     startCounterCollectors(topo, interval=1)
 
     if ip_alias:

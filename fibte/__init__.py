@@ -34,6 +34,8 @@ ifDescrNamespace_path= pkgutil.get_loader("fibte.monitoring.ifDescrNamespace").f
 counterCollector_path = pkgutil.get_loader("fibte.monitoring.collectCounters").filename
 getLoads_path = pkgutil.get_loader("fibte.monitoring.getLoads").filename
 
+HASH_SEED_CONFIG = os.path.dirname(__file__)+"/hash_seed.config"
+
 import logging
 from fibte.logger import log
 
