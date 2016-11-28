@@ -9,14 +9,17 @@ from fibte.monitoring import algo_styles
 color_list = list(six.iteritems(colors.cnames))
 
 class DelaysComparator(object):
-    def __init__(self, algo_list=[]):
+    def __init__(self, algo_list=[], extra_folder=''):
         # Results folder
         self.delay_dir = os.path.join(os.path.dirname(__file__), 'results/delay/')
+
+        # Extra folder where algo folders reside under
+        self.extra_folder = extra_folder
 
         # List of files for different algorithm measurements
         self.algo_list = algo_list
         self.algos = [a if self.delay_dir not in a else a.split('/')[-1] if a.split('/')[-1] else a.split('/')[-2] for a in self.algo_list]
-        self.algo_dirs = [a if self.delay_dir in a else os.path.join(self.delay_dir, a) for a in self.algo_list]
+        self.algo_dirs = [a if self.delay_dir in a else os.path.join(os.path.join(self.delay_dir, self.extra_folder), a) for a in self.algo_list]
         self.algo_to_dir = {v: self.algo_dirs[i] for i, v in enumerate(self.algos)}
 
         # Load them
@@ -170,10 +173,11 @@ if __name__ == "__main__":
 
     # Declare expected arguments
     parser.add_argument('--algo_list', nargs='+', help='List of measurement files to compare', type=str, required=True)
+    parser.add_argument('--extra_folder', help='Folder in which the experiment folders reside in', type=str, default='')
 
     # Parse arguments
     args = parser.parse_args()
 
     # Start object and load measurement files
-    ac = DelaysComparator(algo_list=args.algo_list)
+    ac = DelaysComparator(algo_list=args.algo_list, extra_folder=args.extra_folder)
     ac.plot_delay_distribution_comparison()
