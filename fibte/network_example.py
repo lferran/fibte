@@ -17,6 +17,7 @@ from mininet.link import TCIntf
 
 from fibte.fattree import FatTree, FatTreeOOB
 from fibte.misc.DCTCInterface import DCTCIntf
+from fibte.misc.PrioFifoInterface import PrioFifoIntf
 from fibte.misc.ipalias import setup_alias
 import fibte.res.config as cfg
 from fibte import counterCollector_path, ifDescrNamespace_path, tmp_files
@@ -191,7 +192,8 @@ def launch_network(k=4, bw=10, ip_alias=True):
     topo = FatTree(k=k, sflow=False, ovs_switches=False)
 
     # Interfaces
-    intf = custom(DCTCIntf, bw=bw)
+    #intf = custom(DCTCIntf, bw=bw)
+    intf = custom(PrioFifoIntf, bw=bw)
     #intf = custom(TCIntf, bw=bw)
 
     # Network
