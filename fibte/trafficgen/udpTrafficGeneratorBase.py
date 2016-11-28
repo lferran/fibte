@@ -774,13 +774,14 @@ class udpTrafficGeneratorBase(Base):
         return bijections_c
 
     def changeMiceIpsToHostnames(self, bijections):
-        bijections_c = copy.deepcopy(bijections)
-        for host in bijections.iterkeys():
-            for index, conn in enumerate(bijections[host]['toSend']):
-                dstip = conn['dst']
-                dstname = self.topology.getHostName(dstip)
-                bijections_c[host]['toSend'][index]['dst'] = dstname
-        return bijections_c
+        if bijections:
+            bijections_c = copy.deepcopy(bijections)
+            for host in bijections.iterkeys():
+                for index, conn in enumerate(bijections[host]['toSend']):
+                    dstip = conn['dst']
+                    dstname = self.topology.getHostName(dstip)
+                    bijections_c[host]['toSend'][index]['dst'] = dstname
+            return bijections_c
 
     def choose_correct_src_dst_ports(self, flows_per_sender):
         """
