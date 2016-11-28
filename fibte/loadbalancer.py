@@ -696,7 +696,10 @@ class LBController(object):
 
         # Terminate pevious mice estimator thread
         self.miceEstimatorThread.orders_queue.put({'type': 'terminate'})
-        self.miceEstimatorThread.join()
+        try:
+            self.miceEstimatorThread.join()
+        except:
+            pass
 
         # Restart Mice Estimator Thread
         self.createMiceEstimatorThread()
