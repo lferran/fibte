@@ -6,6 +6,7 @@ import abc
 import json
 import scipy.stats as stats
 import numpy as np
+import copy
 try:
     import cPickle as pickle
 except:
@@ -16,6 +17,8 @@ from fibte.misc.unixSockets import UnixClient, UnixClientTCP
 from fibte import tmp_files, db_topo, CFG, LINK_BANDWIDTH, MICE_SIZE_RANGE, ELEPHANT_SIZE_RANGE, MICE_SIZE_STEP, ELEPHANT_SIZE_STEP
 from fibte.logger import log
 from fibte.trafficgen.flow import Flow, Base
+from fibte.trafficgen import nonNICCongestionTest
+
 import logging
 
 controllerServer = CFG.get("DEFAULT","controller_UDS_name")
@@ -398,6 +401,10 @@ class udpTrafficGeneratorBase(Base):
         # Get the pre-computed possible destinations for the sender
         receivers = self.get_possible_destinations(sender)
 
+        if nonNICCongestionTest:
+            if isinstance(receivers, list):
+                receivers = [r for r in receivers if '0' in r[-1] or '2' in r[-1]]
+
         if self.pattern == 'random':
             receivers = list(set(receivers) - set(exclude))
             if receivers:
@@ -486,6 +493,7 @@ class udpTrafficGeneratorBase(Base):
 
         # Convert current ip's to hostnames
         elephants_per_host = self.changeTrafficIpsToHostnames(elephants_per_host)
+        mice_bijections = self.changeMiceIpsToHostnames(mice_bijections)
         traffic_to_save = {'elephant': elephants_per_host,
                            'mice': {'bijections': mice_bijections, 'average': mice_average},
                            'totalTime': self.totalTime}
@@ -508,6 +516,7 @@ class udpTrafficGeneratorBase(Base):
 
         # Convert hostnames to current ips
         elephants_per_host = self.changeTrafficHostnamesToIps(elephants_per_host)
+        mice_bijections = self.changeMiceHostnamesToIps(mice_bijections)
         return elephants_per_host, mice_bijections, mice_average
 
     def resetController(self):
@@ -755,6 +764,24 @@ class udpTrafficGeneratorBase(Base):
 
         return traffic_copy
 
+    def changeMiceHostnamesToIps(self, bijections):
+        bijections_c = copy.deepcopy(bijections)
+        for host in bijections.iterkeys():
+            for index, conn in enumerate(bijections[host]['toSend']):
+                dstname = conn['dst']
+                dstip = self.topology.getHostIp(dstname)
+                bijections_c[host]['toSend'][index]['dst'] = dstip
+        return bijections_c
+
+    def changeMiceIpsToHostnames(self, bijections):
+        bijections_c = copy.deepcopy(bijections)
+        for host in bijections.iterkeys():
+            for index, conn in enumerate(bijections[host]['toSend']):
+                dstip = conn['dst']
+                dstname = self.topology.getHostName(dstip)
+                bijections_c[host]['toSend'][index]['dst'] = dstname
+        return bijections_c
+
     def choose_correct_src_dst_ports(self, flows_per_sender):
         """
         Chooses non colliding source and destiantion ports and re-writes ip addresses
@@ -818,6 +845,10 @@ class udpTrafficGeneratorBase(Base):
 
         # Randomly shuffle hosts
         shuffled_hosts = self.senders[:]
+
+        if nonNICCongestionTest:
+            shuffled_hosts = [h for h in shuffled_hosts if '1' in h[-1] or '3' in h[-1]]
+
         random.shuffle(shuffled_hosts)
 
         # Accumulate result here
@@ -825,7 +856,7 @@ class udpTrafficGeneratorBase(Base):
 
         # Iterate hosts
         for host in shuffled_hosts:
-            other_hosts = list(set(self.senders) - {host})
+            other_hosts = list(set(shuffled_hosts) - {host})
             for conn in range(N_CONNECTIONS):
                 # Choose source port
                 avSrcPorts = list(availablePorts[host])

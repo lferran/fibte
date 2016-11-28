@@ -20,3 +20,7 @@ def isMice(flow):
     :return: boolean
     """
     return not isElephant(flow)
+
+
+
+nonNICCongestionTest = True

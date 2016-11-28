@@ -1,4 +1,5 @@
 from udpTrafficGeneratorBase import *
+from fibte.trafficgen import nonNICCongestionTest
 
 class TGFillerParser(TGParser):
     def __init__(self):
@@ -16,7 +17,7 @@ class tcpElephantFiller(udpTrafficGeneratorBase):
         super(tcpElephantFiller, self).__init__(*args, **kwargs)
 
         # Set target link load
-        if n_elephants < 16 and n_elephants != 0:
+        if n_elephants < 16 and n_elephants != 0 and not nonNICCongestionTest:
             print("ERROR: Can't generate less than 1 mice per host!")
             exit(0)
         else:
@@ -68,8 +69,13 @@ class tcpElephantFiller(udpTrafficGeneratorBase):
     def plan_elephant_flows(self):
         """
         """
+        if nonNICCongestionTest:
+            senders = [s for s in self.senders if '0' in s[-1] or '2' in s[-1]]
+        else:
+            senders = self.senders[:]
+
         # The resulting traffic is stored here
-        flows_per_sender = {s: [] for s in self.senders}
+        flows_per_sender = {s: [] for s in senders}
 
         # Here we store all flows by id
         all_flows = {}
@@ -83,10 +89,10 @@ class tcpElephantFiller(udpTrafficGeneratorBase):
         ## Schedule first elephant flows #############################
         if self.n_elephants > 0:
             # Compute number of elephant flows and fixed sizes
-            elep_per_host = int(self.n_elephants / float(len(self.senders)))
+            elep_per_host = int(self.n_elephants / float(len(senders)))
 
             # Start fws_per_host at each sender
-            senders_t = self.senders[:]
+            senders_t = senders[:]
             random.shuffle(senders_t)
             print("Number of senders: {0}".format(len(senders_t)))
             for sender in senders_t:
@@ -107,7 +113,6 @@ class tcpElephantFiller(udpTrafficGeneratorBase):
                     estimated_endtime = new_starttime + (data_size / (estimated_rate))
 
                     # Get a new destination
-                    #import ipdb; ipdb.set_trace()
                     destination = self.get_flow_destination(sender)
 
                     fid = next_id

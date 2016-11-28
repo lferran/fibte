@@ -333,6 +333,14 @@ class FlowServer(object):
         # Cancel all upcoming scheduler events
         action = [self.scheduler.cancel(e) for e in self.scheduler.queue]
 
+        # Terminate all elephant receivers (subprocess.Popen)
+        for popen in self.elephant_rx_handlers:
+            try:
+                popen.kill()
+                popen.wait()
+            except:
+                pass
+
         # Terminate all tcpSenders for elephants (subprocess.Process)
         for process in self.elephant_tx_handlers:
             if process.is_alive():
@@ -342,14 +350,6 @@ class FlowServer(object):
                     process.join()
                 except OSError:
                     pass
-
-        # Terminate all elephant receivers (subprocess.Popen)
-        for popen in self.elephant_rx_handlers:
-            try:
-                popen.kill()
-                popen.wait()
-            except:
-                pass
 
         # Restart lists
         self.elephant_tx_handlers = []
