@@ -1,6 +1,7 @@
 import argparse
 import signal
 import subprocess
+import time
 
 from fibbingnode import CFG
 from fibbingnode.misc.mininetlib.cli import FibbingCLI
@@ -214,8 +215,16 @@ def launch_network(k=4, bw=10, ip_alias=True):
     if ip_alias:
         setupSecondaryIps(net)
 
+    print("*** Looping forever...")
+    while True:
+        try:
+            time.sleep(2)
+        except KeyboardInterrupt:
+            print("*** KeyboardInterrupt catched! Shutting down")
+            break
+
     # Start the Fibbing CLI
-    FibbingCLI(net)
+    #FibbingCLI(net)
 
     net.stop()
 

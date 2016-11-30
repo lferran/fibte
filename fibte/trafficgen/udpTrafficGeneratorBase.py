@@ -11,6 +11,7 @@ try:
     import cPickle as pickle
 except:
     import pickle
+import ast
 
 from fibte.misc.topology_graph import TopologyGraph
 from fibte.misc.unixSockets import UnixClient, UnixClientTCP
@@ -60,7 +61,7 @@ class TGParser(object):
     def loadParser(self):
         self.parser.add_argument('--addtc', help='Add flows to current traffic --it doesnt reset the controller', action="store_true", default=False)
         self.parser.add_argument('--pattern', help='Communication pattern', choices=['random','staggered','bijection','stride'], type=str, default='random')
-        self.parser.add_argument('--pattern_args', help='Communication pattern arguments', type=json.loads, default='{}')
+        self.parser.add_argument('--pattern_args', help='Communication pattern arguments', type=str, default="{}")
         self.parser.add_argument('--mice_avg', help="Specifiy the average for the poisson arrival process for mice flows", type=float, default=0.0)
         self.parser.add_argument('-t', '--time', help='Duration of the traffic generator', type=int, default=120)
         self.parser.add_argument('-s', '--time_step', help="Granularity at which we inspect the generated traffic so that the rates are kept", type=int, default=1)
@@ -134,7 +135,7 @@ class TGParser(object):
         import ipdb; ipdb.set_trace()
 
 class udpTrafficGeneratorBase(Base):
-    def __init__(self, pattern='random', pattern_args={}, mice_avg=1, totalTime=100, timeStep=1, *args, **kwargs):
+    def __init__(self, pattern='random', pattern_args="{}", mice_avg=1, totalTime=100, timeStep=1, *args, **kwargs):
         super(udpTrafficGeneratorBase, self).__init__(*args, **kwargs)
 
         # Fodler where we store the traffic files
@@ -145,7 +146,7 @@ class udpTrafficGeneratorBase(Base):
 
         # Get attributes
         self.pattern = pattern
-        self.pattern_args = pattern_args
+        self.pattern_args = ast.literal_eval(pattern_args)
 
         # Get mice average
         self.mice_avg = mice_avg
@@ -765,13 +766,16 @@ class udpTrafficGeneratorBase(Base):
         return traffic_copy
 
     def changeMiceHostnamesToIps(self, bijections):
-        bijections_c = copy.deepcopy(bijections)
-        for host in bijections.iterkeys():
-            for index, conn in enumerate(bijections[host]['toSend']):
-                dstname = conn['dst']
-                dstip = self.topology.getHostIp(dstname)
-                bijections_c[host]['toSend'][index]['dst'] = dstip
-        return bijections_c
+        if bijections:
+            bijections_c = copy.deepcopy(bijections)
+            for host in bijections.iterkeys():
+                for index, conn in enumerate(bijections[host]['toSend']):
+                    dstname = conn['dst']
+                    dstip = self.topology.getHostIp(dstname)
+                    bijections_c[host]['toSend'][index]['dst'] = dstip
+            return bijections_c
+        else:
+            return bijections
 
     def changeMiceIpsToHostnames(self, bijections):
         if bijections:
@@ -782,6 +786,8 @@ class udpTrafficGeneratorBase(Base):
                     dstname = self.topology.getHostName(dstip)
                     bijections_c[host]['toSend'][index]['dst'] = dstname
             return bijections_c
+        else:
+            return bijections
 
     def choose_correct_src_dst_ports(self, flows_per_sender):
         """

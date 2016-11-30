@@ -427,7 +427,7 @@ class FlowServer(object):
     @staticmethod
     def getMiceSize():
         # Get mice size flow
-        duration_mean = 2
+        duration_mean = 1
         mice_size = random.expovariate(1 / float(duration_mean)) * LINK_BANDWIDTH
         duration = mice_size / float(LINK_BANDWIDTH)
         while duration > 20:
@@ -588,7 +588,7 @@ class FlowServer(object):
 
     def run(self):
         # Choose whether to log completion times for mices and elephants
-        LOG_ELEPHANTS_COMPLETION_TIME = False
+        LOG_ELEPHANTS_COMPLETION_TIME = True
         LOG_MICE_COMPLETION_TIME = True
 
         log.info("{0}: flowServer started!".format(self.name))

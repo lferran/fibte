@@ -23,4 +23,4 @@ def isMice(flow):
 
 
 
-nonNICCongestionTest = True
+nonNICCongestionTest = False
