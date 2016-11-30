@@ -246,7 +246,7 @@ def sendMiceThroughOpenSocket(s, queue, sending, completionTimeFile=None):
                 if completionTimeFile:
                     filename = fname_pattern.format(round)
                     flow = {'proto': 'tcp', 'size': totalSize, 'rate': rate}
-                    filename = writeStartingTime(flow, filename=filename)
+                    filename = writeStartingTime(flow, filename=filename, prefix='mice_')
 
                 start = time.time()
                 # While still some data to send
@@ -435,7 +435,7 @@ def sendMiceFlow(logtime=False, **flow):
     file_name = None
     if flow['proto'].lower() == 'tcp' and logtime:
         # Save flow starting time
-        file_name = writeStartingTime(flow)
+        file_name = writeStartingTime(flow, prefix='mice_')
 
     # Call internal sendFlow
     successful = _sendFlow(notify=False, **flow)
@@ -448,10 +448,9 @@ def sendMiceFlow(logtime=False, **flow):
 
 def sendElephantFlow(logtime=False, **flow):
     filename = None
-
     # Write starting time
     if flow['proto'].lower() == 'tcp' and logtime:
-        filename = writeStartingTime(flow)
+        filename = writeStartingTime(flow, prefix='elep_')
 
     # Call internal function
     successful = _sendFlow(notify=True, **flow)
@@ -462,13 +461,15 @@ def sendElephantFlow(logtime=False, **flow):
     # Exit the function gracefully
     sys.exit(0)
 
-def writeStartingTime(flow, filename=None):
+def writeStartingTime(flow, filename=None, prefix=None):
     if not filename:
-        file_name = str(delay_folder) + "{0}_{1}_{2}_{3}".format(flow["src"],
-                                                                 flow["sport"],
-                                                                 flow["dst"],
-                                                                 flow["dport"])
+        file_name = "{0}_{1}_{2}_{3}".format(flow["src"], flow["sport"], flow["dst"], flow["dport"])
+        if prefix:
+            file_name = prefix + file_name
+        file_name = str(delay_folder) + file_name
     else:
+        if prefix:
+            filename = prefix + filename
         file_name = str(delay_folder) + filename
 
     if flow['proto'].lower() == 'udp':
