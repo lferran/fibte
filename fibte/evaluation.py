@@ -213,7 +213,6 @@ class Utils(object):
         pids = out.split('\n')
         return pids
 
-
 class Test(object):
     def __init__(self):
         self.name = 'default-test'
@@ -296,7 +295,6 @@ class ElephantFlowsTest(Test):
                     d.update({'algorithm': algo, 'algorithm_args': aargs})
                     tests.append(d)
         return tests
-
 
 class Evaluation(object):
     def __init__(self):
@@ -386,10 +384,12 @@ class Evaluation(object):
                         self.utils.mv(os.path.join(self.utils.delay_dir, 'elep_*'), algodir)
 
         except KeyboardInterrupt:
+            print("*** CTRL-C catched!")
+        finally:
+            print("*** Finishing evaulation")
             self.traffic.stop()
             self.loadBalancer.stop()
             self.stopEnvironment()
-
 
 if __name__ == '__main__':
     # start_loadBalancer('elephant-dag-shifter')
