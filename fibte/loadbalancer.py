@@ -1802,13 +1802,13 @@ if __name__ == '__main__':
     log.setLevel(logging.DEBUG)
     log.info("Starting Controller - k = {0} , algorithm = {1}".format(args.k, args.algorithm))
 
-    if args.algorithm == 'ecmp':
+    if args.algorithm.lower() == 'ecmp':
         lb = ECMPController(doBalance=args.doBalance, k=args.k)
 
-    elif args.algorithm == 'mice-dag-shifter':
+    elif args.algorithm.lower() == 'mice-dag-shifter':
         lb = MiceDAGShifter(doBalance=args.doBalance, k=args.k)
 
-    elif args.algorithm == 'elephant-dag-shifter':
+    elif args.algorithm.lower() == 'elephant-dag-shifter':
         log.info("Capacity threshold: {0}".format(args.cap_threshold))
         log.info("Max congestion probability: {0}".format(args.cong_prob))
         log.info("Sample on DAGs? {0}".format(args.sample))
@@ -1817,7 +1817,7 @@ if __name__ == '__main__':
                                 congProb_threshold=args.cong_prob,
                                 capacity_threshold=args.cap_threshold,
                                 sample=args.sample)
-    elif args.algorithm == 'full-dag-shifter':
+    elif args.algorithm.lower() == 'full-dag-shifter':
         lb = FullDAGShifter(doBalance=args.doBalance, k=args.k,
                                 sample=args.sample)
     else:
