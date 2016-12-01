@@ -427,7 +427,7 @@ class FlowServer(object):
     @staticmethod
     def getMiceSize():
         # Get mice size flow
-        duration_mean = 1
+        duration_mean = 0.3
         mice_size = random.expovariate(1 / float(duration_mean)) * LINK_BANDWIDTH
         duration = mice_size / float(LINK_BANDWIDTH)
         while duration > 20:
