@@ -132,9 +132,12 @@ class UnixClient(object):
 
         self.sock.close()
 
-    def send(self, m, server):
+    def send(self, m, server=None):
         try:
-            self.sock.sendto(m, self.server_address_base.format(server))
+            if server:
+                self.sock.sendto(m, self.server_address_base.format(server))
+            else:
+                self.sock.sendto(m, self.server_address_base)
         except socket.error as serr:
             print serr
             print "Server {0} could not be reached".format(self.server_address_base.format(server))

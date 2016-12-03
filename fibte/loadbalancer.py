@@ -139,6 +139,8 @@ class LBController(object):
         # Start object that estimates flow demands
         self.flowDemands = EstimateDemands()
 
+        self.stopLoadBalancerTimer = None
+        self.evaluationClient = UnixClient("/tmp/evaluationServer")
         # This is for debugging purposes only --should be removed
         if load_variables == True and self.k == 4:
             self.r0e0 = self.topology.getRouterId('r_0_e0')
@@ -686,6 +688,9 @@ class LBController(object):
         Sets the load balancer to its initial state
         :return:
         """
+        self.stopLoadBalancerTimer.cancel()
+        self.evaluationClient.send('stopped')
+
         # Set all dags to original ospf dag
         self.current_elephant_dags = copy.deepcopy(self.initial_elep_dags)
         self.current_mice_dags = copy.deepcopy(self.initial_mice_dags)
@@ -879,6 +884,10 @@ class LBController(object):
         """
         Subclass this method
         """
+        if self.stopLoadBalancerTimer and self.stopLoadBalancerTimer.is_alive():
+            log.info("Canceling previous timer!!")
+            self.stopLoadBalancerTimer.cancel()
+
         # Update flow demands
         self.flowDemands.estimateDemands(flow, action='add')
 
@@ -916,6 +925,14 @@ class LBController(object):
         rate = self.base.setSizeToStr(rate * LINK_BANDWIDTH)
         proto = flow['proto']
         log.debug("Flow FINISHED: {5}Flow({0}:({1}) -> {2}:({3}) | #{4})".format(src, sport, dst, dport, rate, proto))
+
+        if not self.flowDemands.currentFlows:
+            log.info("No more flows ongoing! Starting timer to shut LB down in 10 seconds")
+
+            # Start timer to stop himself
+            self.stopLoadBalancerTimer = threading.Timer(10, self.stopLoadBalancerInEvaluation)
+            self.stopLoadBalancerTimer.start()
+
         return successful
 
     def tracerouteFlow(self, flow):
@@ -987,6 +1004,13 @@ class LBController(object):
 
         # Finally exit
         os._exit(0)
+
+    def stopLoadBalancerInEvaluation(self):
+        """"""
+        # Send signal to evaluation!!
+        self.evaluationClient.send('finished')
+
+        self.exitGracefully()
 
     def isFlowPathUpdated(self, flow):
         """"""

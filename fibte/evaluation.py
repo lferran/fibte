@@ -1,10 +1,10 @@
 import subprocess
 import time
 import os.path
+import threading
 import os
-import shutil
-import ast
 
+from fibte.misc.unixSockets import UnixServer, UnixClient
 from fibte.trafficgen.udpTrafficGeneratorBase import SAVED_TRAFFIC_DIR
 
 class FlowServers(object):
@@ -95,6 +95,7 @@ class Network(object):
         self.clean()
 
     def clean(self):
+        subprocess.call("killall zebra ospfd", shell=True)
         subprocess.call("rm /tmp/* ; rm /var/run/netns/*", shell=True)
 
     def running(self):
@@ -271,27 +272,30 @@ class ElephantFlowsTest(Test):
     def load_tests(self):
         # Define here your simple test
         tests = []
-        n_elephants = [16, 32, 64]
+        n_elephants = [16, 32]
         mice_avg = 0.0
         duration = 100
         patterns = [
             ('stride', {'i': 4}),
-            #('random', None),
+            ('random', None),
+            ('bijection', None),
+            ('staggered', {'sameEdge': 0.2, 'samePod': 0.3}),
             ]
-
         algos = [
             ('ecmp', None),
             ('elephant-dag-shifter', None),
-            #('elephant-dag-shifter', '--sample'),
-            #('mice-dag-shifter', None),
+            ('elephant-dag-shifter', '--sample'),
             ]
 
+        # Iterate traffic pattern
         for (pattern, pargs) in patterns:
+            # Iterate number of elephants
             for n_ele in n_elephants:
+                # Iterate algorithms
                 for (algo, aargs) in algos:
                     d = {'pattern': pattern, 'pattern_args': pargs,
-                    'n_elephants': n_ele, 'mice_avg': mice_avg,
-                    'duration': duration}
+                         'n_elephants': n_ele, 'mice_avg': mice_avg,
+                         'duration': duration}
                     d.update({'algorithm': algo, 'algorithm_args': aargs})
                     tests.append(d)
         return tests
@@ -306,10 +310,16 @@ class Evaluation(object):
 
         # Define here the tests we want to run
         self.tests = [ElephantFlowsTest()]
+        self.serverSocket = UnixServer("/tmp/evaluationServer")
+        self.ownClient = UnixClient("/tmp/evaluationServer")
+        self.ownStopTrafficTimer = None
 
     def startEnvironment(self):
         self.network.start()
         self.flowServers.start()
+
+        self.serverSocket = UnixServer("/tmp/evaluationServer")
+        self.ownClient = UnixClient("/tmp/evaluationServer")
 
     def stopEnvironment(self):
         self.network.stop()
@@ -319,11 +329,107 @@ class Evaluation(object):
         self.stopEnvironment()
         self.startEnvironment()
 
+    def ownStopTraffic(self):
+        self.ownClient.send("auto-terminate")
+
+    def waitForTrafficToFinish(self):
+        # Start maximum waiting time timer
+        self.ownStopTrafficTimer = threading.Timer(60*10, self.ownStopTraffic)
+
+        # Blocking read to the serverSocket
+        st = time.time()
+        print("*** WAITING FOR TRAFFIC TO FINISH " + "*"*60)
+        finished = self.serverSocket.receive()
+        if finished == 'finished':
+            if self.ownStopTrafficTimer and self.ownStopTrafficTimer.is_alive():
+                self.ownStopTrafficTimer.cancel()
+            print("*** TRAFFIC FINISHED SUCCESSFULLY after {0}seconds".format(time.time() - st) + "*"*60)
+            return
+        else:
+            print("*** ERROR ON FINISHING TRAFFIC after {0}seconds".format(time.time() - st) + "*"*60)
+            return
+
     def killall(self):
         if self.network.running():
             self.traffic.stop()
             self.loadBalancer.stop()
         self.stopEnvironment()
+
+    def startLoadBalancer(self, sample):
+        """Gets the parameters from the sample and starts the load balancer"""
+        algo = sample.get('algorithm')
+        aargs = sample.get('algorithm_args')
+        self.loadBalancer.start(algo, aargs)
+
+    def startTraffic(self, sample):
+        """Gets parameters from the sample and starts the traffic generator"""
+        # Start traffic
+        pattern = sample.get('pattern')
+        pargs = sample.get('pattern_args')
+        n_elephants = sample.get('n_elephants')
+        mice_avg = sample.get('mice_avg')
+        duration = sample.get('duration')
+        self.traffic.start(pattern, pargs, n_elephants, mice_avg, duration)
+
+    def createPatternFolder(self, sample, delaydir):
+        """Creates, if it doesn't exist already, a folder for the specified traffic pattern
+        """
+        # Parses arguments from sample
+        pattern = sample.get('pattern')
+        pargs = sample.get('pattern_args')
+        n_elephants = sample.get('n_elephants')
+        mice_avg = sample.get('mice_avg')
+        duration = sample.get('duration')
+
+        # Create directory name
+        if pargs:
+            sampledirname = "{0}_{1}_nelep{2}_avmice{3}_{4}s".format(pattern, str(pargs).replace(' ', ''),
+                                                                     str(n_elephants),
+                                                                     str(mice_avg).replace('.', ','), duration)
+        else:
+            sampledirname = "{0}_nelep{1}_avmice{2}_{3}s".format(pattern, str(n_elephants),
+                                                                 str(mice_avg).replace('.', ','),
+                                                                 duration)
+        # Join it with the delay parent directory
+        sampledir = os.path.join(delaydir, sampledirname)
+        if not self.utils.dir_exists(sampledir):
+            self.utils.mkdir(sampledir, p=True)
+
+
+        # Return it
+        return sampledir
+
+    def createAlgoFolder(self, sample, patterndir):
+        """Given the traffic pattern directory, creates a specific
+        folder for the algorithm specified in the sample
+        """
+        # Parse parameters
+        algo = sample.get('algorithm')
+        aargs = sample.get('algorithm_args')
+
+        # Create folder for algorithm
+        if aargs:
+            algoname = "{0}_{1}".format(algo, 'Sampled')
+        else:
+            algoname = "{0}_{1}".format(algo, 'Best')
+
+        # Create folder
+        algodir = os.path.join(patterndir, algoname)
+        self.utils.mkdir(algodir, p=True)
+
+        # Return it
+        return algodir
+
+    def moveResults(self, algodir):
+        """Collects all completion times from the default results folder and moves it to the
+        corresponding pattern/algo evaaluation results folder"""
+
+        # Move all flow completion times to delay
+        if self.utils.has_mice_delays(self.utils.delay_dir):
+            self.utils.mv(os.path.join(self.utils.delay_dir, 'mice_*'), algodir)
+
+        if self.utils.has_elephant_delays(self.utils.delay_dir):
+            self.utils.mv(os.path.join(self.utils.delay_dir, 'elep_*'), algodir)
 
     def run(self):
         # Run all tests
@@ -331,57 +437,33 @@ class Evaluation(object):
             evaluation_results_dir = os.path.join(self.utils.fibte_dir, 'evaluation_results/')
             for test in self.tests:
                 print("*** Starting test: {0}".format(test.name))
-
                 # Create folder for results
                 delaydir = test.mkdir_test(parent_dir=evaluation_results_dir)
 
                 for sample in test:
                     # Restart network and flowServers
                     self.restartEnvironment()
-                    # Start loadbalancer
-                    algo = sample.get('algorithm')
-                    aargs = sample.get('algorithm_args')
-                    self.loadBalancer.start(algo, aargs)
 
-                    # Start traffic
-                    pattern = sample.get('pattern')
-                    pargs = sample.get('pattern_args')
-                    n_elephants = sample.get('n_elephants')
-                    mice_avg = sample.get('mice_avg')
-                    duration = sample.get('duration')
-                    self.traffic.start(pattern, pargs, n_elephants, mice_avg, duration)
+                    # Create dir for this pattern
+                    patterndir = self.createPatternFolder(sample, delaydir)
 
-                    # Create dir for this sample
-                    sampledirname = "{0}_{1}_nelep{2}_avmice{3}_{4}s".format(pattern, str(pargs).replace(' ', ''),
-                                                                             str(n_elephants),
-                                                                             str(mice_avg).replace('.', ','),
-                                                                             duration)
-                    sampledir = os.path.join(delaydir, sampledirname)
-                    if not self.utils.dir_exists(sampledir):
-                        self.utils.mkdir(sampledir, p=True)
+                    # Create dif for this algorithm
+                    algodir = self.createAlgoFolder(sample, patterndir)
 
-                    # Create folder for algorithm
-                    if aargs:
-                        algoname = "{0}_{1}".format(algo, 'True')
-                    else:
-                        algoname = "{0}".format(algo)
+                    print("*** Starting sample "+"*"*60)
 
-                    algodir = os.path.join(sampledir, algoname)
-                    self.utils.mkdir(algodir, p=True)
+                    # Start LB and Traffic
+                    self.startLoadBalancer(sample)
+                    self.startTraffic(sample)
 
                     # Wait for some time
-                    print("*** Sleeping until traffic simulation finishes...")
-                    time.sleep(duration * 2.5)
+                    self.waitForTrafficToFinish()
 
                     # Stop traffic
                     self.killall()
 
-                    # Move all flow completion times to delay
-                    if self.utils.has_mice_delays(self.utils.delay_dir):
-                        self.utils.mv(os.path.join(self.utils.delay_dir, 'mice_*'), algodir)
-
-                    if self.utils.has_elephant_delays(self.utils.delay_dir):
-                        self.utils.mv(os.path.join(self.utils.delay_dir, 'elep_*'), algodir)
+                    # Move results to specified folder
+                    self.moveResults(algodir)
 
         except KeyboardInterrupt:
             print("*** CTRL-C catched!")
@@ -397,8 +479,8 @@ if __name__ == '__main__':
     # kill_loadBalancer()
     # is_loadbalancer_running()
 
-    import ipdb;ipdb.set_trace()
     ev = Evaluation()
     ev.killall()
+    import ipdb; ipdb.set_trace()
     ev.run()
 
