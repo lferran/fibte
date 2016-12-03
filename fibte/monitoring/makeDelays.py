@@ -9,7 +9,7 @@ from fibte.monitoring import algo_styles
 color_list = list(six.iteritems(colors.cnames))
 
 class DelaysComparator(object):
-    def __init__(self, algo_list=[], extra_folder='', to_plot='all'):
+    def __init__(self, algo_list=[], parent_folder='', to_plot='all'):
         # What to plot?
         self.to_plot = to_plot
 
@@ -17,12 +17,12 @@ class DelaysComparator(object):
         self.delay_dir = os.path.join(os.path.dirname(__file__), 'results/delay/')
 
         # Extra folder where algo folders reside under
-        self.extra_folder = extra_folder
+        self.parent_folder = parent_folder
 
         # List of files for different algorithm measurements
         self.algo_list = algo_list
-        self.algos = [a if self.delay_dir not in a else a.split('/')[-1] if a.split('/')[-1] else a.split('/')[-2] for a in self.algo_list]
-        self.algo_dirs = [a if self.delay_dir in a else os.path.join(os.path.join(self.delay_dir, self.extra_folder), a) for a in self.algo_list]
+        self.algos = [a for a in self.algo_list]
+        self.algo_dirs = [os.path.join(self.parent_folder, a) for a in self.algos]
         self.algo_to_dir = {v: self.algo_dirs[i] for i, v in enumerate(self.algos)}
 
         # Load them
@@ -303,8 +303,12 @@ class DelaysComparator(object):
 
             # Set grid on
             plt.grid(True)
+
+        try:
             plt.show()
-        plt.show()
+        except:
+            print("Exception occurred when trying to plot! SAVING INSTEAD")
+            plt.savefig('plot.png')
 
     def plot_delay_distribution(self, algorithm):
         delays = self.algo_to_delays[algorithm]
@@ -318,12 +322,12 @@ if __name__ == "__main__":
 
     # Declare expected arguments
     parser.add_argument('--algo_list', nargs='+', help='List of measurement files to compare', type=str, required=True)
-    parser.add_argument('--extra_folder', help='Folder in which the experiment folders reside in', type=str, default='')
+    parser.add_argument('--parent_folder', help='Folder in which the experiment folders reside in', type=str, default='./results/delay/')
     parser.add_argument('--to_plot', choices=['all', 'together', 'mice', 'elephant'], help="What to plot?", required=True)
 
     # Parse arguments
     args = parser.parse_args()
 
     # Start object and load measurement files
-    ac = DelaysComparator(algo_list=args.algo_list, extra_folder=args.extra_folder, to_plot=args.to_plot)
+    ac = DelaysComparator(algo_list=args.algo_list, parent_folder=args.parent_folder, to_plot=args.to_plot)
     ac.plot_delay_distribution_comparison()
