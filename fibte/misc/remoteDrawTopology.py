@@ -50,9 +50,9 @@ class RemoteDrawTopology(object):
         self.remote = remote
         if self.remote:
             # Parameters for remote ssh tunner to eth server
-            self.userName = 'lferran'
+            self.userName = 'root'
             self.serverName = 'pc-10327.ethz.ch'
-            self.openPort = 5010  # Should be changed for what Ahmed tells me
+            self.openPort = 2222  # Should be changed for what Ahmed tells me
 
         else:
             # Parameters for ssh tunnel within local VM
@@ -120,8 +120,10 @@ class RemoteDrawTopology(object):
         - Will setup a port forwarding such that all that you send at listeningPort
           inside the VM, will be received at the local machine at the same port
         """
-        command = "ssh -p {3} -f -N -R {0}:localhost:{0} {1}@{2}".format(self.listeningPort, self.userName,
-                                                                         self.serverName, self.openPort)
+        command = "ssh -p {3} -f -N -R {0}:localhost:{0} {1}@{2} -i /home/ferran/.ssh/id_rsa2".format(self.listeningPort,
+                                                                                                      self.userName,
+                                                                                                      self.serverName,
+                                                                                                      self.openPort)
         print("Trying to setup SSH tunnel: {0}".format(command))
         subprocess.call(command, shell=True)
 
@@ -133,7 +135,7 @@ class RemoteDrawTopology(object):
         subprocess.call(command, shell=True)
 
         # Then we will clear the port number
-        command = "ssh -p {3} {1}@{2} 'fuser -k -n tcp {0}'".format(self.listeningPort,self.userName,
+        command = "ssh -p {3} -i /home/ferran/.ssh/id_rsa2 {1}@{2} 'fuser -k -n tcp {0}'".format(self.listeningPort,self.userName,
                                                                     self.serverName,self.openPort)
         subprocess.call(command, shell=True)
         for connection in self.connections:
