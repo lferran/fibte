@@ -810,7 +810,7 @@ class udpTrafficGeneratorBase(Base):
                 avSrcPorts = availablePorts[sender]
 
                 # Get flow's destination
-                dstHost = flow_tmp['dstHost']
+                dstHost = flow_tmp['dst']
 
                 # Get available destination ports
                 avDstPorts = availablePorts[dstHost]
@@ -825,8 +825,8 @@ class udpTrafficGeneratorBase(Base):
                 availablePorts[dstHost] -= {dport}
 
                 # Get ips
-                srcIp = self.topology.getHostIp(flow_tmp['srcHost'])
-                dstIp = self.topology.getHostIp(flow_tmp['dstHost'])
+                srcIp = self.topology.getHostIp(flow_tmp['src'])
+                dstIp = self.topology.getHostIp(flow_tmp['dst'])
 
                 # Create the flow object
                 flow = Flow(src=srcIp, dst=dstIp, sport=sport, dport=dport,
