@@ -330,11 +330,25 @@ class udpTrafficGeneratorBase(Base):
 
     @staticmethod
     def _getFlowEndTime(flow):
-        if flow['proto']  == 'UDP':
+        if flow['proto'].lower()  == 'udp':
             return flow.get('startTime') + flow.get('duration')
-        else:
-            duration = flow.get('size')/flow.get('rate')
+
+        elif flow['proto'].lower() == 'tcp':
+            duration = flow.get('size') / float(flow.get('rate'))
             return flow.get('startTime') + duration
+        else:
+            raise ValueError("Wrong flow type")
+
+    def getTCPFlowRemainingTime(self, flow):
+        """
+        Assumes current rate as the stable rate until flow finishes
+        """
+        if flow['proto'].lower() == 'tcp':
+            remaining_data = flow.get('remaining', flow.get('size'))
+            remaining_time = remaining_data / float(flow.get('rate'))
+            return remaining_time
+        else:
+            raise ValueError("Wrong flow type")
 
     def _createPossibleDestinations(self):
         """"""

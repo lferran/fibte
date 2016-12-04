@@ -44,7 +44,7 @@ class tcpElephantFiller(udpTrafficGeneratorBase):
 
     def _get_active_flows_interval(self, all_flows, start, end, to_host=None, from_host=None):
         # Flows that start in this period
-        all_active_flows = {fid: flow for fid, flow in all_flows.iteritems() if flow.get('startTime') <= start and self._getFlowEndTime(flow) > end}
+        all_active_flows = {fid: flow for fid, flow in all_flows.iteritems() if flow.get('startTime') <= start and start + self.getTCPFlowRemainingTime(flow) > end}
 
         if not to_host and not from_host:
             return all_active_flows
@@ -71,14 +71,16 @@ class tcpElephantFiller(udpTrafficGeneratorBase):
         return {k: v for (k, v) in flow.iteritems() if k in ['src', 'dst', 'proto', 'startTime']}
 
     def updateEstimatedEndTimes(self, all_elep_flows, time_period):
+        # Make an initial copy
         all_elep_fws_copy = copy.deepcopy(all_elep_flows)
 
         # Get active flows only at time time_period
         active_flows = self._get_active_flows(all_elep_flows, period=time_period)
 
+        # Brand new estimateDemands object
         flowRates = EstimateDemands()
 
-        # Add them to the flow demands
+        # Add active flows to estimateDemands
         for fid, af in active_flows.iteritems():
             fkey = self.flowToKey(af)
             flowRates.addFlow(fkey)
@@ -87,17 +89,28 @@ class tcpElephantFiller(udpTrafficGeneratorBase):
         flowRates.estimateDemandsAll()
 
         # Update estimated endtimes accordingly
-        for fid, flow in all_elep_flows.iteritems():
+        for fid, flow in active_flows.iteritems():
+            # Get new rate
             fkey = self.flowToKey(flow)
-            try:
-                rate = flowRates.getDemand(fkey) * LINK_BANDWIDTH
-            except:
-                continue
-            flow['rate'] = rate
-            estimated_duration = flow['size'] / float(rate)
-            all_elep_fws_copy[fid]['estimated_endtime'] = flow['startTime'] + estimated_duration
+            new_rate = flowRates.getDemand(fkey) * LINK_BANDWIDTH
 
-        return all_elep_flows
+            # Get old rate
+            old_rate = flow['rate']
+
+            # Remaining data to send
+            remaining_data = all_elep_flows[fid]['remaining']
+
+            # Substract from data to send what was sent in the last minute
+            all_elep_fws_copy[fid]['remaining'] = max(0, remaining_data - (old_rate * self.timeStep))
+
+            # Update new rate
+            all_elep_fws_copy[fid]['rate'] = new_rate
+
+            # Update new estimated duration
+            estimated_duration = remaining_data/float(new_rate)
+            all_elep_fws_copy[fid]['estimated_endtime'] = time_period + estimated_duration
+
+        return all_elep_fws_copy
 
     def plan_elephant_flows(self):
         """
@@ -134,90 +147,64 @@ class tcpElephantFiller(udpTrafficGeneratorBase):
                     min_duration = self.get_flow_duration(flow_type='e')
                     max_rate = LINK_BANDWIDTH
                     data_size = min_duration * max_rate
-
-                    # Rate reduction
-                    rate_reduction = random.uniform(0.3, 0.8)
-                    estimated_rate = (LINK_BANDWIDTH/elep_per_host) * rate_reduction
-
                     # Random start time
                     new_starttime = random.uniform(5, 14.9)
-
-                    # Compute estimated endtime
-                    estimated_endtime = new_starttime + (data_size / (estimated_rate))
-
                     # Get a new destination
                     destination = self.get_flow_destination(sender)
-
                     fid = next_id
-                    f = {'id': fid,
-                         'type': 'e',
-                         'src': sender,
-                         'dst': destination,
-                         'proto': 'tcp',
-                         'startTime': new_starttime,
-                         'size': data_size,
-                         'rate': LINK_BANDWIDTH,
-                         'duration': None,
-                         'estimated_endtime': estimated_endtime}
-
+                    f = {'id': fid, 'type': 'e',
+                         'src': sender, 'dst': destination,
+                         'proto': 'tcp', 'startTime': new_starttime,
+                         'size': data_size, 'remaining': data_size,
+                         'rate': max_rate, 'duration': None, 'estimated_endtime': None
+                         }
                     flows_per_sender[sender].append(f)
                     all_elep_flows[fid] = f
                     next_id += 1
 
-            all_elep_flows = self.updateEstimatedEndTimes(all_elep_flows, time_period=15)
+            # Allocate elephant flows every time some of them stop
+            for i in range(0, self.totalTime, self.timeStep):
+                # Estimate new end times and rates
+                all_elep_flows = self.updateEstimatedEndTimes(all_elep_flows, time_period=i)
 
-            # Allocate elephant flows
-            for i in range(15, self.totalTime, self.timeStep):
-                if i < self.totalTime - self.timeStep:
-                    # Get flows that are terminating
-                    terminating_flows = self.get_terminating_flows(all_elep_flows, period=i)
+                # Get flows that are terminating
+                terminating_flows = self.get_terminating_flows(all_elep_flows, period=i)
 
-                    # Start as many flows as the ones that finish
-                    for tfk, tf in terminating_flows.iteritems():
+                # Start as many flows as the ones that finish
+                for tfk, tf in terminating_flows.iteritems():
+                    # Get a new elephant flow with similar info
+                    original_sender = tf['src']
 
-                        # Get a new elephant flow with similar info
-                        original_sender = tf['src']
+                    # Get a new tcp elephant flow
+                    min_duration = self.get_flow_duration(flow_type='e')
+                    max_rate = LINK_BANDWIDTH
+                    data_size = min_duration * max_rate
 
-                        # Get a new tcp elephant flow
-                        min_duration = self.get_flow_duration(flow_type='e')
-                        max_rate = LINK_BANDWIDTH
-                        data_size = min_duration * max_rate
+                    # Previous endtime
+                    previous_endtime = tf.get('estimated_endtime')
 
-                        # Rate reduction
-                        rate_reduction = random.uniform(0.3, 0.8)
-                        estimated_rate = (LINK_BANDWIDTH / elep_per_host) * rate_reduction
+                    # Random start time
+                    new_starttime = random.uniform(previous_endtime + 1, previous_endtime + 3)
 
-                        # Previous endtime
-                        previous_endtime = tf.get('estimated_endtime')
+                    # Get a new destination
+                    destination = self.get_flow_destination(original_sender)
 
-                        # Random start time
-                        new_starttime = random.uniform(previous_endtime + 0.5, previous_endtime + 2)
+                    fid = next_id
+                    f = {'id': fid,
+                         'type': 'e',
+                         'src': original_sender,
+                         'dst': destination,
+                         'proto': 'tcp',
+                         'startTime': new_starttime,
+                         'size': data_size,
+                         'remaining': data_size,
+                         'rate': max_rate,
+                         'duration': None,
+                         'estimated_endtime': None}
 
-                        # Compute estimated endtime
-                        estimated_endtime = new_starttime + (data_size / (estimated_rate))
-
-                        # Get a new destination
-                        destination = self.get_flow_destination(original_sender)
-
-                        fid = next_id
-                        f = {'id': fid,
-                             'type': 'e',
-                             'src': original_sender,
-                             'dst': destination,
-                             'proto': 'tcp',
-                             'startTime': new_starttime,
-                             'size': data_size,
-                             'rate': LINK_BANDWIDTH,
-                             'duration': None,
-                             'estimated_endtime': estimated_endtime}
-
-                        flows_per_sender[original_sender].append(f)
-                        all_elep_flows[fid] = f
-                        next_id += 1
-
-                    all_elep_flows = self.updateEstimatedEndTimes(all_elep_flows, time_period=i)
-
-            print "Initial number of elephant flows: {0}".format(len(all_elep_flows))
+                    flows_per_sender[original_sender].append(f)
+                    all_elep_flows[fid] = f
+                    next_id += 1
 
             # Update all flows dict
             all_flows.update(all_elep_flows)
@@ -231,6 +218,7 @@ class tcpElephantFiller(udpTrafficGeneratorBase):
                     floww = all_flows[flow['id']]
                     floww['sport'] = -1
                     floww['dport'] = -1
+                    floww['remaining'] = floww['size']
                     new_flows_per_sender[sender].append(floww)
 
         # Re-write correct source and destination ports per each sender

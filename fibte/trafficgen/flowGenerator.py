@@ -102,12 +102,13 @@ def sendFlowTCP(dst="10.0.32.3", sport=5000, dport=5001, size=None, rate=None, d
             return False
 
         # If rate not specified
-        if not rate:
-            # We try at highest rate possible
-            rate = setSizeToInt(LINK_BANDWIDTH)
-        else:
-            # Limit it to LINK_BANDWIDTH
-            rate = min(setSizeToInt(rate), LINK_BANDWIDTH)
+        # if not rate:
+        #     # We try at highest rate possible
+        #     rate = setSizeToInt(LINK_BANDWIDTH)
+        # else:
+        #     # Limit it to LINK_BANDWIDTH
+        #     rate = min(setSizeToInt(rate), LINK_BANDWIDTH
+        rate = LINK_BANDWIDTH
 
         # Express it in bytes and bytes/s
         totalSize = setSizeToInt(size)/8
@@ -216,14 +217,15 @@ def sendMiceThroughOpenSocket(s, queue, sending, completionTimeFile=None):
                 # Set state to sending
                 sending.set()
 
-                # If rate not specified
-                if not rate:
-                    # We try at highest rate possible
-                    rate = setSizeToInt(LINK_BANDWIDTH)
-
-                else:
-                    # Limit it to LINK_BANDWIDTH
-                    rate = min(setSizeToInt(rate), LINK_BANDWIDTH)
+                # # If rate not specified
+                # if not rate:
+                #     # We try at highest rate possible
+                #     rate = setSizeToInt(LINK_BANDWIDTH)
+                #
+                # else:
+                #     # Limit it to LINK_BANDWIDTH
+                #     rate = min(setSizeToInt(rate), LINK_BANDWIDTH)
+                rate = LINK_BANDWIDTH
 
                 # Express it in bytes and bytes/s
                 totalSize = setSizeToInt(size)/8
@@ -404,7 +406,7 @@ def _sendFlow(notify=False, **flow):
             log.error("Controller cound not be informed about startingFlow event")
 
     # Sleep a bit before starting the flow
-    if SLEEP_BEFORE_FLOW_S:
+    if SLEEP_BEFORE_FLOW_S > 0:
         time.sleep(max(0, SLEEP_BEFORE_FLOW_S - (time.time() - now)))
 
     # If flow is UDP
