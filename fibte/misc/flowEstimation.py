@@ -83,7 +83,7 @@ class EstimateDemands(object):
         """Add new flow to the estimation matrix"""
         src = flow["src"]
         dst = flow["dst"]
-        maxSize = flow["rate"]/LINK_BANDWIDTH
+        maxSize = flow.get('rate', LINK_BANDWIDTH)/LINK_BANDWIDTH
 
         # Add flow at senders dict
         if not src in self.senders:
