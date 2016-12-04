@@ -1,5 +1,8 @@
 import os
 import numpy as np
+import time
+import matplotlib as mpl
+mpl.use('Agg')
 import matplotlib.pyplot as plt
 import six
 from matplotlib import colors
@@ -9,7 +12,7 @@ from fibte.monitoring import algo_styles
 color_list = list(six.iteritems(colors.cnames))
 
 class DelaysComparator(object):
-    def __init__(self, algo_list=[], parent_folder='', to_plot='all'):
+    def __init__(self, algo_list=[], parent_folder='', to_plot='all', plot_name=''):
         # What to plot?
         self.to_plot = to_plot
 
@@ -28,6 +31,7 @@ class DelaysComparator(object):
         # Load them
         self.algo_to_delays = self.load_measurements()
         self.color_index = 0
+        self.plot_name = plot_name
 
     def extractAlgoNameFromFilename(self, filename):
         if 'ecmp' in filename.lower():
@@ -127,7 +131,7 @@ class DelaysComparator(object):
             else:
                 ftype = 'mice'
 
-            fig = plt.figure(figsize=(80, 20))
+            fig = plt.figure()
             #fig.suptitle("CDF of flow completion times", fontsize=20)
             plt.xlabel("Completion time (s) [{0}s]".format(self.to_plot), fontsize=16)
             plt.ylabel("Percentage of flows", fontsize=16)
@@ -252,7 +256,7 @@ class DelaysComparator(object):
                 ax.grid(True)
 
         elif self.to_plot == 'together':
-            fig = plt.figure(figsize=(80, 20))
+            fig = plt.figure()
             to_plot = 'mices and elephants'
             #fig.suptitle("CDF of flow completion times", fontsize=20)
             plt.xlabel("Completion time (s) [{0}]".format(to_plot), fontsize=16)
@@ -304,11 +308,12 @@ class DelaysComparator(object):
             # Set grid on
             plt.grid(True)
 
-        try:
-            plt.show()
-        except:
-            print("Exception occurred when trying to plot! SAVING INSTEAD")
-            plt.savefig('plot.png')
+        plt.tight_layout()
+        plt.show()
+        plot_filename_png = os.path.join(self.parent_folder, '{0}.png'.format(self.plot_name))
+        plot_filename_pdf = os.path.join(self.parent_folder, '{0}.pdf'.format(self.plot_name))
+        plt.savefig(plot_filename_png)
+        plt.savefig(plot_filename_pdf)
 
     def plot_delay_distribution(self, algorithm):
         delays = self.algo_to_delays[algorithm]
@@ -324,10 +329,13 @@ if __name__ == "__main__":
     parser.add_argument('--algo_list', nargs='+', help='List of measurement files to compare', type=str, required=True)
     parser.add_argument('--parent_folder', help='Folder in which the experiment folders reside in', type=str, default='./results/delay/')
     parser.add_argument('--to_plot', choices=['all', 'together', 'mice', 'elephant'], help="What to plot?", required=True)
-
+    parser.add_argument('--plot_name', help="Name of the final plot", type=str, default='')
     # Parse arguments
     args = parser.parse_args()
 
     # Start object and load measurement files
-    ac = DelaysComparator(algo_list=args.algo_list, parent_folder=args.parent_folder, to_plot=args.to_plot)
+    ac = DelaysComparator(algo_list=args.algo_list,
+                          parent_folder=args.parent_folder,
+                          to_plot=args.to_plot,
+                          plot_name=args.plot_name)
     ac.plot_delay_distribution_comparison()
