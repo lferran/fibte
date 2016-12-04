@@ -174,7 +174,7 @@ def setupHashSeeds(topo):
     for rid in topo.routers():
         hashSeedConfig.setSeed(rid)
 
-def launch_network(k=4, bw=10, ip_alias=True):
+def launch_network(k=4, bw=10, ip_alias=True, fair_queues=False, cli=False):
     signal.signal(signal.SIGTERM, signal_term_handler)
 
     # Cleanup the network
@@ -193,9 +193,12 @@ def launch_network(k=4, bw=10, ip_alias=True):
     topo = FatTree(k=k, sflow=False, ovs_switches=False)
 
     # Interfaces
-    #intf = custom(DCTCIntf, bw=bw)
-    intf = custom(PrioFifoIntf, bw=bw)
-    #intf = custom(TCIntf, bw=bw)
+    if fair_queues:
+        print("*** Using FairQueues at the network interfaces")
+        intf = custom(DCTCIntf, bw=bw)
+    else:
+        print("*** Using normal pFIFO queues at the network interfaces")
+        intf = custom(PrioFifoIntf, bw=bw)
 
     # Network
     net = IPNet(topo=topo, debug=_lib.DEBUG_FLAG, intf=intf)
@@ -215,16 +218,17 @@ def launch_network(k=4, bw=10, ip_alias=True):
     if ip_alias:
         setupSecondaryIps(net)
 
-    print("*** Looping forever...")
-    while True:
-        try:
-            time.sleep(2)
-        except KeyboardInterrupt:
-            print("*** KeyboardInterrupt catched! Shutting down")
-            break
-
-    # Start the Fibbing CLI
-    #FibbingCLI(net)
+    if cli:
+        # Start the Fibbing CLI
+        FibbingCLI(net)
+    else:
+        print("*** Looping forever. Press CTRL+C to quit")
+        while True:
+            try:
+                time.sleep(2)
+            except KeyboardInterrupt:
+                print("*** KeyboardInterrupt catched! Shutting down")
+                break
 
     net.stop()
 
@@ -242,15 +246,6 @@ def launch_controller():
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     group = parser.add_mutually_exclusive_group()
-    group.add_argument('-c', '--controller',
-                       help='Start the controller',
-                       action='store_true',
-                       default=False)
-
-    group.add_argument('-n', '--net',
-                       help='Start the Mininet topology',
-                       action='store_true',
-                       default=True)
 
     parser.add_argument('-d', '--debug',
                         help='Set log levels to debug',
@@ -263,6 +258,12 @@ if __name__ == '__main__':
     parser.add_argument('--ip_alias', help='Configure ip alias if argument is present',
                         action="store_true", default=True)
 
+    parser.add_argument('--fair_queues', help='Will trigger network creation with the Fair Queues',
+                        action="store_true", default=False)
+
+    parser.add_argument('--cli', help='Starts the FibbingCLI',
+                        action="store_true", default=False)
+
     args = parser.parse_args()
     if args.debug:
         _lib.DEBUG_FLAG = True
@@ -272,8 +273,6 @@ if __name__ == '__main__':
         log.setLevel(logging.DEBUG)
         lg.setLogLevel('debug')
 
-    if args.controller:
-        launch_controller()
 
-    elif args.net:
-        launch_network(k=args.k, ip_alias=args.ip_alias)
+    launch_network(k=args.k, ip_alias=args.ip_alias,
+                   fair_queues=args.fair_queues, cli=args.cli)
