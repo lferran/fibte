@@ -205,7 +205,7 @@ class LBController(object):
         # UDS client used to instruct host to start traceroute path discovery
         self.traceroute_client = UnixClient(os.path.join(tmp_files, "/tmp/tracerouteServer_{0}"))
 
-        # Start thread that listends for results
+        # Start thread that listens for results
         thread = threading.Thread(target=self.traceroute_listener, args=())
         thread.setDaemon(True)
         thread.start()
@@ -280,7 +280,7 @@ class LBController(object):
 
                 if not self.isTracerouteWaitingForFlow(flow):
                     # Omit the data
-                    log.warning("discarded data!")
+                    log.warning("Discarded data: we were not waiting for this flow")
                     continue
 
                 src_n = self.topology.getHostName(flow['src'])
@@ -316,13 +316,12 @@ class LBController(object):
                     if not self.isOngoingFlow(flow):
                         # Add flow to path
                         self.addFlowToPath(flow, path)
-
                     else:
                         # Update its path
                         self.updateFlowPath(flow, path)
                 else:
                     # Log a bit
-                    log.warning("Path couldn't be found yet for Flow({0}:({1}) -> {2}:({3})). Traceroute again!".format(src_n, sport, dst_n, dport))
+                    log.error("Path couldn't be found yet for Flow({0}:({1}) -> {2}:({3})). Traceroute again!".format(src_n, sport, dst_n, dport))
 
                     # Couldn't find route for flow yet...
                     self.tracerouteFlow(flow)

@@ -108,7 +108,7 @@ def sendFlowTCP(dst="10.0.32.3", sport=5000, dport=5001, size=None, rate=None, d
         # else:
         #     # Limit it to LINK_BANDWIDTH
         #     rate = min(setSizeToInt(rate), LINK_BANDWIDTH
-        rate = LINK_BANDWIDTH
+        rate = setSizeToInt(LINK_BANDWIDTH)
 
         # Express it in bytes and bytes/s
         totalSize = setSizeToInt(size)/8
@@ -225,7 +225,7 @@ def sendMiceThroughOpenSocket(s, queue, sending, completionTimeFile=None):
                 # else:
                 #     # Limit it to LINK_BANDWIDTH
                 #     rate = min(setSizeToInt(rate), LINK_BANDWIDTH)
-                rate = LINK_BANDWIDTH
+                rate = setSizeToInt(LINK_BANDWIDTH)
 
                 # Express it in bytes and bytes/s
                 totalSize = setSizeToInt(size)/8
@@ -477,7 +477,7 @@ def writeStartingTime(flow, filename=None, prefix=None):
     if flow['proto'].lower() == 'udp':
         duration = flow.get('duration')
     else:
-        duration = flow.get('size')/float(flow.get('rate'))
+        duration = flow.get('size')/float(LINK_BANDWIDTH)
 
     # Save flow starting time
     with open(file_name, "w") as f:
