@@ -184,14 +184,12 @@ class FlowServer(object):
         # Run function
         route = traceroute_fun(hops=hops, **flow)
 
-        try_again = 10
+        try_again = 20
         while not route and try_again > 0:
+            time.sleep(0.010)
             # Try it again
             route = traceroute_fun(hops=hops, **flow)
             try_again -= 1
-
-        # How many trials needed?
-        n_trials = 10 - try_again
 
         # Add found route
         route_info['route'] = route
@@ -614,7 +612,7 @@ class FlowServer(object):
                     if receivelist:
                         # Schedule times at which we need to start TCP servers
                         log.debug("{0}: Receive_list arrived".format(self.name))
-                        self.scheduleTCPServers(receivelist, buffer_time=2)
+                        self.scheduleTCPServers(receivelist, buffer_time=3)
 
                 elif event['type'] == 'startReceiver':
                     port = event['data']
