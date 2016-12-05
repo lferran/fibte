@@ -179,9 +179,6 @@ class DelaysComparator(object):
                 color, linestyle, linewidth, _ = self.get_algo_style(algo)
                 plt.plot(bins[:-1], cumulative, c=color, linestyle=linestyle, linewidth=linewidth, label=label)
 
-            # Write legend and plot
-            plt.legend(loc='best', fancybox=True, framealpha=0.5)
-
             # Set grid on
             plt.grid(True)
             plt.show()
@@ -256,9 +253,6 @@ class DelaysComparator(object):
                         color, linestyle, linewidth, _ = self.get_algo_style(label, index)
                     ax.plot(bins[:-1], cumulative, c=color, linestyle=linestyle, linewidth=linewidth, label=label)
 
-                # Write legend and plot
-                ax.legend(loc='best', fancybox=True, framealpha=0.5)
-
                 # Set grid on
                 ax.grid(True)
 
@@ -314,11 +308,11 @@ class DelaysComparator(object):
                 color, linestyle, linewidth, _ = self.get_algo_style(algo)
                 plt.plot(bins[:-1], cumulative, c=color, linestyle=linestyle, linewidth=linewidth, label=label)
 
-            # Write legend and plot
-            plt.legend(loc='best', fancybox=True, framealpha=0.5)
-
             # Set grid on
             plt.grid(True)
+
+        # Write legend and plot
+        plt.legend(loc='best', fancybox=True, ncol=1, framealpha=0.5)
 
         #plt.tight_layout()
         plt.show()
