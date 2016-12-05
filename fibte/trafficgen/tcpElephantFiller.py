@@ -104,7 +104,7 @@ class tcpElephantFiller(udpTrafficGeneratorBase):
             all_elep_fws_copy[fid]['remaining'] = max(0, remaining_data - (old_rate * self.timeStep))
 
             # Update new rate
-            all_elep_fws_copy[fid]['rate'] = new_rate
+            all_elep_fws_copy[fid]['rate'] = new_rate * 0.9
 
             # Update new estimated duration
             estimated_duration = remaining_data/float(new_rate)
@@ -147,6 +147,7 @@ class tcpElephantFiller(udpTrafficGeneratorBase):
                     min_duration = self.get_flow_duration(flow_type='e')
                     max_rate = LINK_BANDWIDTH
                     data_size = min_duration * max_rate
+                    max_rate *= 0.9
                     # Random start time
                     new_starttime = random.uniform(5, 14.9)
                     # Get a new destination
@@ -179,6 +180,7 @@ class tcpElephantFiller(udpTrafficGeneratorBase):
                     min_duration = self.get_flow_duration(flow_type='e')
                     max_rate = LINK_BANDWIDTH
                     data_size = min_duration * max_rate
+                    max_rate *= 0.9
 
                     # Previous endtime
                     previous_endtime = tf.get('estimated_endtime')
