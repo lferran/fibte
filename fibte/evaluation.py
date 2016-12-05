@@ -191,6 +191,7 @@ class Utils(object):
         self.results_dir = os.path.join(self.monitoring_dir, 'results')
         self.throughput_dir = os.path.join(self.results_dir, 'throughput')
         self.delay_dir = os.path.join(self.results_dir, 'delay')
+        self.root_dir = os.path.join('/', 'root')
 
     def file_exists(self, path_to_file):
         return os.path.isfile(path_to_file)
@@ -291,10 +292,11 @@ class ElephantFlowsTest(Test):
     def load_tests(self):
         # Define here your simple test
         tests = []
-        n_elephants = [16, 32, 64]
+        n_elephants = [16, 32]
         mice_avg = 0.0
-        duration = 200
-        fair_queues = False
+        duration = 100
+        fair_queues = [True, False]
+
         patterns = [
             ('stride', {'i': 2}),
             ('stride', {'i': 4}),
@@ -303,6 +305,7 @@ class ElephantFlowsTest(Test):
             ('staggered', {'sameEdge': 0.2, 'samePod': 0.3}),
             ('staggered', {'sameEdge': 0.2, 'samePod': 0.5}),
             ]
+
         algos = [
             ('ecmp', None),
             ('elephant-dag-shifter', None),
@@ -311,15 +314,17 @@ class ElephantFlowsTest(Test):
 
         # Iterate traffic pattern
         for (pattern, pargs) in patterns:
-            # Iterate number of elephants
             for n_ele in n_elephants:
-                # Iterate algorithms
                 for (algo, aargs) in algos:
-                    d = {'fair_queues': fair_queues, 'pattern': pattern, 'pattern_args': pargs,
-                         'n_elephants': n_ele, 'mice_avg': mice_avg,
-                         'duration': duration}
-                    d.update({'algorithm': algo, 'algorithm_args': aargs})
-                    tests.append(d)
+                    for fq in fair_queues:
+                        d = {'fair_queues': fq,
+                             'pattern': pattern,
+                             'pattern_args': pargs,
+                             'n_elephants': n_ele,
+                             'mice_avg': mice_avg,
+                             'duration': duration}
+                        d.update({'algorithm': algo, 'algorithm_args': aargs})
+                        tests.append(d)
         return tests
 
 class MiceFlowsTest(Test):
@@ -332,7 +337,8 @@ class MiceFlowsTest(Test):
         tests = []
         n_elephants = [16]
         mice_avg = 4
-        duration = 200
+        duration = 100
+        fair_queues = [True, False]
 
         patterns = [
             ('stride', {'i': 2}),
@@ -349,30 +355,17 @@ class MiceFlowsTest(Test):
 
         # Iterate traffic pattern
         for (pattern, pargs) in patterns:
-            # Iterate number of elephants
             for n_ele in n_elephants:
-
-                # Add first one sample with ECMP and fair queues
-                d = {'fair_queues': True,
-                     'pattern': pattern,
-                     'pattern_args': pargs,
-                     'n_elephants': n_ele,
-                     'mice_avg': mice_avg,
-                     'duration': duration}
-                d.update({'algorithm': 'ecmp', 'algorithm_args': None})
-                tests.append(d)
-
-                # Iterate algorithms
                 for algo, aargs in algos:
-                    d = {'fair_queues': False,
-                         'pattern': pattern,
-                         'pattern_args': pargs,
-                         'n_elephants': n_ele,
-                         'mice_avg': mice_avg,
-                         'duration': duration}
-                    d.update({'algorithm': algo, 'algorithm_args': aargs})
-                    tests.append(d)
-
+                    for fq in fair_queues:
+                        d = {'fair_queues': fq,
+                             'pattern': pattern,
+                             'pattern_args': pargs,
+                             'n_elephants': n_ele,
+                             'mice_avg': mice_avg,
+                             'duration': duration}
+                        d.update({'algorithm': algo, 'algorithm_args': aargs})
+                        tests.append(d)
         return tests
 
 class Evaluation(object):
@@ -386,11 +379,10 @@ class Evaluation(object):
 
         # Define here the tests we want to run
         self.tests = [
-            MiceFlowsTest(),
+        #    MiceFlowsTest(),
             ElephantFlowsTest(),
             ]
-
-        self.results_dir = self.utils.join(self.utils.fibte_dir, 'evaluation_results')
+        self.results_dir = self.utils.join(self.utils.root_dir, 'evaluation_results')
         self.serverSocket = UnixServer("/tmp/evaluationServer")
         self.ownClient = UnixClient("/tmp/evaluationServer")
         self.ownStopTrafficTimer = None
@@ -480,26 +472,29 @@ class Evaluation(object):
         # Return it
         return sampledir
 
-    def createAlgoFolder(self, sample, patterndir, fair_queues):
+    def createAlgoFolder(self, sample, patterndir):
         """Given the traffic pattern directory, creates a specific
         folder for the algorithm specified in the sample
         """
         # Parse parameters
         algo = sample.get('algorithm')
         aargs = sample.get('algorithm_args')
+        fair_queues = sample.get('fair_queues')
 
         # Create folder for algorithm
+        algoname = algo
         if algo == 'elephant-dag-shifter':
             if aargs:
-                algoname = "{0}_{1}".format(algo, 'Sampled')
+                algoname += "_{0}".format('sampled')
             else:
-                algoname = "{0}_{1}".format(algo, 'Best')
+                algoname += "_{0}".format('best')
 
-        elif algo == 'ecmp' and fair_queues:
-            algoname = 'ecmpFairQueues'
-
+        # Add queue type
+        if fair_queues:
+            queue = 'fairQueues'
         else:
-            algoname = '{0}'.format(algo)
+            queue = 'pFifo'
+        algoname = algoname + "_{0}".format(queue)
 
         # Create folder
         algodir = os.path.join(patterndir, algoname)
@@ -570,7 +565,7 @@ class Evaluation(object):
                     patterndir = self.createPatternFolder(sample, delaydir)
 
                     # Create dif for this algorithm
-                    algodir = self.createAlgoFolder(sample, patterndir, fair_queues)
+                    algodir = self.createAlgoFolder(sample, patterndir)
 
                     print("*** Starting sample "+"*"*60)
 
