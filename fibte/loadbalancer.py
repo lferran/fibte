@@ -535,10 +535,10 @@ class LBController(object):
 
     def _waitOSPFPropagation(self):
         # Wait for fibbing to apply the dag and the new requirements to propagate
-        WAIT_PROPAGATION_TIME_MS = 250
+        WAIT_PROPAGATION_TIME_MS = 150
         time.sleep(WAIT_PROPAGATION_TIME_MS / 1000.0)
 
-    @time_func
+    #@time_func
     def saveCurrentDag(self, prefix, dag, fib=True):
         """"""
         if ipalias.is_secondary_ip_prefix(prefix):
@@ -553,7 +553,7 @@ class LBController(object):
             # Wait a bit for OSPF propagation
             self._waitOSPFPropagation()
 
-    @time_func
+    #@time_func
     def saveCurrentDags_from(self, dag_requirements, fib=True):
         # Update current structures
         for (dst, dag) in dag_requirements.iteritems():
@@ -687,8 +687,9 @@ class LBController(object):
         Sets the load balancer to its initial state
         :return:
         """
-        self.stopLoadBalancerTimer.cancel()
-        self.evaluationClient.send('stopped')
+        if self.stopLoadBalancerTimer and self.stopLoadBalancerTimer.is_alive():
+            self.stopLoadBalancerTimer.cancel()
+            self.evaluationClient.send('stopped')
 
         # Set all dags to original ospf dag
         self.current_elephant_dags = copy.deepcopy(self.initial_elep_dags)
@@ -897,7 +898,7 @@ class LBController(object):
         sport = flow['sport']
         dport = flow['dport']
         proto = flow['proto']
-        log.debug("Flow STARTED: {5}Flow({0}:({1}) -> {2}:({3}) | Demand: {4})".format(src, sport, dst, dport, rate, proto))
+        log.debug("Flow STARTED: {5}Flow[{0}:({1}) -> {2}:({3})] | Demand: {4})".format(src, sport, dst, dport, rate, proto))
 
     def deallocateFlow(self, flow):
         """
@@ -923,7 +924,7 @@ class LBController(object):
         dport = flow['dport']
         rate = self.base.setSizeToStr(rate * LINK_BANDWIDTH)
         proto = flow['proto']
-        log.debug("Flow FINISHED: {5}Flow({0}:({1}) -> {2}:({3}) | #{4})".format(src, sport, dst, dport, rate, proto))
+        log.debug("Flow FINISHED: {5}Flow[{0}:({1}) -> {2}:({3})] | #{4})".format(src, sport, dst, dport, rate, proto))
 
         if not self.flowDemands.currentFlows:
             log.info("No more flows ongoing! Starting timer to shut LB down in 10 seconds")
@@ -1056,11 +1057,11 @@ class LBController(object):
     def waitForTraceroutes(self, ongoing_flows):
         """Waits for traceroutes to have finished"""
         found_all_paths = all([True if self.isFlowPathUpdated(f) else False for f in ongoing_flows])
-        i = 0
-        while not found_all_paths:
+        start_time = time.time()
+        while not found_all_paths and time.time() - start_time < 2:
             found_all_paths = all([True if self.isFlowPathUpdated(f) else False for f in ongoing_flows])
-            i += 1
-        #log.debug("{0} iterations needed".format(i))
+        if not found_all_paths:
+            log.error("Not all traceroutes could be found!")
 
     def run(self):
         # Receive events and handle them
@@ -1083,7 +1084,7 @@ class LBController(object):
                 else:
                     try:
                         # Read from TCP server's queue
-                        event = json.loads(self.q_server.get(timeout=0.01))
+                        event = json.loads(self.q_server.get(timeout=0.2))
                     except Queue.Empty:
                         continue
 
@@ -1141,7 +1142,6 @@ class ECMPController(LBController):
 
             # Remove flow from path
             path = self.delFlowFromPath(flow)
-
 
 class MiceDAGShifter(LBController):
     def __init__(self, *args, **kwargs):
@@ -1281,6 +1281,66 @@ class ElephantDAGShifter(LBController):
         return "elephant-dag-shifter_k_{3}_cap_{0}_cong_{1}_sample_{2}".format(self.capacity_threshold, self.congProb_threshold, self.sample, self.k)
 
     @time_func
+    def shiftSourcePodDag(self, src_pod, dst_px, flow=None):
+        # Get current DAG
+        cdag = self.getCurrentDag(dst_px)
+
+        # Get the flows originating at same pod towards same destination
+        dst_ongoing_flowkeys = self.getOngoingFlowKeysToDst(dst=dst_px, from_pod=src_pod)
+
+        if flow:
+            dst_name = self.topology.getHostName(flow['dst'])
+            msg = "{0} more flows from pod{2} are currently ongoing towards {1}"
+            log.info(msg.format(len(dst_ongoing_flowkeys), dst_name, src_pod))
+
+        else:
+            if dst_ongoing_flowkeys:
+                msg = "{0} flows ongoing from pod{1} towards {2}"
+                log.info(msg.format(len(dst_ongoing_flowkeys), src_pod, dst_px))
+
+        dst_ongoing_flows = None
+        if flow:
+            # Get dag with spare capacities
+            idag = self.getInitialDagWithoutFlows(dst_px=dst_px, ongoing_flow_keys=dst_ongoing_flowkeys)
+
+            # Convert them to flows and add current flow to computations too
+            dst_ongoing_flows = [self.keyToFlow(fkey) for fkey in dst_ongoing_flowkeys]
+            dst_ongoing_flows.append(flow)
+
+        else:
+            if dst_ongoing_flowkeys:
+                # Get dag with spare capacities
+                idag = self.getInitialDagWithoutFlows(dst_px=dst_px, ongoing_flow_keys=dst_ongoing_flowkeys)
+
+                # Convert them to flows and add current flow to computations too
+                dst_ongoing_flows = [self.keyToFlow(fkey) for fkey in dst_ongoing_flowkeys]
+
+            else:
+                log.info("Not shifting DAG, since no other flows are running")
+
+        if dst_ongoing_flows:
+            # Choose new DAG minimizing probability
+            if self.sample:
+                log.info("Sampling on DAG space...")
+                (best_dag, best_assessment) = self.getBestOfDagSamples(src_pod, idag, dst_ongoing_flows)
+
+            else:
+                log.info("Iterating ALL DAG space...")
+                (best_dag, best_assessment) = self.findBestSourcePodDag(src_pod, idag, dst_ongoing_flows)
+
+            # Extract cost and karma expected values
+            dagcost = best_assessment['cost']['mean']
+            dagkarma = best_assessment['karma']['mean']
+
+            # Log a bit
+            log.info("Best DAG was found with a cost: {0} and karma: {1}".format(dagcost, dagkarma))
+
+            # Force it with Fibbing
+            self.saveCurrentDag(dst_px, best_dag)
+
+            # Find new paths for flows
+            self.findNewPathsForFlows(dst_ongoing_flows)
+
     def allocateFlow(self, flow):
         super(ElephantDAGShifter, self).allocateFlow(flow)
 
@@ -1293,56 +1353,10 @@ class ElephantDAGShifter(LBController):
         # Get matching destination
         dst_px = self.getMatchingPrefix(flow['dst'])
 
-        # Get current DAG
-        cdag = self.getCurrentDag(dst_px)
-
         # Get source pod
         src_pod = self.getSourcePodFromFlow(flow)
 
-        # Get the flows originating at same pod towards same destination
-        dst_ongoing_flowkeys = self.getOngoingFlowKeysToDst(dst=dst_px, from_pod=src_pod)
-
-        dst_name = self.topology.getHostName(flow['dst'])
-        log.info("{0} more flows from pod{2} are currently ongoing towards {1}".format(len(dst_ongoing_flowkeys), dst_name, src_pod))
-
-        # Get dag with spare capacities
-        idag = self.getInitialDagWithoutFlows(dst_px=dst_px, ongoing_flow_keys=dst_ongoing_flowkeys)
-
-        # Convert them to flows and add current flow to computations too
-        dst_ongoing_flows = [self.keyToFlow(fkey) for fkey in dst_ongoing_flowkeys]
-        dst_ongoing_flows.append(flow)
-
-        # Choose new DAG minimizing probability
-        if self.sample:
-            log.info("Sampling on DAG space...")
-            (best_dag, best_assessment) = self.getBestOfDagSamples(src_pod, idag, dst_ongoing_flows)
-
-        else:
-            log.info("Iterating ALL DAG space...")
-            (best_dag, best_assessment) = self.findBestSourcePodDag(src_pod, idag, dst_ongoing_flows)
-
-        # Extract cost and karma expected values
-        dagcost = best_assessment['cost']['mean']
-        dagkarma = best_assessment['karma']['mean']
-
-        # Plot it
-        src_name = self.topology.getHostName(flow['src'])
-        dst_name = self.topology.getHostName(flow['dst'])
-        sport = flow['sport']
-        dport = flow['dport']
-        size = self.base.setSizeToStr(flow['size'])
-        img_name = './images/bestSampledDag{0}_{1}_{2}_{3}_{4}___C{5}___K{6}.png'.format(src_name, sport, dst_name, dport, size, dagcost, dagkarma)
-        #best_dag.plot(img_name)
-
-        # Log a bit
-        #log.info("Best DAG was found with a cost: {0} and karma: {1} (img: {2})".format(dagcost, dagkarma, img_name))
-        log.info("Best DAG was found with a cost: {0} and karma: {1}".format(dagcost, dagkarma))
-
-        # Force it with Fibbing
-        self.saveCurrentDag(dst_px, best_dag)
-
-        # Find new paths for flows
-        self.findNewPathsForFlows(dst_ongoing_flows)
+        self.shiftSourcePodDag(src_pod, dst_px, flow=flow)
 
     def deallocateFlow(self, flow):
         successful = super(ElephantDAGShifter, self).deallocateFlow(flow)
@@ -1359,6 +1373,19 @@ class ElephantDAGShifter(LBController):
 
             # Deallocate if from the network
             old_path = self.delFlowFromPath(flow)
+
+        shiftOnDeallocate = True
+        if shiftOnDeallocate:
+            # Get matching destination
+            dst_px = self.getMatchingPrefix(flow['dst'])
+            dst_name = self.topology.getHostName(flow['dst'])
+
+            # Get source pod
+            src_pod = self.getSourcePodFromFlow(flow)
+            log.warning("Shifting {0}-DAG from pod{1} on deallocating flow".format(dst_name, src_pod))
+
+            # Shift source pod DAG
+            self.shiftSourcePodDag(src_pod, dst_px)
 
     def findBestSourcePodDag(self, src_pod, complete_dag, ongoing_flows):
         """"""
@@ -1584,32 +1611,40 @@ class ElephantDAGShifter(LBController):
         totalKarma = 0
         totalCost = 0
 
+        # Accumulate visited links
+        visited_links = set()
+
         # Compute overload and karma on the flow paths
         for fpath in path_combination:
 
             # Iterate links
             for (u, v) in self.get_links_from_path(fpath):
 
-                # Compute total load used by flows in these paths
-                totalLoad = complete_dag[u][v]['fixed_load'] + complete_dag[u][v]['current_dag_load']
+                # Visit links only once
+                if (u, v) not in visited_links:
+                    # Compute total load used by flows in these paths
+                    totalLoad = complete_dag[u][v]['fixed_load'] + complete_dag[u][v]['current_dag_load']
 
-                # Compute capacity threshold
-                capThreshold = LINK_BANDWIDTH * self.capacity_threshold
+                    # Compute capacity threshold
+                    capThreshold = LINK_BANDWIDTH * self.capacity_threshold
 
-                # Compute the spare capacity after the flows are allocated
-                spareCapacity = capThreshold - totalLoad
+                    # Compute the spare capacity after the flows are allocated
+                    spareCapacity = capThreshold - totalLoad
 
-                # Compute values
-                if spareCapacity >= 0:
-                    overLoad = 0.0
-                    underLoad = spareCapacity
+                    # Compute values
+                    if spareCapacity >= 0:
+                        overLoad = 0.0
+                        underLoad = spareCapacity
 
-                else:
-                    overLoad = abs(spareCapacity)
-                    underLoad = 0.0
+                    else:
+                        overLoad = abs(spareCapacity)
+                        underLoad = 0.0
 
-                totalCost += overLoad
-                totalKarma += underLoad
+                    totalCost += overLoad
+                    totalKarma += underLoad
+
+                    # Add new visited link
+                    visited_links.add((u, v))
 
         # Return both measures
         return (totalCost, totalKarma)
