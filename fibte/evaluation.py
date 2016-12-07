@@ -22,7 +22,7 @@ class FlowServers(object):
         subprocess.call("killall nc", shell=True)
 
     def stop(self):
-        subprocess.call("kill -9 $(ps aux | grep 'flowServer' | awk '{print $2}')", shell=True)
+        subprocess.call("sudo kill -9 $(ps aux | grep 'flowServer.py' | awk '{print $2}')", shell=True)
         self.stop_ncs()
 
     def running(self):
@@ -278,7 +278,7 @@ class Test(object):
         return self
 
     def next(self):
-        if self.index >= self.max_index:
+        if self.index > self.max_index:
             raise StopIteration
         else:
             self.index += 1
@@ -296,6 +296,7 @@ class ElephantFlowsTest(Test):
         mice_avg = 0.0
         duration = 100
         fair_queues = [True, False]
+        #fair_queues = [False]
 
         patterns = [
             ('stride', {'i': 2}),
@@ -310,7 +311,7 @@ class ElephantFlowsTest(Test):
             ('ecmp', None),
             ('elephant-dag-shifter', None),
             ('elephant-dag-shifter', '--sample'),
-            ]
+        ]
 
         # Iterate traffic pattern
         for (pattern, pargs) in patterns:
@@ -322,8 +323,9 @@ class ElephantFlowsTest(Test):
                              'pattern_args': pargs,
                              'n_elephants': n_ele,
                              'mice_avg': mice_avg,
-                             'duration': duration}
-                        d.update({'algorithm': algo, 'algorithm_args': aargs})
+                             'duration': duration,
+                             'algorithm': algo,
+                             'algorithm_args': aargs}
                         tests.append(d)
         return tests
 
@@ -335,7 +337,7 @@ class MiceFlowsTest(Test):
     def load_tests(self):
         # Define here your simple test
         tests = []
-        n_elephants = [16]
+        n_elephants = [16, 32]
         mice_avg = 4
         duration = 100
         fair_queues = [True, False]
@@ -363,8 +365,9 @@ class MiceFlowsTest(Test):
                              'pattern_args': pargs,
                              'n_elephants': n_ele,
                              'mice_avg': mice_avg,
-                             'duration': duration}
-                        d.update({'algorithm': algo, 'algorithm_args': aargs})
+                             'duration': duration,
+                             'algorithm': algo,
+                             'algorithm_args': aargs}
                         tests.append(d)
         return tests
 
@@ -379,7 +382,7 @@ class Evaluation(object):
 
         # Define here the tests we want to run
         self.tests = [
-        #    MiceFlowsTest(),
+            MiceFlowsTest(),
             ElephantFlowsTest(),
             ]
         self.results_dir = self.utils.join(self.utils.root_dir, 'evaluation_results')
@@ -503,7 +506,7 @@ class Evaluation(object):
         # Return it
         return algodir
 
-    def moveResults(self, algodir):
+    def moveResults(self, algodir, logfile=None):
         """Collects all completion times from the default results folder and moves it to the
         corresponding pattern/algo evaaluation results folder"""
 
@@ -513,6 +516,9 @@ class Evaluation(object):
 
         if self.utils.has_elephant_delays(self.utils.delay_dir):
             self.utils.mv(os.path.join(self.utils.delay_dir, 'elep_*'), algodir)
+
+        if logfile:
+            self.utils.mv(logfile, algodir)
 
     def plotTest(self, test):
 
@@ -533,7 +539,7 @@ class Evaluation(object):
                 self.plot.plot(parent_folder, algo_list, to_plot, plot_name)
 
                 if 'mice' in test:
-                    algo_list = ['ecmp', 'ecmpFairQueues']
+                    algo_list = ['ecmp_pFifo', 'ecmp_fairQueues']
                     parent_folder = patterndir
                     plot_name = "{0}__ecmpFIFO_vs_ecmpFairQueues".format(pattern)
                     self.plot.plot(parent_folder, algo_list, to_plot, plot_name)
@@ -547,54 +553,81 @@ class Evaluation(object):
                 plot_name = "{0}_allCompared".format(pattern)
                 self.plot.plot(parent_folder, algo_list, to_plot, plot_name)
 
-    def run(self):
-        # Run all tests
+    def emptyDelayDir(self):
+        subprocess.call("rm {0}".format(os.path.join(self.utils.delay_dir, 'mice_*')), shell=True)
+        subprocess.call("rm {0}".format(os.path.join(self.utils.delay_dir, 'elep_*')), shell=True)
+
+    def run(self, from_index=None):
+        # Check if start index was given
+        start_index = 0 if not from_index else from_index
+        current_index = 0
+
+        # Get all tests with its samples
+        tests = {t: list(t) for t in self.tests}
+
+        # How many tests?
+        n_tests = len(tests.keys())
+
+        # Count total samples
+        n_samples = sum([len(s) for s in tests.itervalues()])
+
         try:
-            for test in self.tests:
-                print("*** Starting test: {0}".format(test.name))
+            for testindex, test in enumerate(tests.iterkeys()):
+                print("*** Starting test {0} {1}/{2}".format(test.name, testindex, n_tests)+"*"*60 )
+
                 # Create folder for results
                 delaydir = test.mkdir_test(parent_dir=self.results_dir)
 
-                for sample in test:
+                # Get test samples
+                samples = tests[test]
+                for sample in samples:
+                    if current_index >= start_index:
+                        # Restart network and flowServers
+                        fair_queues = sample.get('fair_queues')
+                        self.restartEnvironment(fair_queues)
 
-                    # Restart network and flowServers
-                    fair_queues = sample.get('fair_queues', False)
-                    self.restartEnvironment(fair_queues)
+                        # Create dir for this pattern
+                        patterndir = self.createPatternFolder(sample, delaydir)
 
-                    # Create dir for this pattern
-                    patterndir = self.createPatternFolder(sample, delaydir)
+                        # Create dif for this algorithm
+                        algodir = self.createAlgoFolder(sample, patterndir)
 
-                    # Create dif for this algorithm
-                    algodir = self.createAlgoFolder(sample, patterndir)
+                        print("*** Starting sample ({1}/{2}): {0}".format(sample, current_index, n_samples))
 
-                    print("*** Starting sample "+"*"*60)
+                        # Start LB and Traffic
+                        self.startLoadBalancer(sample)
+                        self.startTraffic(sample)
 
-                    # Start LB and Traffic
-                    self.startLoadBalancer(sample)
-                    self.startTraffic(sample)
+                        # Wait for some time
+                        self.waitForTrafficToFinish()
 
-                    # Wait for some time
-                    self.waitForTrafficToFinish()
+                        # Stop traffic
+                        self.killall()
 
-                    # Stop traffic
-                    self.killall()
-
-                    # Move results to specified folder
-                    self.moveResults(algodir)
+                        # Move results to specified folder
+                        self.moveResults(algodir)
+                    else:
+                        print("*** Skipping sample ({1}/{2}): {0}".format(sample, current_index, n_samples))
+                    # Increment sample index
+                    current_index += 1
 
         except KeyboardInterrupt:
-            print("*** CTRL-C catched!")
+            print("*** CTRL-C catched! at test: {0} sample index: {1}/{2}".format(test.name, current_index, n_samples)+"*"*60)
+            print("*** Sample args: {0}".format(sample))
+
         finally:
-            print("*** Finishing evaulation")
+            print("*** Finishing evaulation "+"*"*60 )
             self.traffic.stop()
             self.loadBalancer.stop()
             self.stopEnvironment()
+            self.emptyDelayDir()
 
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--run', help='Run evaluations', action="store_true", default=False)
+    parser.add_argument('--from_index', help='Start at specific sample', type=int, default=None)
     parser.add_argument('--plot_test', help="Make plots of given test", type=str, default='')
 
     args = parser.parse_args()
@@ -602,12 +635,14 @@ if __name__ == '__main__':
     # Start Evaluation object
     ev = Evaluation()
 
+    #import ipdb; ipdb.set_trace()
+
     if args.run:
         # Kill all that's going on
         ev.killall()
 
         # Run evaluation tests
-        ev.run()
+        ev.run(from_index=args.from_index)
 
     elif args.plot_test:
         # make plots for the given test
