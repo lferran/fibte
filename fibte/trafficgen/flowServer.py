@@ -247,12 +247,12 @@ class FlowServer(object):
             self.elephant_tx_handlers.append(process)
 
             # Log a bit
-            size = self.base.setSizeToStr(flow.get('size'))
-            rate = self.base.setSizeToStr(flow.get('rate'))
-            duration = self._getFlowDuration(flow)
-            dst = self.namesToIps['ipToName'][flow['dst']]
-            proto = flow['proto']
-            log.debug("{0}: Starting {4} elephant -> {1} rate: {2} duration: {3}".format(self.name, dst, rate, duration, proto))
+            #size = self.base.setSizeToStr(flow.get('size'))
+            #rate = self.base.setSizeToStr(flow.get('rate'))
+            #duration = self._getFlowDuration(flow)
+            #dst = self.namesToIps['ipToName'][flow['dst']]
+            #proto = flow['proto']
+            #log.debug("{0}: Starting {4} elephant -> {1} rate: {2} duration: {3}".format(self.name, dst, rate, duration, proto))
         else:
             log.error("{0}: not an elephant flow! {1}".format(self.name, flow))
 
