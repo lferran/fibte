@@ -35,6 +35,7 @@ counterCollector_path = pkgutil.get_loader("fibte.monitoring.collectCounters").f
 getLoads_path = pkgutil.get_loader("fibte.monitoring.getLoads").filename
 
 HASH_SEED_CONFIG = os.path.dirname(__file__)+"/hash_seed.config"
+FIX_IPS_CONFIG = os.path.dirname(__file__)+"/fix_ips.config"
 
 import logging
 from fibte.logger import log
