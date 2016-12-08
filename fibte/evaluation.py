@@ -382,8 +382,8 @@ class Evaluation(object):
 
         # Define here the tests we want to run
         self.tests = [
-            MiceFlowsTest(),
-            ElephantFlowsTest(),
+            #MiceFlowsTest(),
+            #ElephantFlowsTest(),
             ]
         self.results_dir = self.utils.join(self.utils.root_dir, 'evaluation_results')
         self.serverSocket = UnixServer("/tmp/evaluationServer")
@@ -521,7 +521,6 @@ class Evaluation(object):
             self.utils.mv(logfile, algodir)
 
     def plotTest(self, test):
-
         if test not in listdir(self.results_dir):
             print("ERROR: {0} not in {1}".format(test, self.results_dir))
 
@@ -552,6 +551,8 @@ class Evaluation(object):
                 parent_folder = patterndir
                 plot_name = "{0}_allCompared".format(pattern)
                 self.plot.plot(parent_folder, algo_list, to_plot, plot_name)
+        else:
+            print("*** ERROR: elephant or mice should be in the name of the test")
 
     def emptyDelayDir(self):
         subprocess.call("rm {0}".format(os.path.join(self.utils.delay_dir, 'mice_*')), shell=True)
@@ -571,6 +572,7 @@ class Evaluation(object):
         # Count total samples
         n_samples = sum([len(s) for s in tests.itervalues()])
 
+        start_time = time.time()
         try:
             for testindex, test in enumerate(tests.iterkeys()):
                 print("*** Starting test {0} {1}/{2}".format(test.name, testindex, n_tests)+"*"*60 )
@@ -616,11 +618,11 @@ class Evaluation(object):
             print("*** Sample args: {0}".format(sample))
 
         finally:
-            print("*** Finishing evaulation "+"*"*60 )
             self.traffic.stop()
             self.loadBalancer.stop()
             self.stopEnvironment()
             self.emptyDelayDir()
+            print("*** Finishing evaulation after {0} minutes".format((time.time() - start_index) / 60.0) + "*" * 60)
 
 if __name__ == '__main__':
     import argparse
