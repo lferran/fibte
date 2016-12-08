@@ -178,8 +178,15 @@ class Plot(object):
         self.script = 'monitoring/makeDelays.py'
         pass
 
-    def plot(self, parent_folder, algo_list, to_plot, plot_name):
-        plt_cmd = "python {4} --parent_folder {0} --algo_list {1} --to_plot {2} --plot_name {3}"
+    def plot(self, parent_folder, algo_list, to_plot, plot_name, ratio=False, difference=False):
+        if not ratio and not difference:
+            plt_cmd = "python {4} --parent_folder {0} --algo_list {1} --to_plot {2} --plot_name {3}"
+        elif ratio:
+            plt_cmd = "python {4} --parent_folder {0} --algo_list {1} --to_plot {2} --plot_name {3} --ratio"
+        elif difference:
+            plt_cmd = "python {4} --parent_folder {0} --algo_list {1} --to_plot {2} --plot_name {3} --difference"
+        else:
+            raise ValueError("Ratio and Difference not allowed at the same time")
         plt_cmd = plt_cmd.format(parent_folder, ' '.join(algo_list), to_plot, plot_name, self.script)
         subprocess.call(plt_cmd, shell=True)
 
@@ -520,19 +527,26 @@ class Evaluation(object):
         if logfile:
             self.utils.mv(logfile, algodir)
 
-    def plotTest(self, test):
+    def plotTest(self, test, patterns=None, algos=None):
+#        import ipdb; ipdb.set_trace()
         if test not in listdir(self.results_dir):
             print("ERROR: {0} not in {1}".format(test, self.results_dir))
 
         testdir = self.utils.join(self.results_dir, test)
         testdir = self.utils.join(testdir, 'delay')
-        patterns = [d for d in listdir(testdir) if os.path.isdir(self.utils.join(testdir, d))]
+        if patterns:
+            pattern_list = [d for d in listdir(testdir) if os.path.isdir(self.utils.join(testdir, d)) and d in patterns]
+        else:
+            pattern_list = [d for d in listdir(testdir) if os.path.isdir(self.utils.join(testdir, d))]
         if 'mice' in test:
             to_plot = 'all'
             # Iterate patterns
-            for pattern in patterns:
+            for pattern in pattern_list:
                 patterndir = self.utils.join(testdir, pattern)
-                algo_list = [d for d in listdir(patterndir) if os.path.isdir(self.utils.join(patterndir, d))]
+                if algos:
+                    algo_list = [d for d in listdir(patterndir) if os.path.isdir(self.utils.join(patterndir, d)) and d in algos]
+                else:
+                    algo_list = [d for d in listdir(patterndir) if os.path.isdir(self.utils.join(patterndir, d))]
                 parent_folder = patterndir
                 plot_name = "{0}_allCompared".format(pattern)
                 self.plot.plot(parent_folder, algo_list, to_plot, plot_name)
@@ -542,15 +556,23 @@ class Evaluation(object):
                     parent_folder = patterndir
                     plot_name = "{0}__ecmpFIFO_vs_ecmpFairQueues".format(pattern)
                     self.plot.plot(parent_folder, algo_list, to_plot, plot_name)
+
         elif 'elephant' in test:
             to_plot = 'elephant'
             # Iterate patterns
-            for pattern in patterns:
+            for pattern in pattern_list:
                 patterndir = self.utils.join(testdir, pattern)
-                algo_list = [d for d in listdir(patterndir) if os.path.isdir(self.utils.join(patterndir, d))]
+                if algos:
+                    algo_list = [d for d in listdir(patterndir) if os.path.isdir(self.utils.join(patterndir, d)) and d in algos]
+                else:
+                    algo_list = [d for d in listdir(patterndir) if os.path.isdir(self.utils.join(patterndir, d))]
+
                 parent_folder = patterndir
                 plot_name = "{0}_allCompared".format(pattern)
-                self.plot.plot(parent_folder, algo_list, to_plot, plot_name)
+                self.plot.plot(parent_folder, algo_list, to_plot, plot_name,)
+                self.plot.plot(parent_folder, algo_list, to_plot, plot_name, ratio=True)
+                self.plot.plot(parent_folder, algo_list, to_plot, plot_name, difference=True)
+
         else:
             print("*** ERROR: elephant or mice should be in the name of the test")
 
@@ -631,6 +653,8 @@ if __name__ == '__main__':
     parser.add_argument('--run', help='Run evaluations', action="store_true", default=False)
     parser.add_argument('--from_index', help='Start at specific sample', type=int, default=None)
     parser.add_argument('--plot_test', help="Make plots of given test", type=str, default='')
+    parser.add_argument('--patterns', nargs='+', help="Specify patterns that you want to plot", type=str, default=None)
+    parser.add_argument('--algos', nargs='+', help="Specify algorithms that you want to plot", type=str, default=None)
 
     args = parser.parse_args()
 
@@ -648,7 +672,7 @@ if __name__ == '__main__':
 
     elif args.plot_test:
         # make plots for the given test
-        ev.plotTest(args.plot_test)
+        ev.plotTest(args.plot_test, patterns=args.patterns, algos=args.algos)
 
     else:
         print("Nothing to do!")

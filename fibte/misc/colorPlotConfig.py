@@ -1,0 +1,70 @@
+import random
+import os
+import pickle
+import subprocess
+
+from fibte import COLORS_CONFIG
+
+tableau20 = [(31, 119, 180), (174, 199, 232), (255, 127, 14), (255, 187, 120),
+             (44, 160, 44), (152, 223, 138), (214, 39, 40), (255, 152, 150),
+             (148, 103, 189), (197, 176, 213), (140, 86, 75), (196, 156, 148),
+             (227, 119, 194), (247, 182, 210), (127, 127, 127), (199, 199, 199),
+             (188, 189, 34), (219, 219, 141), (23, 190, 207), (158, 218, 229)]
+
+class ColorPlotConfig(object):
+    """Stores colors of things that are plotted by name
+    """
+    def __init__(self):
+        self.allColors = self._getAllColors()
+        self.loadColors()
+
+    def _getAllColors(self):
+        colorset = set()
+        for i in range(len(tableau20)):
+            r, g, b = tableau20[i]
+            colorset.add((r / 255., g / 255., b / 255.))
+        return colorset
+
+    def loadColors(self):
+        """Loads the stored hash seeds from the file"""
+        self.availableColors = set()
+        if os.path.isfile(COLORS_CONFIG):
+            with open(COLORS_CONFIG,"r") as f:
+                self.colors = pickle.load(f)
+        else:
+            self.colors = {}
+
+        # Update available colors
+        picked_colors = set(self.colors.values())
+        self.availableColors = self.allColors.difference(picked_colors)
+
+    def saveColors(self):
+        """Stores the hash seeds in the file"""
+        with open(COLORS_CONFIG+"_tmp", 'w') as f:
+            pickle.dump(self.colors, f)
+        subprocess.Popen(["mv", "{0}_tmp".format(COLORS_CONFIG), COLORS_CONFIG])
+
+    def getColor(self, name):
+        """Gets the current seed of the node defined by name"""
+        color = self.colors.get(name, None)
+        if color:
+            return color
+        else:
+            color = self.getAvailableColor()
+            self.setColor(name, color)
+            self.saveColors()
+            return color
+
+    def setColor(self, name, color):
+        """Checks whether the host is in the seeds database. If it isn't, we add it.
+        It does not rewrite the seed, but updates the database.
+        """
+        self.colors[name] = color
+        self.saveColors()
+
+    def getAvailableColor(self):
+        """"""
+        if self.availableColors:
+            return random.choice(list(self.availableColors))
+        else:
+            raise ValueError("No more available colors!")

@@ -4,20 +4,14 @@ import time
 import matplotlib as mpl
 mpl.use('Agg')
 import matplotlib.pyplot as plt
-import six
-from matplotlib import colors
+from fibte.misc.colorPlotConfig import ColorPlotConfig
 
-from fibte.monitoring import algo_styles
-
-color_list = list(six.iteritems(colors.cnames))
+LINEWIDTH = 2.5
 
 class DelaysComparator(object):
     def __init__(self, algo_list=[], parent_folder='', to_plot='all', plot_name=''):
         # What to plot?
         self.to_plot = to_plot
-
-        # Results folder
-        self.delay_dir = os.path.join(os.path.dirname(__file__), 'results/delay/')
 
         # Extra folder where algo folders reside under
         self.parent_folder = parent_folder
@@ -33,24 +27,8 @@ class DelaysComparator(object):
         self.color_index = 0
         self.plot_name = plot_name
 
-    def extractAlgoNameFromFilename(self, filename):
-        if 'ecmp' in filename.lower():
-            return 'ECMP'
-
-        elif 'elephant-dag-shifter' in filename.lower():
-            if 'True' in filename:
-                return 'Elephant-DAG-Shifter-Sample'
-            else:
-                return 'Elephant-DAG-Shifter-Best'
-
-        elif 'mice-dag-shifter' in filename.lower():
-            return 'Mice-DAG-Shifter-Best'
-
-        elif 'full-dag-shifter' in filename.lower():
-            if 'True' in filename:
-                return 'Full-DAG-Shifter-Sample'
-            else:
-                return 'Full-DAG-Shifter-Best'
+        # Get object for color config
+        self.colorConfig = ColorPlotConfig()
 
     def load_measurements(self):
         """
@@ -103,33 +81,15 @@ class DelaysComparator(object):
 
         return flows_to_delay
 
-    def get_algo_style(self, algo, index=None):
-        try:
-            color = algo_styles[algo]['color']
-            linestyle = algo_styles[algo]['linestyle']
-            linewidth = algo_styles[algo]['linewidth']
-            return color, linestyle, linewidth, None
-        except KeyError:
-            if index == None:
-                index = self.color_index
-                color = color_list[self.color_index][1]
-                linestyle = '-'
-                linewidth = 2
-                self.color_index += 1
-                return color, linestyle, linewidth, index
-            else:
-                color = color_list[index][1]
-                linestyle = '-'
-                linewidth = 2
-                return color, linestyle, linewidth, index
-
-    def plot_delay_distribution_comparison(self, ideal=True):
+    def plot_delay_distribution_comparison(self, ratio=False, difference=False):
         """"""
         if self.to_plot != 'all' and self.to_plot != 'together':
             if self.to_plot == 'elephant':
                 ftype = 'elep'
+                range = (10, 250)
             else:
                 ftype = 'mice'
+                range = (0, 60)
 
             fig = plt.figure()
             #fig.suptitle("CDF of flow completion times", fontsize=20)
@@ -137,36 +97,36 @@ class DelaysComparator(object):
             plt.ylabel("Percentage of flows", fontsize=16)
             plt.ylim([0, 1.05])
 
-            if ideal:
-                # Get algo that has the maximum number of flows
-                maxalgo = max([(a, len(self.algo_to_delays[a])) for a in self.algo_to_delays], key=lambda x: x[1])
-                (a, nf) = maxalgo
-                if nf > 0:
-                    algo = 'ideal'
-                    delays = self.algo_to_delays[a]
-                    expecteds = [vs['expected'] for f, vs in delays.iteritems() if vs['type'] == ftype]
 
-                    # Returns values corresponding to each bin and bins
-                    values, bins = np.histogram(expecteds, bins=10000)
+            # Get algo that has the maximum number of flows
+            maxalgo = max([(a, len(self.algo_to_delays[a])) for a in self.algo_to_delays], key=lambda x: x[1])
+            (a, nf) = maxalgo
+            if nf > 0:
+                delays = self.algo_to_delays[a]
+                expecteds = [vs['expected'] for f, vs in delays.iteritems() if vs['type'] == ftype]
 
-                    # Compute CDF
-                    cumulative = np.cumsum(values, dtype=float)
+                # Returns values corresponding to each bin and bins
+                range = (min(expecteds), range[1])
+                values, bins = np.histogram(expecteds, bins=10000, range=range)
 
-                    # Normalize wrt number of flows
-                    cumulative /= float(len(expecteds))
+                # Compute CDF
+                ideal_cumulative = np.cumsum(values, dtype=float)
 
+                # Normalize wrt number of flows
+                ideal_cumulative /= float(len(expecteds))
+
+            if not ratio and not difference:
                     # Plot it!
                     label = 'Ideal'
-                    color, linestyle, linewidth, _ = self.get_algo_style(label)
-
-                    plt.plot(bins[:-1], cumulative, c=color, linestyle=linestyle, linewidth=linewidth, label=label)
+                    color = self.colorConfig.getColor(label)
+                    plt.plot(bins[:-1], ideal_cumulative, c=color, linewidth=LINEWIDTH, label=label)
 
             for algo in self.algos:
                 delays = self.algo_to_delays[algo]
                 measured = [vs['measured'] for f, vs in delays.iteritems() if vs['type'] == ftype]
 
                 # Compute histogram
-                values, bins = np.histogram(measured, bins=10000)
+                values, bins = np.histogram(measured, bins=10000, range=range)
 
                 # Compute CDF of the histogram heights
                 cumulative = np.cumsum(values, dtype=float)
@@ -174,10 +134,17 @@ class DelaysComparator(object):
                 # Normalize wrt number of flows
                 cumulative /= float(len(measured))
 
+                if ratio:
+                    #import ipdb; ipdb.set_trace()
+                    cumulative = np.divide(cumulative, ideal_cumulative)
+
+                elif difference:
+                    cumulative = ideal_cumulative - cumulative
+
                 # Plot it!
                 label = algo
-                color, linestyle, linewidth, _ = self.get_algo_style(algo)
-                plt.plot(bins[:-1], cumulative, c=color, linestyle=linestyle, linewidth=linewidth, label=label)
+                color = self.colorConfig.getColor(algo)
+                plt.plot(bins[:-1], cumulative, c=color, linewidth=LINEWIDTH, label=label)
 
             # Set grid on
             plt.grid(True)
@@ -192,50 +159,48 @@ class DelaysComparator(object):
                 fftype = types[index]
                 if fftype == 'elephant':
                     ftype = 'elep'
+                    range = (10, 250)
                 else:
                     ftype = 'mice'
+                    range = (0, 60)
+
                 ax.set_xlabel("Completion time (s) [{0}s]".format(fftype), fontsize=16)
                 ax.set_ylabel("Percentage of flows", fontsize=16)
                 ax.set_ylim([0, 1.05])
-                if ideal:
-                    # Get algo that has the maximum number of flows
-                    maxalgo = max([(a, len(self.algo_to_delays[a])) for a in self.algo_to_delays], key=lambda x: x[1])
-                    (a, nf) = maxalgo
-                    if nf > 0:
-                        # Print expected first
-                        algo = 'ideal'
-                        delays = self.algo_to_delays[a]
-                        expecteds = [vs['expected'] for f, vs in delays.iteritems() if vs['type'] == ftype]
 
-                        if not expecteds:
-                            continue
+                # Get algo that has the maximum number of flows
+                maxalgo = max([(a, len(self.algo_to_delays[a])) for a in self.algo_to_delays], key=lambda x: x[1])
+                (a, nf) = maxalgo
+                if nf > 0:
+                    # Print expected first
+                    algo = 'ideal'
+                    delays = self.algo_to_delays[a]
+                    expecteds = [vs['expected'] for f, vs in delays.iteritems() if vs['type'] == ftype]
 
-                        # Returns values corresponding to each bin and bins
-                        values, bins = np.histogram(expecteds, bins=10000)
+                    if not expecteds:
+                        continue
 
-                        # Compute CDF
-                        cumulative = np.cumsum(values, dtype=float)
+                    # Returns values corresponding to each bin and bins
+                    values, bins = np.histogram(expecteds, bins=10000, range=range)
 
-                        # Normalize wrt number of flows
-                        cumulative /= float(len(expecteds))
+                    # Compute CDF
+                    ideal_cumulative = np.cumsum(values, dtype=float)
 
-                        # Plot it!
-                        label = 'Ideal'
-                        index = algo_to_cols.get(label, None)
-                        if index == None:
-                            color, linestyle, linewidth, index = self.get_algo_style(label)
-                            algo_to_cols[label] = index
-                        else:
-                            color, linestyle, linewidth, _ = self.get_algo_style(label, index)
+                    # Normalize wrt number of flows
+                    ideal_cumulative /= float(len(expecteds))
 
-                        ax.plot(bins[:-1], cumulative, c=color, linestyle=linestyle, linewidth=linewidth, label=label)
+                if not ratio and not difference:
+                    # Plot it!
+                    label = 'Ideal'
+                    color = self.colorConfig.getColor(label)
+                    ax.plot(bins[:-1], ideal_cumulative, c=color, linewidth=LINEWIDTH, label=label)
 
                 for algo in self.algos:
                     delays = self.algo_to_delays[algo]
                     measured = [vs['measured'] for f, vs in delays.iteritems() if vs['type'] == ftype]
 
                     # Compute histogram
-                    values, bins = np.histogram(measured, bins=10000)
+                    values, bins = np.histogram(measured, bins=10000, range=range)
 
                     # Compute CDF of the histogram heights
                     cumulative = np.cumsum(values, dtype=float)
@@ -243,15 +208,16 @@ class DelaysComparator(object):
                     # Normalize wrt number of flows
                     cumulative /= float(len(measured))
 
+                    if ratio:
+                        cumulative = np.divide(cumulative, ideal_cumulative)
+
+                    elif difference:
+                        cumulative = ideal_cumulative - cumulative
+
                     # Plot it!
                     label = algo
-                    index = algo_to_cols.get(label, None)
-                    if index == None:
-                        color, linestyle, linewidth, index = self.get_algo_style(label)
-                        algo_to_cols[label] = index
-                    else:
-                        color, linestyle, linewidth, _ = self.get_algo_style(label, index)
-                    ax.plot(bins[:-1], cumulative, c=color, linestyle=linestyle, linewidth=linewidth, label=label)
+                    color = self.colorConfig.getColor(label)
+                    ax.plot(bins[:-1], cumulative, c=color, linewidth=LINEWIDTH, label=label)
 
                 # Set grid on
                 ax.grid(True)
@@ -263,39 +229,39 @@ class DelaysComparator(object):
             plt.xlabel("Completion time (s) [{0}]".format(to_plot), fontsize=16)
             plt.ylabel("Percentage of flows", fontsize=16)
             plt.ylim([0, 1.05])
+            range = (0, 200)
 
-            if ideal:
+            # Print expected first
+            # Get algo that has the maximum number of flows
+            maxalgo = max([(a, len(self.algo_to_delays[a])) for a in self.algo_to_delays], key=lambda x: x[1])
+            (a, nf) = maxalgo
+            if nf > 0:
                 # Print expected first
-                # Get algo that has the maximum number of flows
-                maxalgo = max([(a, len(self.algo_to_delays[a])) for a in self.algo_to_delays], key=lambda x: x[1])
-                (a, nf) = maxalgo
-                if nf > 0:
-                    # Print expected first
-                    algo = 'ideal'
-                    delays = self.algo_to_delays[self.algos[a]]
-                    expecteds = [vs['expected'] for f, vs in delays.iteritems()]
+                algo = 'ideal'
+                delays = self.algo_to_delays[self.algos[a]]
+                expecteds = [vs['expected'] for f, vs in delays.iteritems()]
 
-                    # Returns values corresponding to each bin and bins
-                    values, bins = np.histogram(expecteds, bins=10000)
+                # Returns values corresponding to each bin and bins
+                values, bins = np.histogram(expecteds, bins=10000, range=range)
 
-                    # Compute CDF
-                    cumulative = np.cumsum(values, dtype=float)
+                # Compute CDF
+                ideal_cumulative = np.cumsum(values, dtype=float)
 
-                    # Normalize wrt number of flows
-                    cumulative /= float(len(expecteds))
+                # Normalize wrt number of flows
+                ideal_cumulative /= float(len(expecteds))
 
-                    # Plot it!
-                    label = 'Ideal'
-                    color, linestyle, linewidth, _ = self.get_algo_style(label)
-
-                    plt.plot(bins[:-1], cumulative, c=color, linestyle=linestyle, linewidth=linewidth, label=label)
+            if not ratio and not difference:
+                # Plot it!
+                label = 'Ideal'
+                color = self.colorConfig.getColor(label)
+                plt.plot(bins[:-1], ideal_cumulative, c=color, linewidth=LINEWIDTH, label=label)
 
             for algo in self.algos:
                 delays = self.algo_to_delays[algo]
                 measured = [vs['measured'] for f, vs in delays.iteritems()]
 
                 # Compute histogram
-                values, bins = np.histogram(measured, bins=10000)
+                values, bins = np.histogram(measured, bins=10000, range=range)
 
                 # Compute CDF of the histogram heights
                 cumulative = np.cumsum(values, dtype=float)
@@ -303,10 +269,16 @@ class DelaysComparator(object):
                 # Normalize wrt number of flows
                 cumulative /= float(len(measured))
 
+                if ratio:
+                    cumulative = np.divide(cumulative, ideal_cumulative)
+
+                elif difference:
+                    cumulative = ideal_cumulative - cumulative
+
                 # Plot it!
                 label = algo
-                color, linestyle, linewidth, _ = self.get_algo_style(algo)
-                plt.plot(bins[:-1], cumulative, c=color, linestyle=linestyle, linewidth=linewidth, label=label)
+                color = self.colorConfig.getColor(label)
+                plt.plot(bins[:-1], cumulative, c=color, linewidth=LINEWIDTH, label=label)
 
             # Set grid on
             plt.grid(True)
@@ -315,10 +287,13 @@ class DelaysComparator(object):
         plt.legend(loc='best', fancybox=True, ncol=1, framealpha=0.5)
 
         #plt.tight_layout()
-        plt.show()
-        plot_filename_png = os.path.join(self.parent_folder, '{0}.png'.format(self.plot_name))
-        plot_filename_pdf = os.path.join(self.parent_folder, '{0}.pdf'.format(self.plot_name))
-        plt.savefig(plot_filename_png)
+        if ratio:
+            plot_filename_pdf = os.path.join(self.parent_folder, '{0}_ratio.pdf'.format(self.plot_name))
+        elif difference:
+            plot_filename_pdf = os.path.join(self.parent_folder, '{0}_diff.pdf'.format(self.plot_name))
+        else:
+            plot_filename_pdf = os.path.join(self.parent_folder, '{0}.pdf'.format(self.plot_name))
+
         plt.savefig(plot_filename_pdf)
 
     def plot_delay_distribution(self, algorithm):
@@ -336,6 +311,9 @@ if __name__ == "__main__":
     parser.add_argument('--parent_folder', help='Folder in which the experiment folders reside in', type=str, default='./results/delay/')
     parser.add_argument('--to_plot', choices=['all', 'together', 'mice', 'elephant'], help="What to plot?", required=True)
     parser.add_argument('--plot_name', help="Name of the final plot", type=str, default='')
+    parser.add_argument('--ratio', help='Prints ratio wrt ideal flow completion time', action='store_true',default=False)
+    parser.add_argument('--difference', help='Prints difference wrt ideal flow completion time', action='store_true',default=False)
+
     # Parse arguments
     args = parser.parse_args()
 
@@ -344,4 +322,5 @@ if __name__ == "__main__":
                           parent_folder=args.parent_folder,
                           to_plot=args.to_plot,
                           plot_name=args.plot_name)
-    ac.plot_delay_distribution_comparison()
+
+    ac.plot_delay_distribution_comparison(ratio=args.ratio, difference=args.difference)
