@@ -87,6 +87,8 @@ class LBController(object):
 
         # Start the Southbound manager in a different thread
         self.sbmanager = MyGraphProvider()
+        # Lock to access the sbmanager
+        self.sbmanagerLock = threading.Lock()
         #self.sbmanager = MyGraphProvider2()
         t = threading.Thread(target=self.sbmanager.run, name="Southbound Manager thread").start()
 
@@ -451,6 +453,7 @@ class LBController(object):
         # Create the mice estimator thread
         self.miceEstimatorThread = MiceEstimatorThread(active=self.mice_dag_shifter,
                                                        sbmanager=self.sbmanager,
+                                                       sbmanagerLock=self.sbmanagerLock,
                                                        orders_queue=self.mice_orders_queue,
                                                        flowpath_queue=self.flowpath_queue,
                                                        capacities_graph = self.mice_caps_graph,
@@ -548,7 +551,8 @@ class LBController(object):
 
         if fib:
             # Add new requirement for Fibbing
-            self.sbmanager.add_dag_requirement(prefix, dag)
+            with self.sbmanagerLock:
+                self.sbmanager.add_dag_requirement(prefix, dag)
 
             # Wait a bit for OSPF propagation
             self._waitOSPFPropagation()
@@ -564,7 +568,8 @@ class LBController(object):
 
         if fib:
             # Force new dags
-            self.sbmanager.add_dag_requirements_from(dag_requirements)
+            with self.sbmanagerLock:
+                self.sbmanager.add_dag_requirements_from(dag_requirements)
 
             # Wait a bit
             self._waitOSPFPropagation()
@@ -696,7 +701,8 @@ class LBController(object):
         self.current_mice_dags = copy.deepcopy(self.initial_mice_dags)
 
         # Remove all attraction points and lsas
-        self.sbmanager.remove_all_dag_requirements()
+        with self.sbmanagerLock:
+            self.sbmanager.remove_all_dag_requirements()
         time.sleep(2)
 
         # Terminate pevious mice estimator thread
@@ -1000,7 +1006,8 @@ class LBController(object):
 
         # Remove all lies before leaving
         log.info("Cleaning up the network from fake LSAs ...")
-        self.sbmanager.remove_all_dag_requirements()
+        with self.sbmanagerLock:
+            self.sbmanager.remove_all_dag_requirements()
 
         # Finally exit
         os._exit(0)

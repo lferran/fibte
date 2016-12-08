@@ -20,7 +20,7 @@ def time_func(function):
     return wrapper
 
 class MiceEstimatorThread(threading.Thread):
-    def __init__(self, active, sbmanager, orders_queue, flowpath_queue, capacities_graph, dags, q_server, *args, **kwargs):
+    def __init__(self, active, sbmanager, sbmanagerLock, orders_queue, flowpath_queue, capacities_graph, dags, q_server, *args, **kwargs):
         # Superclass __init__()
         super(MiceEstimatorThread, self).__init__(*args, **kwargs)
 
@@ -29,7 +29,8 @@ class MiceEstimatorThread(threading.Thread):
 
         # Get params
         self.active = active
-        self.sbmanager = sbmanager           # Fibbign southbound manager instance
+        self.sbm = sbmanager           # Fibbign southbound manager instance
+        self.sbmLock = sbmanagerLock
         self.caps_graph = capacities_graph   # Capacities left by the elephant flows
         self.dags = dags                     # Current Mice traffic dags
         self.initial_dags = copy.deepcopy(self.dags) # Keep copy of initial dags
@@ -436,9 +437,6 @@ class MiceEstimatorThread(threading.Thread):
         # Update link probabilities
         self.modify_link_probabilities_from(modified_links)
 
-        #self._sendMainThreadToSleep(2000)
-        #import ipdb; ipdb.set_trace()
-
         # Generate new random DAGs for destinations that probabilities changed
         new_dags = {}
         for prefix in self.prefixes:
@@ -454,7 +452,8 @@ class MiceEstimatorThread(threading.Thread):
                 self.set_probabilities_unchanged(prefix)
         if new_dags:
             # Apply new dags all at same time
-            self.sbmanager.add_dag_requirements_from(new_dags)
+            with self.sbmLock:
+                self.sbm.add_dag_requirements_from(new_dags)
 
             # Plot them!
             #self.plotAllNewDags(new_dags)
