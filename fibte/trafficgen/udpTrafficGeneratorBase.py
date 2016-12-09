@@ -848,7 +848,9 @@ class udpTrafficGeneratorBase(Base):
                             size=flow_tmp['size'], rate=flow_tmp['rate'], duration=flow_tmp['duration'])
 
                 # Append it
-                new_flows_per_sender[sender].append(flow.toDICT())
+                flowdict = flow.toDICT()
+                flowdict.update({'non-blocking-ct': flow_tmp['non-blocking-ct']})
+                new_flows_per_sender[sender].append(flowdict)
 
         # Return flowlist
         return new_flows_per_sender

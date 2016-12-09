@@ -102,7 +102,7 @@ class tcpElephantFiller(udpTrafficGeneratorBase):
             old_rate = flow['rate']
 
             # Remaining data to send
-            remaining_data = all_elep_flows[fid]['remaining']
+            remaining_data = all_elep_fws_copy[fid]['remaining']
 
             # Substract from data to send what was sent in the last minute
             all_elep_fws_copy[fid]['remaining'] = max(0, remaining_data - (old_rate * self.timeStep))
@@ -115,6 +115,60 @@ class tcpElephantFiller(udpTrafficGeneratorBase):
             all_elep_fws_copy[fid]['estimated_endtime'] = time_period + estimated_duration
 
         return all_elep_fws_copy
+
+    def computeNonBlockingCompletionTimes(self, all_elep_flows):
+        # Make an initial copy
+        all_elep_fws_copy = copy.deepcopy(all_elep_flows)
+
+        cts = {fid: 0 for fid in all_elep_fws_copy.iterkeys()}
+
+        # Initialize
+        for fid, fw in all_elep_fws_copy.iteritems():
+            fw['rate'] = LINK_BANDWIDTH
+            fw['remaining'] = fw['size']
+            fw['estimated_endtime'] = fw['startTime'] + fw['remaining']/float(fw['rate'])
+
+        for time_period in range(0, self.totalTime, self.timeStep):
+            # Get active flows only at time time_period
+            active_flows = self._get_active_flows(all_elep_fws_copy, period=time_period)
+
+            # Brand new estimateDemands object
+            flowRates = EstimateDemands()
+
+            # Add active flows to estimateDemands
+            for fid, af in active_flows.iteritems():
+                fkey = self.flowToKey(af)
+                flowRates.addFlow(fkey)
+
+            # Estimate all demands
+            flowRates.estimateDemandsAll()
+
+            # Update estimated endtimes accordingly
+            for fid, flow in active_flows.iteritems():
+                # Get new rate
+                fkey = self.flowToKey(flow)
+                new_rate = flowRates.getDemand(fkey) * LINK_BANDWIDTH
+
+                # Get old rate
+                old_rate = flow['rate']
+
+                # Remaining data to send
+                remaining_data = all_elep_fws_copy[fid]['remaining']
+
+                # Substract from data to send what was sent in the last minute
+                all_elep_fws_copy[fid]['remaining'] = max(0, remaining_data - (old_rate * self.timeStep))
+
+                # Update new rate
+                all_elep_fws_copy[fid]['rate'] = new_rate
+
+                # Update new estimated duration
+                estimated_duration = remaining_data/float(new_rate)
+                all_elep_fws_copy[fid]['estimated_endtime'] = time_period + estimated_duration
+
+        # Write non-blocking completion times
+        for fid, fw in all_elep_fws_copy.iteritems():
+            cts[fid] = fw['estimated_endtime'] - fw['startTime']
+        return cts
 
     def plan_elephant_flows(self):
         """
@@ -215,6 +269,8 @@ class tcpElephantFiller(udpTrafficGeneratorBase):
             # Update all flows dict
             all_flows.update(all_elep_flows)
 
+        nonBlockingCT = self.computeNonBlockingCompletionTimes(all_elep_flows)
+
         # Update the flows_per_sender dict
         new_flows_per_sender = {}
         for sender, flowlist in flows_per_sender.iteritems():
@@ -226,6 +282,7 @@ class tcpElephantFiller(udpTrafficGeneratorBase):
                     floww['dport'] = -1
                     floww['rate'] = LINK_BANDWIDTH
                     floww['remaining'] = floww['size']
+                    floww['non-blocking-ct'] = nonBlockingCT[flow['id']]
                     new_flows_per_sender[sender].append(floww)
 
         # Re-write correct source and destination ports per each sender

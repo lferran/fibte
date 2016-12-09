@@ -474,10 +474,7 @@ def writeStartingTime(flow, filename=None, prefix=None):
             filename = prefix + filename
         file_name = str(delay_folder) + filename
 
-    if flow['proto'].lower() == 'udp':
-        duration = flow.get('duration')
-    else:
-        duration = flow.get('size')/float(LINK_BANDWIDTH)
+    duration = flow['non-blocking-ct']
 
     # Save flow starting time
     with open(file_name, "w") as f:
