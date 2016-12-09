@@ -848,7 +848,8 @@ class LBController(object):
                 old_path = self.flows_to_paths[fkey]['path']
                 self.flows_to_paths.pop(fkey)
             else:
-                raise ValueError("Flow wasn't in data structure")
+                log.error("Flow wasn't in data structure")
+                return None
 
             for link in self.get_links_from_path(old_path):
                 if link in self.edges_to_flows.keys():
@@ -856,10 +857,10 @@ class LBController(object):
                         self.edges_to_flows[link].pop(fkey)
                     else:
                         log.error("Flow wasn't in data structure")
-                        return
+                        return None
                 else:
                     log.error("Weird: link not in the data structure")
-                    return
+                    return None
 
         # Send notificatoin to mice LB
         data = (flow, old_path, 'del')
@@ -920,26 +921,26 @@ class LBController(object):
             log.warning("Flow couldn't be deallocated: it wasn't in flowDemands data structure")
             successful = False
             return successful
+        else:
+            # Remove flow from estimation matrix
+            self.flowDemands.estimateDemands(flow, action='del')
 
-        # Remove flow from estimation matrix
-        self.flowDemands.estimateDemands(flow, action='del')
+            src = self.topology.getHostName(flow['src'])
+            dst = self.topology.getHostName(flow['dst'])
+            sport = flow['sport']
+            dport = flow['dport']
+            rate = self.base.setSizeToStr(rate * LINK_BANDWIDTH)
+            proto = flow['proto']
+            log.debug("Flow FINISHED: {5}Flow[{0}:({1}) -> {2}:({3})] | #{4})".format(src, sport, dst, dport, rate, proto))
 
-        src = self.topology.getHostName(flow['src'])
-        dst = self.topology.getHostName(flow['dst'])
-        sport = flow['sport']
-        dport = flow['dport']
-        rate = self.base.setSizeToStr(rate * LINK_BANDWIDTH)
-        proto = flow['proto']
-        log.debug("Flow FINISHED: {5}Flow[{0}:({1}) -> {2}:({3})] | #{4})".format(src, sport, dst, dport, rate, proto))
+            if not self.flowDemands.currentFlows:
+                log.info("No more flows ongoing! Starting timer to shut LB down in 10 seconds")
 
-        if not self.flowDemands.currentFlows:
-            log.info("No more flows ongoing! Starting timer to shut LB down in 10 seconds")
+                # Start timer to stop himself
+                self.stopLoadBalancerTimer = threading.Timer(10, self.stopLoadBalancerInEvaluation)
+                self.stopLoadBalancerTimer.start()
 
-            # Start timer to stop himself
-            self.stopLoadBalancerTimer = threading.Timer(10, self.stopLoadBalancerInEvaluation)
-            self.stopLoadBalancerTimer.start()
-
-        return successful
+            return successful
 
     def tracerouteFlow(self, flow):
         """Starts a traceroute"""
@@ -1381,18 +1382,19 @@ class ElephantDAGShifter(LBController):
             # Deallocate if from the network
             old_path = self.delFlowFromPath(flow)
 
-        shiftOnDeallocate = True
-        if shiftOnDeallocate:
-            # Get matching destination
-            dst_px = self.getMatchingPrefix(flow['dst'])
-            dst_name = self.topology.getHostName(flow['dst'])
+            if old_path:
+                shiftOnDeallocate = True
+                if shiftOnDeallocate:
+                    # Get matching destination
+                    dst_px = self.getMatchingPrefix(flow['dst'])
+                    dst_name = self.topology.getHostName(flow['dst'])
 
-            # Get source pod
-            src_pod = self.getSourcePodFromFlow(flow)
-            log.warning("Shifting {0}-DAG from pod{1} on deallocating flow".format(dst_name, src_pod))
+                    # Get source pod
+                    src_pod = self.getSourcePodFromFlow(flow)
+                    log.warning("Shifting {0}-DAG from pod{1} on deallocating flow".format(dst_name, src_pod))
 
-            # Shift source pod DAG
-            self.shiftSourcePodDag(src_pod, dst_px)
+                    # Shift source pod DAG
+                    self.shiftSourcePodDag(src_pod, dst_px)
 
     def findBestSourcePodDag(self, src_pod, complete_dag, ongoing_flows):
         """"""
