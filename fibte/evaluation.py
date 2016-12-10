@@ -299,11 +299,11 @@ class ElephantFlowsTest(Test):
     def load_tests(self):
         # Define here your simple test
         tests = []
-        n_elephants = [16, 32]
+        n_elephants = [16, 32, 64]
         mice_avg = 0.0
         duration = 300
-        fair_queues = [True, False]
-        #fair_queues = [False]
+        #fair_queues = [True, False]
+        fair_queues = [False]
 
         patterns = [
             ('stride', {'i': 2}),
@@ -311,7 +311,7 @@ class ElephantFlowsTest(Test):
             ('random', None),
             ('bijection', None),
             ('staggered', {'sameEdge': 0.2, 'samePod': 0.3}),
-            ('staggered', {'sameEdge': 0.2, 'samePod': 0.5}),
+            ('staggered', {'sameEdge': 0.5, 'samePod': 0.3}),
             ]
 
         algos = [
@@ -393,13 +393,13 @@ class TotalFlowsTest(Test):
         mice_avg = 4
         duration = 100
  #       fair_queues = [True, False]
-        fair_queues = [False]
+        fair_queues = [True]
 
         patterns = [
 #            ('stride', {'i': 2}),
 #            ('stride', {'i': 4}),
             ('random', None),
-            ('bijection', None),
+#            ('bijection', None),
 #            ('staggered', {'sameEdge': 0.2, 'samePod': 0.3}),
 #            ('staggered', {'sameEdge': 0.3, 'samePod': 0.5}),
             ]
@@ -425,7 +425,6 @@ class TotalFlowsTest(Test):
                         tests.append(d)
         return tests
 
-
 class Evaluation(object):
     def __init__(self):
         self.flowServers = FlowServers()
@@ -437,9 +436,9 @@ class Evaluation(object):
 
         # Define here the tests we want to run
         self.tests = [
-            MiceFlowsTest(),
+            #MiceFlowsTest(),
             #ElephantFlowsTest(),
-            #TotalFlowsTest(),
+            TotalFlowsTest(),
             ]
 
         self.results_dir = self.utils.join(self.utils.root_dir, 'evaluation_results')

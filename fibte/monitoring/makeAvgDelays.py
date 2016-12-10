@@ -46,6 +46,12 @@ class AvgCompletionTimes(object):
                 else:
                     mice_avg = 0
 
+                nonbmice = [delay['expected'] for delay in delays.itervalues() if delay['type'] == 'mice']
+                if nonbmice:
+                    nonbmice_avg = np.asarray(nonbmice).mean()
+                else:
+                    nonbmice_avg = 0
+
                 # elephant average
                 elep = [delay['measured'] for delay in delays.itervalues() if delay['type'] != 'mice']
                 if elep:
@@ -53,8 +59,18 @@ class AvgCompletionTimes(object):
                 else:
                     eleph_avgs = 0
 
+                # non blocking average
+                nonbelep = [delay['expected'] for delay in delays.itervalues() if delay['type'] != 'mice']
+                if nonbmice:
+                    nonbelep_avg = np.asarray(nonbelep).mean()
+                else:
+                    nonbelep_avg = 0
+
                 # add it into measuerements
-                measurements[pattern][algo] = {'mice': mice_avg, 'elephant': eleph_avgs}
+                measurements[pattern][algo] = {'mice': mice_avg, 'elephant': eleph_avgs,
+                                               'non-blocking-elephant': nonbelep_avg,
+                                               'non-blocking-mice': nonbmice_avg}
+
         return measurements
 
     def read_delays(self, folder):
@@ -87,12 +103,26 @@ class AvgCompletionTimes(object):
 
         return flows_to_delay
 
+
+    def getMaxNonBlockingDelays(self, pattern):
+        # Add ideal case for that pattern
+        maxnbmice = max([adata['non-blocking-mice'] for algo, adata in self.measurements[pattern].iteritems()])
+        maxnbelep = max([adata['non-blocking-elephant'] for algo, adata in self.measurements[pattern].iteritems()])
+        return (maxnbelep, maxnbmice)
+
     def createMatrix(self, algo_list, pattern_list):
         # Create matrix from experiment data dictionary: (algo, pattern, value)
         matrix = []
         for pattern, pdata in self.measurements.iteritems():
             if pattern_list:
                 if pattern in pattern_list:
+                    # Add ideal
+                    ideal_elep, ideal_mice = self.getMaxNonBlockingDelays(pattern)
+                    if self.to_plot == 'mice':
+                        matrix.append(['Ideal', pattern, ideal_mice])
+                    elif self.to_plot == 'elephant':
+                        matrix.append(['Ideal', pattern, ideal_elep])
+
                     for algo, palgo in pdata.iteritems():
                         if algo_list:
                             if algo in algo_list:
@@ -109,6 +139,13 @@ class AvgCompletionTimes(object):
                                 value = palgo.get('mice', 0) + palgo.get('elephant', 0)
                                 matrix.append([algo, pattern, value])
             else:
+                # Add ideal
+                ideal_elep, ideal_mice = self.getMaxNonBlockingDelays(pattern)
+                if self.to_plot == 'mice':
+                    matrix.append(['Ideal', pattern, ideal_mice])
+                elif self.to_plot == 'elephant':
+                    matrix.append(['Ideal', pattern, ideal_elep])
+
                 for algo, palgo in pdata.iteritems():
                     if algo_list:
                         if algo in algo_list:
