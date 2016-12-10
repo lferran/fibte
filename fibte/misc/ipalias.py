@@ -5,6 +5,8 @@ IP_ALIAS_NETWORK_PREFIXLEN = '/32'
 DEFAULT_NETWORK_ADDR = '0'
 DEFAULT_NETWORK_PREFIXLEN = '/24'
 
+SECONDARY_ADDRESS_FOR = 'elephant'
+
 def setup_alias(host):
     """Setup alias at host h"""
 

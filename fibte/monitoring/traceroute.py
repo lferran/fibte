@@ -221,8 +221,8 @@ def tcp_header(src,dst,sport,dport):
     proto = socket.IPPROTO_TCP
     tcp_length = len(tcp_header)
 
-    psh = struct.pack('!4s4sBBH' , source_address , dest_address , placeholder , proto , tcp_length);
-    psh = psh + tcp_header;
+    psh = struct.pack('!4s4sBBH' , source_address , dest_address , placeholder , proto , tcp_length)
+    psh = psh + tcp_header
 
     tcp_checksum = checksum(psh)
 
@@ -526,7 +526,7 @@ if __name__ == '__main__':
     parser.add_argument('-d','--destination', help='Specify the host towards you want to traceroute', type=str, default='h_3_3')
     parser.add_argument('--sport', default=5000, type=int)
     parser.add_argument('--dport', default=5000, type=int)
-    parser.add_argument('--proto', default='udp')
+    parser.add_argument('--proto', default='tcp')
     args = parser.parse_args()
 
     # Start topo
@@ -536,11 +536,12 @@ if __name__ == '__main__':
     source = args.source
     destination = args.destination
     hops = topo.getHopsBetweenHosts(source, destination)
-    src_ip = topo.getHostIp(source)
-    dst_ip = topo.getHostIp(destination)
+    src_ip = topo.getHostIp(source, secondary=True)
+    dst_ip = topo.getHostIp(destination, secondary=True)
 
+    import ipdb; ipdb.set_trace()
     # Generate flow
-    flow = {'src': None, 'sport': args.sport, 'dst': dst_ip, 'dport': args.dport, 'proto': args.proto}
+    flow = {'src': src_ip, 'sport': args.sport, 'dst': dst_ip, 'dport': args.dport, 'proto': args.proto}
 
     # Call traceroute
     route = traceroute(hops=hops, **flow)

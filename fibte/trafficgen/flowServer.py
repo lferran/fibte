@@ -18,7 +18,7 @@ import flowGenerator
 from fibte.monitoring.traceroute import traceroute, traceroute_fast
 from fibte.misc.unixSockets import UnixServerTCP, UnixClientTCP, UnixServer, UnixClient
 from fibte.trafficgen import isElephant
-from fibte.misc.ipalias import get_secondary_ip
+from fibte.misc.ipalias import get_secondary_ip, SECONDARY_ADDRESS_FOR
 from fibte.logger import log
 from fibte.trafficgen.flow import Base
 from fibte.misc.topology_graph import NamesToIps
@@ -108,7 +108,6 @@ class FlowServer(object):
         # Utilities
         self.base = Base()
         self.namesToIps = NamesToIps(os.path.join(tmp_files, db_topo))
-
 
     def setup_logging(self):
         """"""
@@ -215,7 +214,9 @@ class FlowServer(object):
                 if not self.own_pod_hosts and command['type'] == 'own_pod_hosts':
                     # Update own pod hosts list
                     own_pods_hosts = command['data']
-                    self.own_pod_hosts = own_pods_hosts
+                    for h in own_pods_hosts:
+                        self.own_pod_hosts.append(h)
+                        self.own_pod_hosts.append(get_secondary_ip(h))
                     log.info("{0}: list of own pod hosts received: {1}".format(self.name, own_pods_hosts))
                     continue
 
@@ -239,6 +240,14 @@ class FlowServer(object):
         Start elephant flow
         """
         if isElephant(flow):
+
+            # Rewrite destination if needed
+            if self.ip_alias and SECONDARY_ADDRESS_FOR == 'elephant':
+                dst = get_secondary_ip(flow['dst'])
+                src = self.secondary_ip
+                flow['dst'] = dst
+                flow['src'] = src
+
             # Start flow notifying controller
             process = Process(target=flowGenerator.sendElephantFlow, args=(logDelay,), kwargs=(flow))
             process.daemon = True
@@ -444,7 +453,7 @@ class FlowServer(object):
             dport = flowdata['dport']
 
             # Rewrite destination if needed
-            if self.ip_alias:
+            if self.ip_alias and SECONDARY_ADDRESS_FOR == 'mice':
                 dst = get_secondary_ip(flowdata['dst'])
                 src = self.secondary_ip
             else:
@@ -464,7 +473,7 @@ class FlowServer(object):
 
                 if logDelay:
                     # Get completiontime file pattern
-                    completionTimeFile = "{0}_{1}_{2}_{3}".format(self.secondary_ip, sport, dst, dport) + "_{0}"
+                    completionTimeFile = "{0}_{1}_{2}_{3}".format(src, sport, dst, dport) + "_{0}"
                 else:
                     completionTimeFile = None
 

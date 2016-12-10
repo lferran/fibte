@@ -9,6 +9,7 @@ from fibte.logger import log
 import copy
 import time
 import json
+from fibte.misc import ipalias as ipalias
 
 # Decorator function for timing purposes
 def time_func(function):

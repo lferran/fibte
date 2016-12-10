@@ -107,8 +107,12 @@ class LBController(object):
         self.fibbing_network_graph = self.sbmanager.igp_graph
 
         # Create my modified version of the graph
-        self.dc_graph_elep = DCGraph(k=self.k, prefix_type='primary')
-        self.dc_graph_mice = DCGraph(k=self.k, prefix_type='secondary')
+        if ipalias.SECONDARY_ADDRESS_FOR == 'mice':
+            self.dc_graph_elep = DCGraph(k=self.k, prefix_type='primary')
+            self.dc_graph_mice = DCGraph(k=self.k, prefix_type='secondary')
+        else:
+            self.dc_graph_elep = DCGraph(k=self.k, prefix_type='secondary')
+            self.dc_graph_mice = DCGraph(k=self.k, prefix_type='primary')
 
         # Here we store the current DAGs for each destiantion
         self.current_elephant_dags = self._createInitialElephantDags()
@@ -137,6 +141,9 @@ class LBController(object):
 
         # Start mice thread
         self.createMiceEstimatorThread()
+
+#        time.sleep(3000)
+
 
         # Start object that estimates flow demands
         self.flowDemands = EstimateDemands()
@@ -302,7 +309,12 @@ class LBController(object):
                         router_ip = self.topology.getRouterId(router_name)
 
                         # Compute whole path
-                        path = self.computeCompletePath(flow=flow, router=router_ip)
+                        try:
+                            path = self.computeCompletePath(flow=flow, router=router_ip)
+                        except ValueError:
+                            self._sendMainThreadToSleep(3000)
+                            import ipdb; ipdb.set_trace()
+                            path = self.computeCompletePath(flow=flow, router=router_ip)
 
                     # Complete traceroute is used
                     else:
@@ -317,7 +329,7 @@ class LBController(object):
                     # Add flow -> path allocation
                     if not self.isOngoingFlow(flow):
                         # Add flow to path
-                        self.addFlowToPath(flow, path)
+                        self.addFlowToPath(flow, path, do_log=True)
                     else:
                         # Update its path
                         self.updateFlowPath(flow, path)
@@ -461,7 +473,12 @@ class LBController(object):
                                                        q_server=self.q_server)
 
     def _createElephantsCapsGraph(self):
-        graph = DCGraph(k=self.k, prefix_type='secondary')
+        """Creates the capacities graph for the mice estimator thread
+        """
+        if ipalias.SECONDARY_ADDRESS_FOR == 'mice':
+            graph = DCGraph(k=self.k, prefix_type='secondary')
+        else:
+            graph = DCGraph(k=self.k, prefix_type='primary')
         for (u, v, data) in graph.edges_iter(data=True):
             data['elephants_capacity'] = 0
         return graph
@@ -544,10 +561,7 @@ class LBController(object):
     #@time_func
     def saveCurrentDag(self, prefix, dag, fib=True):
         """"""
-        if ipalias.is_secondary_ip_prefix(prefix):
-            self.current_mice_dags[prefix]['dag'] = dag
-        else:
-            self.current_elephant_dags[prefix]['dag'] = dag
+        self.current_elephant_dags[prefix]['dag'] = dag
 
         if fib:
             # Add new requirement for Fibbing
@@ -608,6 +622,7 @@ class LBController(object):
                     longest_match = (prefix, prefix_len)
             return longest_match[0].compressed
         except:
+            self._sendMainThreadToSleep(3000)
             import ipdb; ipdb.set_trace()
 
     def getPrefixesFromFlow(self, flow):
@@ -644,9 +659,20 @@ class LBController(object):
         # Result is stored here
         log.info("Creating initial DAGs for the elephant prefixes in the network")
         dags = {}
-
         for prefix in self.fibbing_network_graph.prefixes:
-            if not ipalias.is_secondary_ip_prefix(prefix):
+            if ipalias.SECONDARY_ADDRESS_FOR == 'mice':
+                if not ipalias.is_secondary_ip_prefix(prefix):
+                    # Get prefix gateway router
+                    gatewayRouter = self._getGatewayRouter(prefix)
+
+                    # Compute initial dag (default OSPF)
+                    dc_dag = self.dc_graph_elep.get_default_ospf_dag(prefix)
+
+                    # Add dag
+                    dags[prefix] = {'gateway': gatewayRouter, 'dag': dc_dag.copy()}
+            else: # elephants == seconary addr
+                prefix = ipalias.get_secondary_ip_prefix(prefix)
+
                 # Get prefix gateway router
                 gatewayRouter = self._getGatewayRouter(prefix)
 
@@ -668,14 +694,23 @@ class LBController(object):
         dags = {}
 
         for prefix in self.fibbing_network_graph.prefixes:
-            if not ipalias.is_secondary_ip_prefix(prefix):
-                secondary_prefix = ipalias.get_secondary_ip_prefix(prefix)
+            if ipalias.SECONDARY_ADDRESS_FOR == 'mice':
+                if not ipalias.is_secondary_ip_prefix(prefix):
+                    secondary_prefix = ipalias.get_secondary_ip_prefix(prefix)
+                    gatewayRouter = self.getGatewayRouter(prefix)
+                    dc_dag = self.dc_graph_mice.get_default_ospf_dag(secondary_prefix)
+
+                    # Add dag
+                    if secondary_prefix not in dags:
+                        dags[secondary_prefix] = {'gateway': gatewayRouter, 'dag': dc_dag.copy()}
+
+            else:
                 gatewayRouter = self.getGatewayRouter(prefix)
-                dc_dag = self.dc_graph_mice.get_default_ospf_dag(secondary_prefix)
+                dc_dag = self.dc_graph_mice.get_default_ospf_dag(prefix)
 
                 # Add dag
-                if secondary_prefix not in dags:
-                    dags[secondary_prefix] = {'gateway': gatewayRouter, 'dag': dc_dag.copy()}
+                if prefix not in dags:
+                    dags[prefix] = {'gateway': gatewayRouter, 'dag': dc_dag.copy()}
 
         return dags
 
@@ -684,7 +719,11 @@ class LBController(object):
         Fills up the data structure
         """
         prefixes = []
-        fill = [prefixes.append(ip.ip_network(prefix)) for prefix in self.fibbing_network_graph.prefixes]
+        if ipalias.SECONDARY_ADDRESS_FOR == 'mice':
+            fill = [prefixes.append(ip.ip_network(prefix)) for prefix in self.fibbing_network_graph.prefixes]
+        else:
+            fill = [prefixes.append(ip.ip_network(ipalias.get_secondary_ip_prefix(prefix)))
+                    for prefix in self.fibbing_network_graph.prefixes]
         return prefixes
 
     def reset(self):
@@ -949,16 +988,21 @@ class LBController(object):
 
         # Compute flow key
         fkey = self.flowToKey(flow)
+
+        # Add it first to waiting list
+        with self.waiting_tr_lock:
+            if fkey not in self.waiting_traceroutes:
+                self.waiting_traceroutes.append(fkey)
         try:
             # Send instruction to start traceroute to specific flowServer
             command = {'type': 'flow', 'data': flow}
             self.traceroute_client.send(json.dumps(command), src_name)
+
         except Exception as e:
             log.error("{0} could not be reached. Exception: {1}".format(src_name, e))
-        finally:
             with self.waiting_tr_lock:
-                if fkey not in self.waiting_traceroutes:
-                    self.waiting_traceroutes.append(fkey)
+                if fkey in self.waiting_traceroutes:
+                    self.waiting_traceroutes.remove(fkey)
 
     def handleFlow(self, event):
         """

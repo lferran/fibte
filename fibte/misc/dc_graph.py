@@ -1393,9 +1393,6 @@ class DCDag(DCDiGraph):
             else:
                 raise ValueError
 
-# Auxiliary funcitions
-
-#@time_func
 def all_possible_uplink_choices_gen(k, exclude_edge_indexes=[]):
     # Accumulate choices here
     edges_choice_lists = []

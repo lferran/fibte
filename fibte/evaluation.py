@@ -299,9 +299,9 @@ class ElephantFlowsTest(Test):
     def load_tests(self):
         # Define here your simple test
         tests = []
-        n_elephants = [16, 32, 64]
+        n_elephants = [16, 64]
         mice_avg = 0.0
-        duration = 300
+        duration = 200
         #fair_queues = [True, False]
         fair_queues = [False]
 
@@ -388,25 +388,23 @@ class TotalFlowsTest(Test):
     def load_tests(self):
         # Define here your simple test
         tests = []
-#        n_elephants = [16, 32]
-        n_elephants = [16]
+        n_elephants = [16, 32]
         mice_avg = 4
-        duration = 100
- #       fair_queues = [True, False]
-        fair_queues = [True]
+        duration = 200
+        fair_queues = [True, False]
 
         patterns = [
-#            ('stride', {'i': 2}),
-#            ('stride', {'i': 4}),
+            ('stride', {'i': 2}),
+            ('stride', {'i': 4}),
             ('random', None),
-#            ('bijection', None),
-#            ('staggered', {'sameEdge': 0.2, 'samePod': 0.3}),
-#            ('staggered', {'sameEdge': 0.3, 'samePod': 0.5}),
+            ('bijection', None),
+            ('staggered', {'sameEdge': 0.2, 'samePod': 0.3}),
+            ('staggered', {'sameEdge': 0.5, 'samePod': 0.3}),
             ]
 
         algos = [
-            ('full-dag-shifter', None),
-            ('elephant-dag-shifter', None),
+            ('full-dag-shifter', '--sample'),
+            ('elephant-dag-shifter', '--sample'),
             ('ecmp', None),
         ]
         # Iterate traffic pattern
@@ -436,9 +434,9 @@ class Evaluation(object):
 
         # Define here the tests we want to run
         self.tests = [
-            #MiceFlowsTest(),
-            #ElephantFlowsTest(),
             TotalFlowsTest(),
+            ElephantFlowsTest(),
+            MiceFlowsTest(),
             ]
 
         self.results_dir = self.utils.join(self.utils.root_dir, 'evaluation_results')
@@ -643,7 +641,20 @@ class Evaluation(object):
                 self.plot.plot(parent_folder, algo_list, to_plot, plot_name, difference=True)
 
         else:
-            print("*** ERROR: elephant or mice should be in the name of the test")
+            to_plot = 'all'
+            # Iterate patterns
+            for pattern in pattern_list:
+                patterndir = self.utils.join(testdir, pattern)
+                if algos:
+                    algo_list = [d for d in listdir(patterndir) if os.path.isdir(self.utils.join(patterndir, d)) and d in algos]
+                else:
+                    algo_list = [d for d in listdir(patterndir) if os.path.isdir(self.utils.join(patterndir, d))]
+                parent_folder = patterndir
+                if not plot_prefix:
+                    plot_name = "{0}_allCompared".format(pattern)
+                else:
+                    plot_name = plot_prefix + "_{0}".format(pattern)
+                self.plot.plot(parent_folder, algo_list, to_plot, plot_name)
 
     def emptyDelayDir(self):
         subprocess.call("rm {0}".format(os.path.join(self.utils.delay_dir, 'mice_*')), shell=True)

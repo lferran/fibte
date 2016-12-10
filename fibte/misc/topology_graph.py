@@ -11,7 +11,7 @@ import time
 import fibte.misc.ipalias as ipalias
 from fibbingnode.misc.mininetlib.ipnet import TopologyDB
 from fibte import CFG
-
+from fibte.misc import ipalias
 tmp_files = CFG.get("DEFAULT", "tmp_files")
 db_topo = CFG.get("DEFAULT", "db_topo")
 private_ip_binding_file = CFG.get("DEFAULT", 'private_ip_binding_file')
@@ -412,7 +412,6 @@ class TopologyGraph(TopologyDB):
         Creates a mapping between host names and ip and viceversa
         :return:
         """
-
         self.hostsIpMapping = {}
         hosts = self.getHosts()
         self.hostsIpMapping["ipToName"] = {}
@@ -422,8 +421,10 @@ class TopologyGraph(TopologyDB):
                 if not isinstance(ifData, dict):
                     continue
                 ip = ifData.get('ip').split('/')[0]
+                sec_ip = ipalias.get_secondary_ip(ip)
                 self.hostsIpMapping["ipToName"][ip] = host
-                self.hostsIpMapping["nameToIp"][host] = ip
+                self.hostsIpMapping["ipToName"][sec_ip] = host
+                self.hostsIpMapping["nameToIp"][host] = {'primary': ip, 'secondary': sec_ip}
 
     def routersIdMapping(self):
         self.routersIdMapping = {}
@@ -446,15 +447,19 @@ class TopologyGraph(TopologyDB):
             for iface, iface_data in host_data.iteritems():
                 if iface != 'type':
                     iface_network = self.hostInterfaceNetwork(host, iface)
-                    self.hostsToNetworksMapping['hostToNetwork'][host][iface] = iface_network
+                    iface_sec_network = ipalias.get_secondary_ip_prefix(iface_network)
+                    self.hostsToNetworksMapping['hostToNetwork'][host][iface] = {'primary': iface_network, 'secondary': iface_sec_network}
 
                     if iface_network not in self.hostsToNetworksMapping['networkToHost']:
                         self.hostsToNetworksMapping['networkToHost'][iface_network] = {}
+                        self.hostsToNetworksMapping['networkToHost'][iface_sec_network] = {}
 
                     if host not in self.hostsToNetworksMapping['networkToHost'][iface_network]:
                         self.hostsToNetworksMapping['networkToHost'][iface_network][host] = [iface]
+                        self.hostsToNetworksMapping['networkToHost'][iface_sec_network][host] = [iface]
                     else:
                         self.hostsToNetworksMapping['networkToHost'][iface_network][host].append(iface)
+                        self.hostsToNetworksMapping['networkToHost'][iface_sec_network][host].append(iface)
 
     def getHostName(self, ip):
 
@@ -514,7 +519,7 @@ class TopologyGraph(TopologyDB):
         # Filter the edges and remove the ones that have switches connected
         return [x for x in allEdges if not (any("sw" in s for s in x) or any("ovs" in s for s in x))]
 
-    def getHostIp(self, name):
+    def getHostIp(self, name, secondary=False):
 
         """
         returns the ip of host name
@@ -524,7 +529,10 @@ class TopologyGraph(TopologyDB):
         if name not in self.hostsIpMapping["nameToIp"]:
             raise ValueError("Any host of the network has the ip {0}".format(name))
 
-        return self.hostsIpMapping["nameToIp"][name]
+        if secondary:
+            return self.hostsIpMapping["nameToIp"][name]['secondary']
+        else:
+            return self.hostsIpMapping["nameToIp"][name]['primary']
 
     def loadIfNames(self):
         """

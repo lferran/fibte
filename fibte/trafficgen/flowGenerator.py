@@ -68,7 +68,7 @@ def recvall(sock, n):
         data += packet
     return data
 
-def sendFlowTCP(dst="10.0.32.3", sport=5000, dport=5001, size=None, rate=None, duration=None,**kwargs):
+def sendFlowTCP(src='', dst="10.0.32.3", sport=5000, dport=5001, size=None, rate=None, duration=None,**kwargs):
     """
     :param size: Size of the data we want to send
     :param rate: Rate at which we want to send it. If not specified, we will try to send as much as possible
@@ -80,7 +80,7 @@ def sendFlowTCP(dst="10.0.32.3", sport=5000, dport=5001, size=None, rate=None, d
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
     s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     s.setsockopt(socket.IPPROTO_TCP, socket.TCP_MAXSEG, 1500)
-    s.bind(('', sport))
+    s.bind((src, sport))
     try:
         reconnections = 4
         time_to_wait = 0.3
