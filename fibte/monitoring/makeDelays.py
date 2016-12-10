@@ -89,7 +89,7 @@ class DelaysComparator(object):
                 range = (10, 250)
             else:
                 ftype = 'mice'
-                range = (0, 60)
+                range = (0, 30)
 
             fig = plt.figure()
             #fig.suptitle("CDF of flow completion times", fontsize=20)
@@ -162,10 +162,10 @@ class DelaysComparator(object):
                     range = (10, 250)
                 else:
                     ftype = 'mice'
-                    range = (0, 60)
+                    range = (0, 30)
 
-                ax.set_xlabel("Completion time (s) [{0}s]".format(fftype), fontsize=16)
-                ax.set_ylabel("Percentage of flows", fontsize=16)
+                ax.set_xlabel("Completion time (s) [{0}s]".format(fftype), fontsize=14)
+                ax.set_ylabel("Percentage of flows", fontsize=14)
                 ax.set_ylim([0, 1.05])
 
                 # Get algo that has the maximum number of flows
@@ -285,7 +285,7 @@ class DelaysComparator(object):
 
         # Write legend and plot
         plt.legend(loc='best', fancybox=True, ncol=1, framealpha=0.5)
-
+        plt.tight_layout()
         #plt.tight_layout()
         if ratio:
             plot_filename_pdf = os.path.join(self.parent_folder, '{0}_ratio.pdf'.format(self.plot_name))

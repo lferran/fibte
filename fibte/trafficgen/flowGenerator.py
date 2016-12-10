@@ -18,7 +18,7 @@ from fibte import LINK_BANDWIDTH
 minSizeUDP = 42
 minSizeTCP = 66
 maxUDPSize = 10000
-
+import sys, traceback
 # Time that we sleep between notification
 # is sent and the flow starts
 SLEEP_BEFORE_FLOW_S = 0
@@ -284,6 +284,7 @@ def sendMiceThroughOpenSocket(s, queue, sending, completionTimeFile=None):
 
     except Exception as e:
         print "Other exception: {0}".format(e)
+        print traceback.print_exc()
 
     else:
         s.close()
@@ -454,6 +455,9 @@ def sendElephantFlow(logtime=False, **flow):
     if flow['proto'].lower() == 'tcp' and logtime:
         filename = writeStartingTime(flow, prefix='elep_')
 
+    if flow.has_key('non-blocking-ct'):
+        flow.pop('non-blocking-ct')
+
     # Call internal function
     successful = _sendFlow(notify=True, **flow)
 
@@ -474,7 +478,13 @@ def writeStartingTime(flow, filename=None, prefix=None):
             filename = prefix + filename
         file_name = str(delay_folder) + filename
 
-    duration = flow['non-blocking-ct']
+    if flow['proto'].lower() == 'udp':
+        duration = flow.get('duration')
+    else:
+        if flow.has_key('non-blocking-ct'):
+            duration = flow.pop('non-blocking-ct')
+        else:
+            duration = flow.get('size')/float(LINK_BANDWIDTH)
 
     # Save flow starting time
     with open(file_name, "w") as f:

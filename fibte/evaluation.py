@@ -301,7 +301,7 @@ class ElephantFlowsTest(Test):
         tests = []
         n_elephants = [16, 32]
         mice_avg = 0.0
-        duration = 100
+        duration = 300
         fair_queues = [True, False]
         #fair_queues = [False]
 
@@ -344,16 +344,18 @@ class MiceFlowsTest(Test):
     def load_tests(self):
         # Define here your simple test
         tests = []
-        n_elephants = [16, 32]
+        n_elephants = [16]
         mice_avg = 4
         duration = 100
         fair_queues = [True, False]
 
         patterns = [
             ('stride', {'i': 2}),
+            ('stride', {'i': 4}),
             ('random', None),
             ('bijection', None),
             ('staggered', {'sameEdge': 0.2, 'samePod': 0.3}),
+            ('staggered', {'sameEdge': 0.5, 'samePod': 0.3}),
             ]
 
         algos = [
@@ -378,6 +380,52 @@ class MiceFlowsTest(Test):
                         tests.append(d)
         return tests
 
+class TotalFlowsTest(Test):
+    def __init__(self):
+        super(TotalFlowsTest, self).__init__()
+        self.name = 'total-flows-test'
+
+    def load_tests(self):
+        # Define here your simple test
+        tests = []
+#        n_elephants = [16, 32]
+        n_elephants = [16]
+        mice_avg = 4
+        duration = 100
+ #       fair_queues = [True, False]
+        fair_queues = [False]
+
+        patterns = [
+#            ('stride', {'i': 2}),
+#            ('stride', {'i': 4}),
+            ('random', None),
+            ('bijection', None),
+#            ('staggered', {'sameEdge': 0.2, 'samePod': 0.3}),
+#            ('staggered', {'sameEdge': 0.3, 'samePod': 0.5}),
+            ]
+
+        algos = [
+            ('full-dag-shifter', None),
+            ('elephant-dag-shifter', None),
+            ('ecmp', None),
+        ]
+        # Iterate traffic pattern
+        for (pattern, pargs) in patterns:
+            for n_ele in n_elephants:
+                for algo, aargs in algos:
+                    for fq in fair_queues:
+                        d = {'fair_queues': fq,
+                             'pattern': pattern,
+                             'pattern_args': pargs,
+                             'n_elephants': n_ele,
+                             'mice_avg': mice_avg,
+                             'duration': duration,
+                             'algorithm': algo,
+                             'algorithm_args': aargs}
+                        tests.append(d)
+        return tests
+
+
 class Evaluation(object):
     def __init__(self):
         self.flowServers = FlowServers()
@@ -389,9 +437,11 @@ class Evaluation(object):
 
         # Define here the tests we want to run
         self.tests = [
-            #MiceFlowsTest(),
+            MiceFlowsTest(),
             #ElephantFlowsTest(),
+            #TotalFlowsTest(),
             ]
+
         self.results_dir = self.utils.join(self.utils.root_dir, 'evaluation_results')
         self.serverSocket = UnixServer("/tmp/evaluationServer")
         self.ownClient = UnixClient("/tmp/evaluationServer")
@@ -417,7 +467,8 @@ class Evaluation(object):
 
     def waitForTrafficToFinish(self):
         # Start maximum waiting time timer
-        self.ownStopTrafficTimer = threading.Timer(60*10, self.ownStopTraffic)
+        self.ownStopTrafficTimer = threading.Timer(60*15, self.ownStopTraffic)
+        self.ownStopTrafficTimer.start()
 
         # Blocking read to the serverSocket
         st = time.time()
@@ -427,10 +478,10 @@ class Evaluation(object):
             if self.ownStopTrafficTimer and self.ownStopTrafficTimer.is_alive():
                 self.ownStopTrafficTimer.cancel()
             print("*** TRAFFIC FINISHED SUCCESSFULLY after {0}seconds".format(time.time() - st) + "*"*60)
-            return
+            return True
         else:
             print("*** ERROR ON FINISHING TRAFFIC after {0}seconds".format(time.time() - st) + "*"*60)
-            return
+            return False
 
     def killall(self):
         if self.network.running():
@@ -464,20 +515,27 @@ class Evaluation(object):
         mice_avg = sample.get('mice_avg')
         duration = sample.get('duration')
 
-        # Create directory name
-        if pargs:
-            sampledirname = "{0}_{1}_nelep{2}_avmice{3}_{4}s".format(pattern, str(pargs).replace(' ', ''),
-                                                                     str(n_elephants),
-                                                                     str(mice_avg).replace('.', ','), duration)
+        # Write readme here!!! (in case we want to)
+
+        if pattern == 'staggered':
+            sameEdge = pargs.get('sameEdge')
+            samePod = pargs.get('samePod')
+            sampledirname = 'staggered[{0},{1}]'.format(sameEdge, samePod)
+
+        elif pattern == 'stride':
+            i = pargs.get('i')
+            sampledirname = 'stride{0}'.format(i)
+
         else:
-            sampledirname = "{0}_nelep{1}_avmice{2}_{3}s".format(pattern, str(n_elephants),
-                                                                 str(mice_avg).replace('.', ','),
-                                                                 duration)
+            sampledirname = pattern
+
+        if n_elephants != 16:
+            sampledirname += '_{0}flows'.format(n_elephants)
+
         # Join it with the delay parent directory
         sampledir = os.path.join(delaydir, sampledirname)
         if not self.utils.dir_exists(sampledir):
             self.utils.mkdir(sampledir, p=True)
-
 
         # Return it
         return sampledir
@@ -492,19 +550,25 @@ class Evaluation(object):
         fair_queues = sample.get('fair_queues')
 
         # Create folder for algorithm
-        algoname = algo
+        algoname = 'EDS'
         if algo == 'elephant-dag-shifter':
             if aargs:
-                algoname += "_{0}".format('sampled')
+                algoname += "-{0}".format('Sampled')
             else:
-                algoname += "_{0}".format('best')
+                algoname += "-{0}".format('Best')
+
+        elif algo == 'mice-dag-shifter':
+            algoname = 'MDS'
+
+        elif algo == 'ecmp':
+            algoname = "ECMP"
+
+        elif algo == 'full-dag-shifter':
+            algoname = 'FDS'
 
         # Add queue type
         if fair_queues:
-            queue = 'fairQueues'
-        else:
-            queue = 'pFifo'
-        algoname = algoname + "_{0}".format(queue)
+            algoname = algoname + "_fQ"
 
         # Create folder
         algodir = os.path.join(patterndir, algoname)
@@ -527,17 +591,23 @@ class Evaluation(object):
         if logfile:
             self.utils.mv(logfile, algodir)
 
-    def plotTest(self, test, patterns=None, algos=None):
-#        import ipdb; ipdb.set_trace()
-        if test not in listdir(self.results_dir):
-            print("ERROR: {0} not in {1}".format(test, self.results_dir))
+    def plotTest(self, test, patterns=None, algos=None, plot_name=None):
+        if plot_name:
+            plot_prefix = plot_name
+        else:
+            plot_prefix = None
 
-        testdir = self.utils.join(self.results_dir, test)
-        testdir = self.utils.join(testdir, 'delay')
+        if test not in listdir(self.results_dir):
+            testdir = self.utils.join(test, 'delay')
+        else:
+            testdir = self.utils.join(self.results_dir, test)
+            testdir = self.utils.join(testdir, 'delay')
+
         if patterns:
             pattern_list = [d for d in listdir(testdir) if os.path.isdir(self.utils.join(testdir, d)) and d in patterns]
         else:
             pattern_list = [d for d in listdir(testdir) if os.path.isdir(self.utils.join(testdir, d))]
+
         if 'mice' in test:
             to_plot = 'all'
             # Iterate patterns
@@ -548,14 +618,11 @@ class Evaluation(object):
                 else:
                     algo_list = [d for d in listdir(patterndir) if os.path.isdir(self.utils.join(patterndir, d))]
                 parent_folder = patterndir
-                plot_name = "{0}_allCompared".format(pattern)
+                if not plot_prefix:
+                    plot_name = "{0}_allCompared".format(pattern)
+                else:
+                    plot_name = plot_prefix + "_{0}".format(pattern)
                 self.plot.plot(parent_folder, algo_list, to_plot, plot_name)
-
-                if 'mice' in test:
-                    algo_list = ['ecmp_pFifo', 'ecmp_fairQueues']
-                    parent_folder = patterndir
-                    plot_name = "{0}__ecmpFIFO_vs_ecmpFairQueues".format(pattern)
-                    self.plot.plot(parent_folder, algo_list, to_plot, plot_name)
 
         elif 'elephant' in test:
             to_plot = 'elephant'
@@ -568,7 +635,10 @@ class Evaluation(object):
                     algo_list = [d for d in listdir(patterndir) if os.path.isdir(self.utils.join(patterndir, d))]
 
                 parent_folder = patterndir
-                plot_name = "{0}_allCompared".format(pattern)
+                if not plot_prefix:
+                    plot_name = "{0}_allCompared".format(pattern)
+                else:
+                    plot_name = plot_prefix + "_{0}".format(pattern)
                 self.plot.plot(parent_folder, algo_list, to_plot, plot_name,)
                 self.plot.plot(parent_folder, algo_list, to_plot, plot_name, ratio=True)
                 self.plot.plot(parent_folder, algo_list, to_plot, plot_name, difference=True)
@@ -579,6 +649,10 @@ class Evaluation(object):
     def emptyDelayDir(self):
         subprocess.call("rm {0}".format(os.path.join(self.utils.delay_dir, 'mice_*')), shell=True)
         subprocess.call("rm {0}".format(os.path.join(self.utils.delay_dir, 'elep_*')), shell=True)
+
+    def getEstimatedDuration(self, samples):
+        ts = sum([s.get('duration') for s in samples])
+        return ts
 
     def run(self, from_index=None):
         # Check if start index was given
@@ -595,6 +669,8 @@ class Evaluation(object):
         n_samples = sum([len(s) for s in tests.itervalues()])
 
         start_time = time.time()
+
+        error_samples = []
         try:
             for testindex, test in enumerate(tests.iterkeys()):
                 print("*** Starting test {0} {1}/{2}".format(test.name, testindex, n_tests)+"*"*60 )
@@ -604,6 +680,10 @@ class Evaluation(object):
 
                 # Get test samples
                 samples = tests[test]
+
+                estimatedDuration_s = self.getEstimatedDuration(samples)
+                print ("Estimated duration for the test: {0} minutes".format(estimatedDuration_s/60.0))
+
                 for sample in samples:
                     if current_index >= start_index:
                         # Restart network and flowServers
@@ -623,7 +703,9 @@ class Evaluation(object):
                         self.startTraffic(sample)
 
                         # Wait for some time
-                        self.waitForTrafficToFinish()
+                        successful = self.waitForTrafficToFinish()
+                        if not successful:
+                            error_samples.append(current_index)
 
                         # Stop traffic
                         self.killall()
@@ -638,13 +720,16 @@ class Evaluation(object):
         except KeyboardInterrupt:
             print("*** CTRL-C catched! at test: {0} sample index: {1}/{2}".format(test.name, current_index, n_samples)+"*"*60)
             print("*** Sample args: {0}".format(sample))
+            if self.ownStopTrafficTimer and self.ownStopTrafficTimer.is_alive():
+                self.ownStopTrafficTimer.cancel()
 
         finally:
             self.traffic.stop()
             self.loadBalancer.stop()
             self.stopEnvironment()
             self.emptyDelayDir()
-            print("*** Finishing evaulation after {0} minutes".format((time.time() - start_index) / 60.0) + "*" * 60)
+            print("*** Finishing evaulation after {0} minutes".format((time.time() - start_time)/60.0) + "*" * 60)
+            print("\t Samples with ERROR: {0}".format(error_samples))
 
 if __name__ == '__main__':
     import argparse
@@ -653,8 +738,10 @@ if __name__ == '__main__':
     parser.add_argument('--run', help='Run evaluations', action="store_true", default=False)
     parser.add_argument('--from_index', help='Start at specific sample', type=int, default=None)
     parser.add_argument('--plot_test', help="Make plots of given test", type=str, default='')
+    parser.add_argument('--plot_name', help="Give a name to the plot", type=str, default=None)
     parser.add_argument('--patterns', nargs='+', help="Specify patterns that you want to plot", type=str, default=None)
     parser.add_argument('--algos', nargs='+', help="Specify algorithms that you want to plot", type=str, default=None)
+    parser.add_argument('--kill', action="store_true", default=False)
 
     args = parser.parse_args()
 
@@ -663,7 +750,10 @@ if __name__ == '__main__':
 
     #import ipdb; ipdb.set_trace()
 
-    if args.run:
+    if args.kill:
+        ev.killall()
+
+    elif args.run:
         # Kill all that's going on
         ev.killall()
 
@@ -672,7 +762,7 @@ if __name__ == '__main__':
 
     elif args.plot_test:
         # make plots for the given test
-        ev.plotTest(args.plot_test, patterns=args.patterns, algos=args.algos)
+        ev.plotTest(args.plot_test, patterns=args.patterns, algos=args.algos, plot_name=args.plot_name)
 
     else:
         print("Nothing to do!")

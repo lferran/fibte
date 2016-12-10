@@ -637,7 +637,7 @@ class udpTrafficGeneratorBase(Base):
             waiting_time = receive_avg/10.0
 
             # Add initial delay to all flows
-            INITIAL_DELAY = waiting_time + 1
+            INITIAL_DELAY = waiting_time + 3
             elephants_per_host = self.addInitialDelay(elephants_per_host, INITIAL_DELAY)
 
             # Send receiveLists first

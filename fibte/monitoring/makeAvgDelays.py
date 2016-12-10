@@ -172,7 +172,10 @@ class AvgCompletionTimes(object):
         ax.grid(zorder=4)
         plt.tight_layout()
         fig.subplots_adjust(left=0.08, right=0.97)
-        filename = '{0}_averageCompletionTimes.pdf'.format(self.plot_name)
+        if self.plot_name:
+            filename = '{0}.pdf'.format(self.plot_name)
+        else:
+            filename = 'avgCompletionTimes.pdf'
         filename = os.path.join(self.test_folder, filename)
         plt.savefig(filename)
         print ("*** Plot saved --> {0}".format(filename))

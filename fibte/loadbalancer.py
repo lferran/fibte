@@ -1824,7 +1824,6 @@ class ElephantDAGShifter(LBController):
                         paths.append(newpath)
         return paths
 
-
 class FullDAGShifter(ElephantDAGShifter):
     def __init__(self, sample=False, *args, **kwargs):
         super(FullDAGShifter, self).__init__(sample=sample, *args, **kwargs)
@@ -1836,6 +1835,9 @@ class FullDAGShifter(ElephantDAGShifter):
 
     def _getAlgorithmName(self):
         return "full-dag-shifter_k_{0}".format(self.k)
+
+
+
 
 if __name__ == '__main__':
     from fibte.logger import log

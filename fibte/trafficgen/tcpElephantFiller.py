@@ -108,7 +108,8 @@ class tcpElephantFiller(udpTrafficGeneratorBase):
             all_elep_fws_copy[fid]['remaining'] = max(0, remaining_data - (old_rate * self.timeStep))
 
             # Update new rate
-            all_elep_fws_copy[fid]['rate'] = new_rate * self.getRandomRateReduction()
+            new_rate = new_rate * self.getRandomRateReduction()
+            all_elep_fws_copy[fid]['rate'] = new_rate
 
             # Update new estimated duration
             estimated_duration = remaining_data/float(new_rate)

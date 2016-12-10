@@ -5,11 +5,17 @@ import subprocess
 
 from fibte import COLORS_CONFIG
 
-tableau20 = [(31, 119, 180), (174, 199, 232), (255, 127, 14), (255, 187, 120),
-             (44, 160, 44), (152, 223, 138), (214, 39, 40), (255, 152, 150),
-             (148, 103, 189), (197, 176, 213), (140, 86, 75), (196, 156, 148),
-             (227, 119, 194), (247, 182, 210), (127, 127, 127), (199, 199, 199),
-             (188, 189, 34), (219, 219, 141), (23, 190, 207), (158, 218, 229)]
+tableau10 = [(23, 190, 207), # Blau clar
+             #(31, 119, 180), # Blau fosc
+             #(44, 160, 44),  # Verd
+             (127, 127, 127),# Gris
+             (140, 86, 75),  # Marro
+             (148, 103, 189),# Lila
+             (188, 189, 34), # Caqui
+             #(214, 32, 40),  # Vermell
+             #(227, 119, 194),# Rosa
+             (255, 127, 14), # Taronja
+             ]
 
 class ColorPlotConfig(object):
     """Stores colors of things that are plotted by name
@@ -17,11 +23,16 @@ class ColorPlotConfig(object):
     def __init__(self):
         self.allColors = self._getAllColors()
         self.loadColors()
+        # Bad fix here to manually set the colors...
+        self.colors['ECMP'] = (44/255., 160/255., 44/255.)  # Verd
+        self.colors['Ideal'] = (214/255., 32/255., 40/255.) # Vermell
+        self.colors['EDS-Best'] = (31/255., 119/255., 180/255.) # Blau fosc
+        self.colors['MDS'] = (227/255., 119/255., 194/255.)# Rosa
 
     def _getAllColors(self):
         colorset = set()
-        for i in range(len(tableau20)):
-            r, g, b = tableau20[i]
+        for i in range(len(tableau10)):
+            r, g, b = tableau10[i]
             colorset.add((r / 255., g / 255., b / 255.))
         return colorset
 
