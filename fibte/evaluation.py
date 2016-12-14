@@ -637,8 +637,8 @@ class Evaluation(object):
                 else:
                     plot_name = plot_prefix + "_{0}".format(pattern)
                 self.plot.plot(parent_folder, algo_list, to_plot, plot_name,)
-                self.plot.plot(parent_folder, algo_list, to_plot, plot_name, ratio=True)
-                self.plot.plot(parent_folder, algo_list, to_plot, plot_name, difference=True)
+                #self.plot.plot(parent_folder, algo_list, to_plot, plot_name, ratio=True)
+                #self.plot.plot(parent_folder, algo_list, to_plot, plot_name, difference=True)
 
         else:
             to_plot = 'all'

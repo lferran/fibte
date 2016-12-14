@@ -105,6 +105,9 @@ class DelaysComparator(object):
                 delays = self.algo_to_delays[a]
                 expecteds = [vs['expected'] for f, vs in delays.iteritems() if vs['type'] == ftype]
 
+                if '64' in self.parent_folder:
+                    range = (range[0], 600)
+
                 # Returns values corresponding to each bin and bins
                 range = (min(expecteds), range[1])
                 values, bins = np.histogram(expecteds, bins=10000, range=range)
@@ -124,6 +127,9 @@ class DelaysComparator(object):
             for algo in self.algos:
                 delays = self.algo_to_delays[algo]
                 measured = [vs['measured'] for f, vs in delays.iteritems() if vs['type'] == ftype]
+
+                if '64' in self.parent_folder:
+                    range = (range[0], 600)
 
                 # Compute histogram
                 values, bins = np.histogram(measured, bins=10000, range=range)

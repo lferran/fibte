@@ -61,7 +61,7 @@ class AvgCompletionTimes(object):
 
                 # non blocking average
                 nonbelep = [delay['expected'] for delay in delays.itervalues() if delay['type'] != 'mice']
-                if nonbmice:
+                if nonbelep:
                     nonbelep_avg = np.asarray(nonbelep).mean()
                 else:
                     nonbelep_avg = 0
